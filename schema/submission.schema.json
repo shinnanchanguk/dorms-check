@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shinnanchanguk/dorms-check/schema/submission.schema.json",
+  "title": "dorms-check submission (report.json)",
+  "description": "dorms-check 가 만드는 증빙팩. 도름스 서버는 이를 '참고'로만 쓰고, 마크는 서버가 직접 재스캔한 결과로 발급한다.",
+  "type": "object",
+  "required": ["schemaVersion", "tool", "app", "items", "manifestSha256"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "tool": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": { "name": { "const": "dorms-check" }, "version": { "type": "string" } }
+    },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "app": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "url": { "type": ["string", "null"] },
+        "stack": { "type": ["string", "null"] },
+        "tracks": { "type": "array", "items": { "enum": ["security", "edzip"] } },
+        "edzipCase": { "enum": ["A", "B", "C", "D", null] }
+      }
+    },
+    "teacher": {
+      "type": "object",
+      "properties": { "dormsHandle": { "type": ["string", "null"] } }
+    },
+    "tracks": {
+      "type": "object",
+      "properties": {
+        "security": { "type": ["object", "null"] },
+        "edzip": { "type": ["object", "null"] }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "track": { "type": ["string", "null"] },
+          "severity": { "enum": ["critical", "high", "medium", "low", "info", null] },
+          "method": { "enum": ["deterministic", "ai", "hybrid"] },
+          "serverVerifiable": { "type": "boolean" },
+          "status": { "enum": ["pass", "fail", "na", "info", "pending"] },
+          "observed": { "type": "string" },
+          "evidence": { "type": "object" }
+        }
+      }
+    },
+    "reverifyHints": {
+      "type": "object",
+      "properties": {
+        "revalidate": { "type": "array", "items": { "type": "string" } },
+        "note": { "type": "string" }
+      }
+    },
+    "manifestSha256": { "type": "string" }
+  }
+}

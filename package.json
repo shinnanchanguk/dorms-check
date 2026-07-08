@@ -1,0 +1,59 @@
+{
+  "name": "dorms-check",
+  "version": "0.1.0",
+  "description": "교사가 바이브코딩으로 만든 앱을 스스로 검사하고 완전히 안전해질 때까지 자기 AI와 함께 고치는 보안·개인정보 점검 코치. 코드는 고치지 않고 평가·안내·증빙만. 결정적 스캐너(헤더·SSL·노출·CORS·RLS 실측)로 판정해 약한 모델의 할루시네이션을 구조적으로 막는다. 최종 인증마크는 도름스 서버가 스스로 재검증해 발급하며 이 도구의 통과가 마크를 보장하지 않는다.",
+  "type": "module",
+  "bin": {
+    "dcheck": "bin/dcheck.js"
+  },
+  "exports": {
+    ".": "./core/index.js",
+    "./checks/external": "./checks/external/index.js",
+    "./checks/runtime": "./checks/runtime/index.js"
+  },
+  "scripts": {
+    "selftest": "node verify/self-test.js",
+    "scan": "node bin/dcheck.js scan"
+  },
+  "keywords": [
+    "security",
+    "privacy",
+    "supabase",
+    "rls",
+    "vibe-coding",
+    "korea",
+    "education",
+    "personal-information-protection",
+    "security-scanner"
+  ],
+  "license": "MIT",
+  "author": "shinnanchanguk",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shinnanchanguk/dorms-check.git"
+  },
+  "homepage": "https://github.com/shinnanchanguk/dorms-check#readme",
+  "bugs": {
+    "url": "https://github.com/shinnanchanguk/dorms-check/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "core",
+    "checks",
+    "catalog",
+    "ai",
+    "templates",
+    "schema",
+    "verify",
+    "SKILL.md",
+    "AGENTS.md",
+    "README.md",
+    "README.ko.md",
+    "SETUP.md",
+    "DISCLAIMER.md",
+    "USE-WITH-AI.md"
+  ]
+}
