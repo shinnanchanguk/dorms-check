@@ -6,11 +6,16 @@ English | [한국어](./README.ko.md)
 
 If you built an app with vibe coding (making code with AI) and you're not a developer, dorms-check helps you inspect and fix how your app handles security and personal data. Pass both tracks and you can apply for a DoRms community verification mark.
 
+## Where the mark comes from (read this first)
+**The verification mark is issued by DoRms, not by this tool.** On your app in DoRms (already posted, or about to be), you press the "Request mark" button, and DoRms checks your public app URL on its own; if it already passes, the mark is attached right there. **dorms-check is the helper you use to fix whatever did not pass** when you requested the mark. No install needed: paste the prompt into the AI you already use, and it runs the checks and fixes for you.
+
+> The flow: **request on DoRms → pass = mark right away / not yet = a list of what to fix → (when fixing) check and repair with dorms-check → request again.**
+
 ## The honest line
 This tool does not fix your app, and it does not issue any certification. It is a **coach** that tells you what is safe and what needs fixing. The final mark is issued only after the **DoRms server re-checks your app on its own**, and passing this tool does not guarantee the mark.
 
-## Quick start
-Paste the prompt from [`USE-WITH-AI.md`](./USE-WITH-AI.md) into whichever AI you use (Claude Code, Cursor, Codex, Gemini, and so on). Or run it directly:
+## How to fix (check and repair)
+When a requested mark comes back with items to fix, paste the prompt from [`USE-WITH-AI.md`](./USE-WITH-AI.md) into whichever AI you use (Claude Code, Cursor, Codex, Gemini, and so on). No install needed (`npx` fetches and runs it). Or run it directly:
 ```bash
 npx -y dorms-check@latest detect
 npx -y dorms-check@latest init --name "My App" --url "https://my-app-url" --track security,edzip --confirm-ownership

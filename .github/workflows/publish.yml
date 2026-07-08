@@ -1,10 +1,20 @@
-name: publish
+name: Publish to npm
+
+# npm 발행은 GitHub Actions 가 한다(ai-clone-shield 와 동일 패턴).
+# 토큰은 로컬에 두지 않고 repo Secret NPM_TOKEN 에만 둔다(write-only, 보안).
+# 트리거: ① v* 태그 푸시  ② Actions 탭에서 수동 실행(버전 입력 가능)
+# NPM_TOKEN 미설정이면 self-test 만 돌고 발행은 우아하게 건너뛴다(빨간 X 안 남김).
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: '발행 버전 (예: 0.1.1, 비우면 package.json 의 현재 버전)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -12,16 +22,31 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      HAS_NPM: ${{ secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
           registry-url: 'https://registry.npmjs.org'
-      # self-test 게이트: 통과해야만 발행(할루시네이션 방지 프로브 회귀 포함)
-      - name: Self-test
+
+      - name: Set version (manual dispatch only)
+        if: ${{ github.event.inputs.version != '' }}
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: npm version "$INPUT_VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Self-test gate (발행 전 회귀 검증)
         run: node verify/self-test.js
-      - name: Publish
+
+      - name: Publish to npm
+        if: ${{ env.HAS_NPM == 'true' }}
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Skip notice
+        if: ${{ env.HAS_NPM != 'true' }}
+        run: echo "NPM_TOKEN 미설정 — npm publish 건너뜀. Settings > Secrets > Actions 에 NPM_TOKEN 을 추가하세요."
