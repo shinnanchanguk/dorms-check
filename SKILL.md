@@ -13,6 +13,8 @@ description: 교사가 바이브코딩으로 만든 웹앱(주로 Next.js·Supab
 - **판정은 모델의 추측이 아니라 실제로 실행한 검사 결과다.** 헤더·SSL·노출 경로·CORS는 라이브 응답을 관측하고, RLS(데이터 접근)는 공개 anon 키로 실제 미인증 요청을 보내 행이 새는지 실측한다. 그래서 "대충 통과"가 안 된다.
 - **"보장·통과 약속" 같은 말을 쓰지 않는다.** "학운위 심사 준비 완료"는 심의에 낼 서류가 갖춰졌다는 뜻이고, 심의·최종 결정은 각 학교가 한다.
 
+> 설치는 따로 필요 없다. `npx`가 자동으로 받아 실행한다(Node 18+). `npx -y dorms-check@latest`가 아직 안 되면(npm 미발행) `npx -y github:shinnanchanguk/dorms-check`로 실행한다.
+
 ## 1. 절차 (평가 → 수정 지시 → 재검 완주 루프)
 1. **설치 확인·감지**: `npx -y dorms-check@latest detect` — 스택(Next.js/Vite/정적)·Supabase 여부 확인.
 2. **설정**: `npx -y dorms-check@latest init --name "<앱이름>" --url "<배포 주소>" --track security,edzip --confirm-ownership` — 본인이 만들고 운영하는 앱만 스캔한다는 동의 포함. 학운위(에듀집) 트랙이면 케이스 진단 3문항을 교사에게 물어 `dorms-check.config.json`의 `edzipCase`에 A/B/C/D로 적는다.
