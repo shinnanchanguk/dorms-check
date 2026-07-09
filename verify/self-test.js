@@ -4,6 +4,7 @@ import { checkHeaders } from '../checks/external/headers.js';
 import { checkExposure } from '../checks/external/exposure.js';
 import { checkCors } from '../checks/external/cors.js';
 import { rlsProbe } from '../checks/runtime/rls-probe.js';
+import { firebaseProbe } from '../checks/runtime/firebase-probe.js';
 import { scoreSecurity } from '../core/score.js';
 
 let pass = 0, fail = 0;
@@ -80,11 +81,34 @@ async function run() {
   const safe = await rlsProbe('https://app', { fetchImpl: mockFetch(safeRoutes) });
   ok('잠긴 앱 → pass', safe.find(r => r.id === 'code.rls.anon-read').status === 'pass');
 
-  console.log('\n[6] 마크 게이트 — critical/high fail 이면 미충족');
+  console.log('\n[6] Firebase 프로브 — 공개 RTDB 는 잡고(양성), 잠긴 DB 는 pass, 없으면 na');
+  const fbPublic = [
+    [/^https:\/\/app\/?$/, { status: 200, headers: { 'content-type': 'text/html' }, body: `<html><script src="https://app/b.js"></script></html>` }],
+    [/b\.js$/, { status: 200, body: `const c={databaseURL:"https://demo-default-rtdb.firebaseio.com"};` }],
+    [/firebaseio\.com\/\.json/, { status: 200, body: JSON.stringify({ users: true, posts: true }) }],
+    [/./, { status: 200, body: '{}' }],
+  ];
+  const fbP = await firebaseProbe('https://app', { fetchImpl: mockFetch(fbPublic) });
+  ok('공개 Firebase RTDB → fail', fbP.find(r => r.id === 'code.firebase.public-read').status === 'fail');
+  const fbLocked = [
+    [/^https:\/\/app\/?$/, { status: 200, headers: { 'content-type': 'text/html' }, body: `<html><script src="https://app/b.js"></script></html>` }],
+    [/b\.js$/, { status: 200, body: `const c={databaseURL:"https://demo-default-rtdb.firebaseio.com"};` }],
+    [/firebaseio\.com\/\.json/, { status: 401, body: JSON.stringify({ error: 'Permission denied' }) }],
+    [/./, { status: 401, body: '{}' }],
+  ];
+  const fbL = await firebaseProbe('https://app', { fetchImpl: mockFetch(fbLocked) });
+  ok('잠긴 Firebase RTDB → pass', fbL.find(r => r.id === 'code.firebase.public-read').status === 'pass');
+  const fbNone = [[/./, { status: 200, headers: { 'content-type': 'text/html' }, body: '<html><script src="https://app/x.js"></script></html>' }], [/x\.js$/, { status: 200, body: 'const a=1;' }]];
+  const fbN = await firebaseProbe('https://app', { fetchImpl: mockFetch(fbNone) });
+  ok('Firebase 없음 → na', fbN.find(r => r.id === 'code.firebase.public-read').status === 'na');
+
+  console.log('\n[7] 마크 게이트 — critical/high fail 이면 미충족');
   const gateFail = scoreSecurity([{ id: 'code.rls.anon-read', status: 'fail', evidence: {} }]);
   ok('RLS fail → 마크 미충족', gateFail.eligible === false);
-  const gatePass = scoreSecurity([{ id: 'code.rls.anon-read', status: 'pass', evidence: {} }, { id: 'sec.header.referrer', status: 'fail', evidence: {} }]);
-  ok('low 항목만 fail → 마크 충족', gatePass.eligible === true);
+  const gateFbFail = scoreSecurity([{ id: 'code.firebase.public-read', status: 'fail', evidence: {} }]);
+  ok('Firebase 공개 → 마크 미충족', gateFbFail.eligible === false);
+  const gatePass = scoreSecurity([{ id: 'code.rls.anon-read', status: 'pass', evidence: {} }, { id: 'code.firebase.public-read', status: 'na', evidence: {} }, { id: 'sec.header.referrer', status: 'fail', evidence: {} }]);
+  ok('low 항목만 fail + Firebase na → 마크 충족', gatePass.eligible === true);
 
   console.log(`\n결과: ${pass} pass, ${fail} fail`);
   if (fail) process.exit(1);

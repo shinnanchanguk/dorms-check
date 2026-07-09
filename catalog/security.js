@@ -65,11 +65,14 @@ export const SECURITY_ITEMS = [
     aiFix: 'CORS 를 신뢰하는 도메인만 허용하도록 좁혀줘. credentials 를 쓰는 API 는 Access-Control-Allow-Origin 을 * 로 두거나 요청 Origin 을 그대로 반사하지 말고 화이트리스트로 제한해줘.' },
 
   // ── 코드 내부(런타임 실측 + 정적) ──
-  { id: 'code.rls.anon-read', group: '데이터 접근(RLS)', title: '익명 접근 차단(RLS)', severity: 'critical', weight: 15, gate: true, serverVerifiable: true,
-    plain: '로그인하지 않은 사람이 데이터베이스의 개인정보를 그냥 읽을 수 있어요. 학생·회원 정보가 새는 가장 위험한 문제예요.',
+  { id: 'code.rls.anon-read', group: '데이터 접근 권한', title: '익명 접근 차단(Supabase RLS)', severity: 'critical', weight: 15, gate: true, serverVerifiable: true,
+    plain: '로그인하지 않은 사람이 데이터베이스의 개인정보를 그냥 읽을 수 있어요. 학생·회원 정보가 새는 가장 위험한 문제예요. (Supabase 를 쓰는 앱은 RLS 를 실제로 찔러 확인해요.)',
     aiFix: 'Supabase 의 모든 테이블에 RLS(행 수준 보안)를 켜고, 개인정보가 든 테이블은 본인/권한 있는 사용자만 읽도록 정책을 만들어줘. 공개해도 되는 테이블만 익명 읽기를 허용해줘. 익명 anon 키로 실제 접속해서 개인정보 행이 안 나오는지 다시 확인해줘.' },
-  { id: 'code.endpoint.unauth', group: '데이터 접근(RLS)', title: '미인증 API 접근', severity: 'high', weight: 8, gate: false, serverVerifiable: true,
-    plain: '로그인 없이 호출해도 데이터를 돌려주는 API 후보가 있어요. 공개용이 아니면 인증을 걸어야 해요.',
+  { id: 'code.firebase.public-read', group: '데이터 접근 권한', title: '익명 접근 차단(Firebase 규칙)', severity: 'critical', weight: 15, gate: true, serverVerifiable: true,
+    plain: '로그인하지 않은 사람이 Firebase 실시간 DB 의 데이터를 그냥 읽을 수 있어요. Supabase 가 아니어도 같은 위험이에요.',
+    aiFix: 'Firebase 실시간 DB 보안 규칙에서 최상위 읽기 권한(".read": true 등)을 끄고, 개인정보가 든 경로는 인증·권한이 있는 사용자만 읽도록 규칙을 세워줘. 규칙 배포 후 로그인 없이 /.json 이 막히는지 다시 확인해줘.' },
+  { id: 'code.endpoint.unauth', group: '데이터 접근 권한', title: '미인증 API 접근', severity: 'high', weight: 8, gate: false, serverVerifiable: true,
+    plain: '로그인 없이 호출해도 데이터를 돌려주는 API 후보가 있어요. 공개용이 아니면 인증을 걸어야 해요. (Supabase·Firebase 가 아닌 자체 백엔드도 이렇게 접근 권한을 확인해요.)',
     aiFix: '민감한 데이터를 반환하는 API 라우트에 인증/권한 확인을 추가해줘. 공개 API 라면 반환 데이터에 개인정보가 없는지 확인해줘.' },
   { id: 'code.hardcoded-secret', group: '코드 내부', title: '하드코딩 시크릿', severity: 'critical', weight: 12, gate: false, serverVerifiable: false,
     plain: '코드 안에 API 키·비밀번호가 직접 적혀 있어요. 코드가 새면 키도 같이 새요.',
