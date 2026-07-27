@@ -1,13 +1,21 @@
 # 설치와 사용 안내
 
-## 설치는 필요 없어요 (npx 무설치 실행이 기본)
-dorms-check는 따로 설치하지 않아도 돼요. `npx`가 필요할 때마다 최신판을 받아 실행하니, 아래 한 줄이면 바로 시작할 수 있어요.
+## 설치는 필요 없어요 (깃허브 소스에서 바로 실행)
+dorms-check는 따로 설치하지 않아도 돼요. 아래 한 줄이면 **이 깃허브 저장소의 최신판**을 그때그때 받아 실행해요.
+
+> npm 에는 올리지 않아요. 올린 판은 소스를 손볼 때마다 다시 올려야 해서 금방 옛것이 되고, 실제로 받아지지 않는 일이 생겼거든요. 그래서 패키지 이름(`dorms-check@latest`) 대신 아래처럼 `github:` 주소를 씁니다. 이러면 언제 실행해도 최신판이에요.
 
 ```bash
-npx -y dorms-check@latest detect
+npx -y github:shinnanchanguk/dorms-check detect
 ```
 
 Node.js만 깔려 있으면 되고, 여러분 프로젝트에 무언가를 추가로 설치하지 않아요. (전체 실행 흐름은 `README.ko.md`와 `USE-WITH-AI.md`를 보세요.)
+
+저장소를 통째로 내려받아 쓰고 싶다면 이렇게 해도 똑같이 동작해요.
+```bash
+git clone https://github.com/shinnanchanguk/dorms-check.git
+node dorms-check/bin/dcheck.js detect
+```
 
 ## 쓰는 AI에 연결하기
 
@@ -47,4 +55,4 @@ brew install semgrep gitleaks   # macOS 예시
 | `dcheck report` | 전체 리포트를 출력해요 (`.dorms-check/REPORT.md`) |
 | `dcheck submit` | 다 통과하면 증빙팩을 만들고 마크 신청 방법을 안내해요 |
 
-> `dcheck`는 `npx -y dorms-check@latest`의 짧은 표기예요. 위 표의 `dcheck` 자리에 `npx -y dorms-check@latest`를 넣어 실행하면 돼요.
+> `dcheck`는 `npx -y github:shinnanchanguk/dorms-check`의 짧은 표기예요. 위 표의 `dcheck` 자리에 `npx -y github:shinnanchanguk/dorms-check`를 넣어 실행하면 돼요.

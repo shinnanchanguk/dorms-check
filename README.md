@@ -15,13 +15,13 @@ If you built an app with vibe coding (making code with AI) and you're not a deve
 This tool does not fix your app, and it does not issue any certification. It is a **coach** that tells you what is safe and what needs fixing. The final mark is issued only after the **DoRms server re-checks your app on its own**, and passing this tool does not guarantee the mark.
 
 ## How to fix (check and repair)
-When a requested mark comes back with items to fix, paste the prompt from [`USE-WITH-AI.md`](./USE-WITH-AI.md) into whichever AI you use (Claude Code, Cursor, Codex, Gemini, and so on). No install needed (`npx` fetches and runs it). Or run it directly:
+When a requested mark comes back with items to fix, paste the prompt from [`USE-WITH-AI.md`](./USE-WITH-AI.md) into whichever AI you use (Claude Code, Cursor, Codex, Gemini, and so on). No install needed: it runs **straight from this GitHub repo**, so you always get the latest source. This package is not published to npm (a published copy goes stale every time the source changes), so use the `github:` spec below rather than a package name. Or run it directly:
 ```bash
-npx -y dorms-check@latest detect
-npx -y dorms-check@latest init --name "My App" --url "https://my-app-url" --track security,edzip --confirm-ownership
-npx -y dorms-check@latest scan --url "https://my-app-url"
-npx -y dorms-check@latest status     # remaining items + how to fix each
-npx -y dorms-check@latest submit      # once everything passes: evidence pack + how to apply
+npx -y github:shinnanchanguk/dorms-check detect
+npx -y github:shinnanchanguk/dorms-check init --name "My App" --url "https://my-app-url" --track security,edzip --confirm-ownership
+npx -y github:shinnanchanguk/dorms-check scan --url "https://my-app-url"
+npx -y github:shinnanchanguk/dorms-check status     # remaining items + how to fix each
+npx -y github:shinnanchanguk/dorms-check submit      # once everything passes: evidence pack + how to apply
 ```
 
 ## What it checks

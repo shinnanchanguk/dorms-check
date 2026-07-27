@@ -1,6 +1,13 @@
 name: Publish to npm
 
-# npm 발행은 GitHub Actions 가 한다(ai-clone-shield 와 동일 패턴).
+# 안내: 이 도구의 정식 설치 경로는 npm 이 아니라 깃허브 소스다.
+#   npx -y github:shinnanchanguk/dorms-check
+# npm 에 올린 판은 소스를 손볼 때마다 다시 올려야 해서 금방 옛것이 되고, 실제로 그 상태가 났다.
+# (NPM_TOKEN 이 없어 발행이 조용히 건너뛰어졌는데 문서는 계속 dorms-check@latest 를 안내해,
+#  선생님들이 받을 수 없는 명령을 붙여넣고 있었다. 2026-07-27 실측·교정.)
+# 이 워크플로는 옵션으로 남겨둔다. NPM_TOKEN 이 없으면 self-test 만 돌고 발행은 건너뛴다.
+# 발행하더라도 문서·복붙 프롬프트의 정본은 위 깃허브 주소를 유지한다.
+#
 # 토큰은 로컬에 두지 않고 repo Secret NPM_TOKEN 에만 둔다(write-only, 보안).
 # 트리거: ① v* 태그 푸시  ② Actions 탭에서 수동 실행(버전 입력 가능)
 # NPM_TOKEN 미설정이면 self-test 만 돌고 발행은 우아하게 건너뛴다(빨간 X 안 남김).

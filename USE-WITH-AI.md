@@ -6,22 +6,29 @@
 
 만든 앱 폴더를 열어둔 상태에서, 쓰고 있는 AI(Claude Code·Cursor·ChatGPT 등)에게 아래를 그대로 붙여넣으세요. 개발을 몰라도 됩니다. AI가 검사하고, 무엇을 왜 고쳐야 하는지 쉬운 말로 알려주고, 당신 동의 하에 고쳐줍니다.
 
-> 따로 설치할 필요가 없어요. 아래 명령의 `npx`가 필요한 걸 자동으로 받아서 실행해요(Node.js 18 이상만 있으면 돼요). `npx -y dorms-check@latest`가 안 되면 `npx -y github:shinnanchanguk/dorms-check`로 실행하면 돼요.
+> 따로 설치할 필요가 없어요. 아래 명령이 **깃허브 소스에서 최신판을 바로 받아 실행**해요(Node.js 18 이상만 있으면 돼요). 이 도구는 npm 에 올리지 않으니 `dorms-check@latest` 같은 이름 말고 아래 깃허브 주소 그대로 쓰세요.
 
 ---
 
-내 앱의 보안과 개인정보를 dorms-check 로 검사하고, 도름스 인증마크를 받을 수 있는 상태까지 함께 고쳐줘. 설치는 `npx` 가 자동으로 받아 주니 따로 안 해도 돼. (너는 코드를 고치는 코치이고, 마크는 도름스에서 신청하면 도름스가 다시 확인해 발급한다는 점만 기억해줘.)
+내 앱의 보안과 개인정보를 dorms-check 로 검사하고, 도름스 인증마크를 받을 수 있는 상태까지 함께 고쳐줘. 이 도구는 npm 에 올라와 있지 않으니 아래처럼 깃허브 주소(github.com/shinnanchanguk/dorms-check)에서 바로 받아 실행해줘. 따로 설치할 건 없어. (너는 코드를 고치는 코치이고, 마크는 도름스에서 신청하면 도름스가 다시 확인해 발급한다는 점만 기억해줘.)
 
-1. `npx -y dorms-check@latest detect` 로 내 앱 스택을 확인해줘.
-2. `npx -y dorms-check@latest init --name "내 앱 이름" --url "내 배포 주소" --track security,edzip --confirm-ownership` 로 설정을 만들어줘. (학운위 준비까지 하려면 학생 개인정보를 다루는지 3문항을 나한테 물어봐줘.)
-3. `npx -y dorms-check@latest scan --url "내 배포 주소"` 로 검사해줘.
+1. `npx -y github:shinnanchanguk/dorms-check detect` 로 내 앱 스택을 확인해줘.
+2. `npx -y github:shinnanchanguk/dorms-check init --name "내 앱 이름" --url "내 배포 주소" --track security,edzip --confirm-ownership` 로 설정을 만들어줘. (학운위 준비까지 하려면 학생 개인정보를 다루는지 3문항을 나한테 물어봐줘.)
+3. `npx -y github:shinnanchanguk/dorms-check scan --url "내 배포 주소"` 로 검사해줘.
 4. 검사가 "AI가 판단해야 할 항목"을 남기면, 내 코드와 개인정보처리방침을 직접 읽고 `judge` 로 증거(파일:라인)와 함께 판정해줘. 증거 없이 통과 처리하지 마.
-5. `npx -y dorms-check@latest status` 로 남은 항목을 보고, 각 항목을 왜 고쳐야 하는지 나한테 쉬운 말로 설명한 다음, 내 동의를 받고 내 앱 코드를 고쳐줘.
+5. `npx -y github:shinnanchanguk/dorms-check status` 로 남은 항목을 보고, 각 항목을 왜 고쳐야 하는지 나한테 쉬운 말로 설명한 다음, 내 동의를 받고 내 앱 코드를 고쳐줘.
 6. 고친 뒤 다시 배포하고 3~5를 보안과 학운위 준비가 모두 통과할 때까지 반복해줘.
-7. 다 통과하면 `npx -y dorms-check@latest submit` 으로 증빙팩을 만들고, 도름스에서 마크 신청하는 방법을 알려줘.
+7. 다 통과하면 `npx -y github:shinnanchanguk/dorms-check submit` 으로 증빙팩을 만들어줘. 개인정보처리방침을 별도 주소 없이 앱 안 팝업으로만 보여주는 앱이면, 거기서 만들어진 `report.json` 을 도름스 마크 신청 화면의 "dorms-check 결과 올리기"에 올려야 한다고 알려줘.
 
 읽기 검사만 하고(비파괴), 내 앱만 검사해. "대충 통과"시키지 말고, 실제로 확인된 것만 통과로 처리해줘.
 
 ---
 
 이게 전부입니다. 붙여넣고 AI가 안내하는 대로 따라가면 됩니다.
+
+## 학운위 마크가 "방침 필수 항목이 확인되지 않는다"고 나올 때
+
+도름스는 앱 주소를 바깥에서 열어 개인정보처리방침 글자를 읽습니다. 그런데 방침을 **별도 주소 없이 앱 안 팝업으로만** 띄우는 앱(리액트·Vite 같은 한 장짜리 앱)은 바깥에서 받는 화면이 빈 껍데기라, 방침이 멀쩡히 있어도 글자가 안 보일 수 있어요. 이 도구로는 "이상 없음"인데 도름스에서만 막히는 경우가 이것입니다. 둘 중 하나로 풀면 됩니다.
+
+1. **방침을 주소로도 열리게 만들기** (권장) — `/privacy` 처럼 그 주소로 들어가면 방침 본문이 바로 보이게 두면, 도름스가 읽어서 바로 확인합니다.
+2. **결과 파일 올리기** — `submit` 이 만든 `.dorms-check/evidence/report.json` 을 도름스 마크 신청 화면의 &lsquo;dorms-check 결과 올리기&rsquo;에 올리면, 이 도구가 소스를 읽어 판정한 학운위 항목을 도름스가 대체 근거로 인정합니다.

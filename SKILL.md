@@ -14,20 +14,22 @@ description: 교사가 바이브코딩으로 만든 웹앱(주로 Next.js·Supab
 - **판정은 모델의 추측이 아니라 실제로 실행한 검사 결과다.** 헤더·SSL·노출 경로·CORS는 라이브 응답을 관측하고, RLS(데이터 접근)는 공개 anon 키로 실제 미인증 요청을 보내 행이 새는지 실측한다. 그래서 "대충 통과"가 안 된다.
 - **"보장·통과 약속" 같은 말을 쓰지 않는다.** "학운위 심사 준비 완료"는 심의에 낼 서류가 갖춰졌다는 뜻이고, 심의·최종 결정은 각 학교가 한다.
 
-> 설치는 따로 필요 없다. `npx`가 자동으로 받아 실행한다(Node 18+). `npx -y dorms-check@latest`가 아직 안 되면(npm 미발행) `npx -y github:shinnanchanguk/dorms-check`로 실행한다.
+> 설치는 따로 필요 없다. **깃허브 소스에서 바로 받아 실행한다**(Node 18+): `npx -y github:shinnanchanguk/dorms-check`.
+> 이 도구는 npm 레지스트리에 올리지 않는다. 손볼 때마다 다시 올려야 해서 금방 옛 판이 되기 때문이다. 깃허브 주소로 실행하면 언제 실행해도 저장소의 최신 판이 그대로 돈다. `npx -y dorms-check@latest` 류의 npm 이름으로는 받아지지 않으니 쓰지 않는다.
 
 ## 1. 고칠 때 쓰는 법 (평가 → 수정 지시 → 재검 완주 루프)
-1. **설치 확인·감지**: `npx -y dorms-check@latest detect` — 스택(Next.js/Vite/정적)·Supabase 여부 확인.
-2. **설정**: `npx -y dorms-check@latest init --name "<앱이름>" --url "<배포 주소>" --track security,edzip --confirm-ownership` — 본인이 만들고 운영하는 앱만 스캔한다는 동의 포함. 학운위(에듀집) 트랙이면 케이스 진단 3문항을 교사에게 물어 `dorms-check.config.json`의 `edzipCase`에 A/B/C/D로 적는다.
-3. **스캔**: `npx -y dorms-check@latest scan --url "<배포 주소>"` — 결정적 스캐너(외부 표면 + RLS 실측) + 로컬 코드 정적 검사를 돌린다. 결과는 `.dorms-check/REPORT.md`·`scan.json`에 저장된다. 배포 전이면 `--code-only`.
+1. **설치 확인·감지**: `npx -y github:shinnanchanguk/dorms-check detect` — 스택(Next.js/Vite/정적)·Supabase 여부 확인.
+2. **설정**: `npx -y github:shinnanchanguk/dorms-check init --name "<앱이름>" --url "<배포 주소>" --track security,edzip --confirm-ownership` — 본인이 만들고 운영하는 앱만 스캔한다는 동의 포함. 학운위(에듀집) 트랙이면 케이스 진단 3문항을 교사에게 물어 `dorms-check.config.json`의 `edzipCase`에 A/B/C/D로 적는다.
+3. **스캔**: `npx -y github:shinnanchanguk/dorms-check scan --url "<배포 주소>"` — 결정적 스캐너(외부 표면 + RLS 실측) + 로컬 코드 정적 검사를 돌린다. 결과는 `.dorms-check/REPORT.md`·`scan.json`에 저장된다. 배포 전이면 `--code-only`.
 4. **AI 판단(ai-review 항목)**: 스캔이 "AI가 판단해야 할 항목"을 알려주면(예: `code.endpoint.unauth`, 에듀집 방침 의미 판단), 당신이 코드·개인정보처리방침을 **직접 읽고** 판정한다. `judge --in answers.json`으로 기록한다. 형식:
    ```json
    { "edzip.5-3": { "status": "pass", "evidence": "방침 제6조에 Supabase(AWS 서울) 위탁 명시 — src/app/privacy/page.tsx:42" } }
    ```
    **증거(파일:라인 또는 실측 요약) 없는 pass 는 CLI 가 거부한다.** 서술만으로 통과시키지 마라.
-5. **수정 지시**: `npx -y dorms-check@latest status` 로 남은 항목과 각 항목의 "AI에게 시킬 수정 프롬프트"를 본다. 교사에게 무엇을·왜 고치는지 쉬운 말로 설명하고, 교사 동의 하에 **교사 앱 코드를 당신이 수정**한다(이 스킬은 관여 안 함). 고친 뒤 재배포.
+5. **수정 지시**: `npx -y github:shinnanchanguk/dorms-check status` 로 남은 항목과 각 항목의 "AI에게 시킬 수정 프롬프트"를 본다. 교사에게 무엇을·왜 고치는지 쉬운 말로 설명하고, 교사 동의 하에 **교사 앱 코드를 당신이 수정**한다(이 스킬은 관여 안 함). 고친 뒤 재배포.
 6. **재검 루프**: 3~5를 반복한다. 두 트랙(보안·에듀집)이 모두 통과할 때까지. `scan`은 멱등이고 `status`는 남은 것만 보여준다.
-7. **증빙팩·신청**: 통과하면 `npx -y dorms-check@latest submit` — 증빙팩(`report.json`·`REPORT.md`)을 만들고 도름스 마크 신청 방법을 안내한다. 교사는 도름스(dorms.school)에 로그인해 자기 앱에서 "보안 검토 마크 신청"을 누르고, **도름스 서버가 그 앱 주소를 스스로 다시 검사**해 통과하면 마크를 발급한다.
+7. **증빙팩·신청**: 통과하면 `npx -y github:shinnanchanguk/dorms-check submit` — 증빙팩(`report.json`·`REPORT.md`)을 만들고 도름스 마크 신청 방법을 안내한다. 교사는 도름스(dorms.school)에 로그인해 자기 앱에서 "보안 검토 마크 신청"을 누르고, **도름스 서버가 그 앱 주소를 스스로 다시 검사**해 통과하면 마크를 발급한다.
+8. **학운위 마크가 "개인정보처리방침 필수 항목이 확인되지 않는다"로 막히면**: 도름스는 앱 주소를 바깥에서 열어 방침 글자를 읽는다. 방침을 별도 주소 없이 **앱 안 팝업으로만** 띄우는 한 장짜리 앱(React·Vite 등)은 바깥에서 빈 껍데기만 보여, 방침이 멀쩡히 있어도 못 읽힐 수 있다(이 도구는 소스를 읽으니 "이상 없음"이라 갈린다). 교사에게 둘 중 하나를 안내한다. ① 방침을 `/privacy` 같은 주소로도 열리게 두기(권장, 이후 자동으로 확인됨) ② `submit` 이 만든 `.dorms-check/evidence/report.json` 을 신청 화면의 "dorms-check 결과 올리기"에 올리기(도름스가 이 리포트의 `edzip.*` 판정을 대체 근거로 인정). **추측하지 말고 실제로 방침 주소를 열어 확인한 뒤 어느 쪽인지 판단한다.**
 
 ## 2. 두 트랙
 - **도름스 보안 체크리스트 충족**: 보안 헤더·전송 보안·정보 유출·CORS·RLS(익명 접근)·코드 시크릿. 마크 자격 = 심각(critical)·높음(high) 항목이 0. 점수(0~100)·등급(A~F)은 참고로 함께 보여준다.

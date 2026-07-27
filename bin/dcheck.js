@@ -228,6 +228,14 @@ function runSubmit() {
   log.plain('  2) 내가 만든 앱의 앱 공유 페이지에서 "보안 검토 마크 신청"을 누르세요.');
   log.plain('  3) 도름스 서버가 이 앱의 주소를 스스로 다시 검사합니다(외부 표면 + RLS 실측).');
   log.plain(color.dim('     서버 재검사에서 통과하지 못하면 마크가 발급되지 않습니다. 이 도구의 통과는 신청 준비일 뿐입니다.'));
+  if (cfg.tracks?.includes('edzip')) {
+    log.title('학운위 마크: 방침을 앱 안에서만 보여주는 앱이라면');
+    log.plain('  도름스는 앱 주소를 바깥에서 열어 개인정보처리방침 글자를 읽습니다. 방침을 별도 주소 없이');
+    log.plain('  앱 안 팝업으로만 띄우면(리액트·Vite 같은 한 장짜리 앱) 바깥에서는 빈 화면이라 못 읽을 수 있어요.');
+    log.plain('  "개인정보처리방침 필수 항목이 확인되지 않는다"가 뜨면 둘 중 하나로 푸세요.');
+    log.plain(`  · 방침을 /privacy 같은 주소로도 열리게 두기(권장)`);
+    log.plain(`  · 방금 만든 ${path.relative(root, path.join(outDir, 'report.json'))} 를 신청 화면의 "dorms-check 결과 올리기"에 올리기`);
+  }
   honesty();
 }
 

@@ -15,13 +15,13 @@
 이 도구는 앱을 고치지도, 인증을 발급하지도 않습니다. 무엇이 안전하고 무엇을 고쳐야 하는지 알려주는 **코치**입니다. 최종 인증마크는 도름스 서버가 **스스로 다시 검증**해 발급하며, 이 도구의 통과가 마크를 보장하지 않습니다.
 
 ## 고칠 때 쓰는 법
-신청했을 때 고칠 항목이 나오면, 쓰고 있는 AI(Claude Code·Cursor 등)에 [`USE-WITH-AI.md`](./USE-WITH-AI.md)의 프롬프트를 붙여넣으세요. 설치는 필요 없어요(`npx`가 자동으로 받아 실행). 또는 직접:
+신청했을 때 고칠 항목이 나오면, 쓰고 있는 AI(Claude Code·Cursor 등)에 [`USE-WITH-AI.md`](./USE-WITH-AI.md)의 프롬프트를 붙여넣으세요. 따로 설치할 건 없고 **이 깃허브 저장소에서 바로 최신판이 실행**돼요. npm 에는 올리지 않습니다(올린 판은 소스를 손볼 때마다 다시 올려야 해서 금방 옛것이 돼요). 그래서 패키지 이름 대신 아래처럼 `github:` 주소를 씁니다. 또는 직접:
 ```bash
-npx -y dorms-check@latest detect
-npx -y dorms-check@latest init --name "내 앱" --url "https://내앱주소" --track security,edzip --confirm-ownership
-npx -y dorms-check@latest scan --url "https://내앱주소"
-npx -y dorms-check@latest status     # 남은 항목 + 고치는 법
-npx -y dorms-check@latest submit      # 다 통과하면 증빙팩 + 신청 안내
+npx -y github:shinnanchanguk/dorms-check detect
+npx -y github:shinnanchanguk/dorms-check init --name "내 앱" --url "https://내앱주소" --track security,edzip --confirm-ownership
+npx -y github:shinnanchanguk/dorms-check scan --url "https://내앱주소"
+npx -y github:shinnanchanguk/dorms-check status     # 남은 항목 + 고치는 법
+npx -y github:shinnanchanguk/dorms-check submit      # 다 통과하면 증빙팩 + 신청 안내
 ```
 
 ## 무엇을 점검하나
