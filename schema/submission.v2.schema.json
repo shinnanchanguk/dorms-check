@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shinnanchanguk/dorms-check/schema/submission.v2.schema.json",
+  "title": "dorms-check submission v2 (report.json)",
+  "description": "dorms-check 가 만드는 증빙팩(3축: security·edzip·protection). 도름스 서버는 이를 '참고'로만 쓰고, 마크는 서버가 직접 재스캔한 결과로 발급한다. v2 는 제출 전 시크릿·개인 경로 마스킹(redact)을 거친다. items[].id 는 서버가 카탈로그(catalog/*.js) allowlist 로 재검증한다.",
+  "type": "object",
+  "required": ["schemaVersion", "tool", "app", "items", "manifestSha256"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "tool": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": { "name": { "const": "dorms-check" }, "version": { "type": "string" } }
+    },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "app": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "name": { "type": ["string", "null"], "maxLength": 200 },
+        "url": { "type": ["string", "null"], "maxLength": 500 },
+        "stack": { "type": ["string", "null"], "maxLength": 100 },
+        "tracks": { "type": "array", "items": { "enum": ["security", "edzip", "protection"] } },
+        "edzipCase": { "enum": ["A", "B", "C", "D", null] }
+      }
+    },
+    "teacher": {
+      "type": "object",
+      "properties": { "dormsHandle": { "type": ["string", "null"], "maxLength": 100 } }
+    },
+    "tracks": {
+      "type": "object",
+      "description": "트랙 id → 트랙 결과 조각(Record). 미실행 v1 트랙은 null 로 유지된다.",
+      "properties": {
+        "security": {
+          "type": ["object", "null"],
+          "properties": {
+            "claimed": { "type": "boolean" },
+            "score": { "type": "number" },
+            "grade": { "type": "string" },
+            "eligible": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "edzip": {
+          "type": ["object", "null"],
+          "properties": {
+            "claimed": { "type": "boolean" },
+            "eligible": { "type": "boolean" },
+            "policyPresent": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "protection": {
+          "type": ["object", "null"],
+          "properties": {
+            "claimed": { "type": "boolean" },
+            "states": {
+              "type": "object",
+              "properties": {
+                "rights": { "enum": ["confirmed", "unresolved"] },
+                "boundary": { "enum": ["server_separated", "partially_separated", "public_asset"] },
+                "release": { "enum": ["copy_cost_raised", "not_hardened"] },
+                "notice": { "enum": ["notice_configured", "not_configured"] }
+              },
+              "additionalProperties": false
+            },
+            "labels": {
+              "type": "object",
+              "properties": {
+                "rights": { "type": "string" }, "boundary": { "type": "string" },
+                "release": { "type": "string" }, "notice": { "type": "string" }
+              },
+              "additionalProperties": false
+            },
+            "eligible": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": { "type": ["object", "null"] }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^(sec|info|cors|code|seo|perf|legal|edzip|meta|protection)\\.[a-z0-9.-]+$",
+            "description": "카탈로그 항목 id. 서버는 catalog allowlist(catalogItem)로 존재를 재검증하고, 없는 id 는 거부한다."
+          },
+          "track": { "enum": ["security", "edzip", "protection", null] },
+          "severity": { "enum": ["critical", "high", "medium", "low", "info", null] },
+          "method": { "enum": ["deterministic", "ai", "hybrid", "declared"] },
+          "serverVerifiable": { "type": "boolean" },
+          "status": { "enum": ["pass", "fail", "na", "info", "pending"] },
+          "observed": { "type": "string", "maxLength": 500 },
+          "evidence": {
+            "type": "object",
+            "description": "정해진 키만 허용(렌더·재검증에 쓰는 키). 임의 키로 원문 데이터를 실어 보내는 것을 막는다.",
+            "properties": {
+              "hits": {
+                "type": "array", "maxItems": 60,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "file": { "type": "string", "maxLength": 300 },
+                    "line": { "type": "number" },
+                    "kind": { "type": "string", "maxLength": 100 },
+                    "snippet": { "type": "string", "maxLength": 200 }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "value": { "type": ["string", "null"], "maxLength": 500 },
+              "readableTables": { "type": "array", "items": { "type": "string", "maxLength": 100 }, "maxItems": 60 },
+              "exposedPaths": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 60 },
+              "aiJudgment": {
+                "type": "object",
+                "properties": {
+                  "status": { "enum": ["pass", "fail", "na"] },
+                  "evidence": { "type": "string", "maxLength": 500 },
+                  "by": { "type": "string", "maxLength": 100 },
+                  "at": { "type": "string" }
+                },
+                "additionalProperties": false
+              },
+              "states": { "type": "object" },
+              "piiLeaks": { "type": "array", "maxItems": 60 },
+              "allowOrigin": { "type": ["string", "null"], "maxLength": 300 },
+              "allowCredentials": {},
+              "reflectsOrigin": { "type": "boolean" },
+              "wildcard": { "type": "boolean" },
+              "bytes": { "type": "number" },
+              "configuredHeaders": { "type": "object" },
+              "filesScanned": { "type": "array", "maxItems": 100 },
+              "dbUrls": { "type": "array", "maxItems": 20 },
+              "publicDbs": { "type": "array", "maxItems": 20 },
+              "emptyOpen": { "type": "array", "maxItems": 20 },
+              "locked": { "type": "array", "maxItems": 20 },
+              "encoding": { "type": ["string", "null"], "maxLength": 100 },
+              "exposed": {},
+              "found": {},
+              "header": { "type": "string", "maxLength": 100 },
+              "observedAt": { "type": "string" },
+              "httpProbe": {},
+              "redirectsHttps": { "type": "boolean" },
+              "missingHttpOnly": {},
+              "missingSecure": {},
+              "mixedContent": {},
+              "ms": { "type": "number" },
+              "poweredBy": { "type": ["string", "null"], "maxLength": 200 },
+              "server": { "type": ["string", "null"], "maxLength": 200 },
+              "sourceMappingURL": {},
+              "stackTrace": {},
+              "supabaseUrl": { "type": ["string", "null"], "maxLength": 300 },
+              "foundJwts": { "type": "number" },
+              "probed": {},
+              "protocol": { "type": ["string", "null"], "maxLength": 50 },
+              "tested": { "type": "array", "maxItems": 30 },
+              "openCandidates": { "type": "array", "maxItems": 30 },
+              "swaggerStatus": {},
+              "tablesTested": { "type": "number" },
+              "usedCommonTableFallback": { "type": "boolean" },
+              "method": { "type": "string", "maxLength": 200 },
+              "count": { "type": "number" }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "reverifyHints": {
+      "type": "object",
+      "properties": {
+        "revalidate": { "type": "array", "items": { "type": "string" } },
+        "note": { "type": "string" }
+      }
+    },
+    "manifestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}
