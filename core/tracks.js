@@ -8,6 +8,8 @@
 import path from 'node:path';
 import { SECURITY_ITEMS } from '../catalog/security.js';
 import { EDZIP_ITEMS, EDZIP_CASE_QUESTIONS } from '../catalog/edzip.js';
+import { PROTECTION_ITEMS } from '../catalog/protection.js';
+import { runProtectionScan, pendingProtectionSeeds } from '../checks/protection/index.js';
 import { color, log } from './util.js';
 
 // ── 항목 인덱스(카탈로그 SSOT) ──
@@ -17,6 +19,7 @@ function registerItems(track, items) {
 }
 registerItems('security', SECURITY_ITEMS);
 registerItems('edzip', EDZIP_ITEMS);
+registerItems('protection', PROTECTION_ITEMS);
 
 export function catalogItem(id) {
   return byId.get(id) || null;
@@ -257,8 +260,173 @@ const edzipTrack = {
   },
 };
 
+// ── protection 채점기: 점수가 아니라 6상태를 계산한다 ──
+// 상태 축 4개(권리·경계·배포·안내)의 값이 아래 6상태 라벨로 나온다.
+// 미확인은 보수적으로 본다: 클라이언트로 전달된 것은 공개로 가정(공개 자산), 설문 전엔 권리관계 확인 필요.
+export const PROTECTION_STATE_LABELS = {
+  rights: { confirmed: '권리관계 확인됨', unresolved: '권리관계 확인 필요' },
+  boundary: { server_separated: '서버 분리 확인', partially_separated: '일부 서버 분리', public_asset: '공개 자산' },
+  release: { copy_cost_raised: '복제 비용 상승 조치', not_hardened: '복제 비용 상승 조치 전' },
+  notice: { notice_configured: '권리·이용 안내 설정', not_configured: '권리·이용 안내 설정 전' },
+};
+
+const RIGHTS_IDS = ['protection.rights.owner-status', 'protection.rights.third-party', 'protection.rights.ai-contribution', 'protection.rights.license-consistency'];
+const BOUNDARY_LEAK_IDS = ['protection.boundary.client-secrets', 'protection.boundary.prompt', 'protection.boundary.weights', 'protection.boundary.output-leak', 'protection.boundary.api-abuse'];
+const RELEASE_IDS = ['protection.release.sourcemap', 'protection.release.debug', 'protection.release.private-identifiers', 'protection.release.separation', 'protection.release.integrity'];
+const NOTICE_IDS = ['protection.notice.visible', 'protection.notice.machine-readable', 'protection.evidence.manifest'];
+
+export function scoreProtection(results) {
+  const st = new Map();
+  for (const r of results) {
+    const cat = catalogItem(r.id);
+    if (cat && cat.track === 'protection') st.set(r.id, r.status);
+  }
+  const ok = id => st.get(id) === 'pass' || st.get(id) === 'na';
+
+  const rights = RIGHTS_IDS.every(ok) ? 'confirmed' : 'unresolved';
+
+  const serverOk = ok('protection.boundary.server');
+  let boundary;
+  if (serverOk && BOUNDARY_LEAK_IDS.every(ok)) boundary = 'server_separated';
+  else if (serverOk || BOUNDARY_LEAK_IDS.some(id => st.get(id) === 'pass')) boundary = 'partially_separated';
+  else boundary = 'public_asset';
+
+  const release = RELEASE_IDS.every(ok) ? 'copy_cost_raised' : 'not_hardened';
+  const notice = NOTICE_IDS.every(ok) ? 'notice_configured' : 'not_configured';
+
+  const states = { rights, boundary, release, notice };
+  const labels = {
+    rights: PROTECTION_STATE_LABELS.rights[rights],
+    boundary: PROTECTION_STATE_LABELS.boundary[boundary],
+    release: PROTECTION_STATE_LABELS.release[release],
+    notice: PROTECTION_STATE_LABELS.notice[notice],
+  };
+
+  const unmet = [];
+  for (const [id, status] of st) {
+    const cat = catalogItem(id);
+    if (!cat || !cat.gate) continue;
+    if (status !== 'pass' && status !== 'na') unmet.push({ id, title: cat.title, severity: cat.severity });
+  }
+  return {
+    states,
+    labels,
+    unmet,
+    eligible: rights === 'confirmed' && unmet.length === 0,
+  };
+}
+
+const protectionTrack = {
+  id: 'protection',
+  name: '내 앱 보호',
+  description: '내 앱의 비법(프롬프트·로직·데이터)과 저작권을 지키는 준비 상태 점검. 점수가 아니라 상태를 구분해 보여준다.',
+  items: PROTECTION_ITEMS,
+  alwaysInPayload: false, // v2 전용 트랙: 실행했을 때만 payload.tracks 에 포함(v1 구조 불변)
+
+  score(results) {
+    return scoreProtection(results);
+  },
+
+  // 스캔 시 결정적 검사 실행 + ai/declared 미판정 항목 pending seed.
+  // 결정적 항목은 judge 자기신고보다 우선한다(결정적 우선 원칙 — 스캔 결과가 review 를 덮는다).
+  collect({ results, root }) {
+    const { items: scanned } = runProtectionScan(root);
+    const AUTHORITATIVE = new Set([
+      'protection.boundary.client-secrets', 'protection.boundary.weights',
+      'protection.release.sourcemap', 'protection.release.debug', 'protection.release.private-identifiers',
+      'protection.release.separation', 'protection.release.integrity',
+      'protection.notice.visible', 'protection.notice.machine-readable',
+      'protection.evidence.manifest', 'protection.evidence.timestamp', 'protection.verify.functional',
+      'protection.rights.owner-status', 'protection.asset.inventory',
+    ]);
+    const out = [];
+    for (const it of scanned) {
+      const existing = results.find(r => r.id === it.id);
+      if (existing) {
+        if (AUTHORITATIVE.has(it.id)) {
+          const aiJ = existing.evidence && existing.evidence.aiJudgment;
+          existing.status = it.status;
+          existing.observed = it.observed;
+          existing.evidence = { ...it.evidence, ...(aiJ ? { aiJudgment: aiJ } : {}) };
+        }
+        // 비권위 항목(프롬프트 문맥 판단 등)은 judge 판정을 유지한다.
+      } else {
+        out.push(it);
+      }
+    }
+    const existingIds = new Set([...results.map(r => r.id), ...out.map(r => r.id)]);
+    out.push(...pendingProtectionSeeds(existingIds));
+    return out;
+  },
+
+  reportSection({ result, results, stack }) {
+    const p = result;
+    const lines = [];
+    lines.push(`## 내 앱 보호(비법·저작권)`);
+    lines.push(`- 권리관계: ${p.labels.rights}`);
+    lines.push(`- 비법 경계: ${p.labels.boundary}`);
+    lines.push(`- 배포 위생: ${p.labels.release}`);
+    lines.push(`- 안내·증거: ${p.labels.notice}`);
+    lines.push('');
+    lines.push(`### 통과 항목(증빙)`);
+    for (const r of results.filter(x => x.status === 'pass')) {
+      const cat = catalogItem(r.id); if (!cat || cat.track !== 'protection') continue;
+      lines.push(`- [v] ${cat.title} — ${evidenceLine(r)}`);
+    }
+    lines.push('');
+    const unmet = results.filter(x => (x.status === 'fail' || x.status === 'pending') && catalogItem(x.id)?.track === 'protection');
+    if (unmet.length) {
+      lines.push(`### 아직 진행할 항목`);
+      unmet.sort((a, b) => (SEVERITY_RANK[catalogItem(b.id).severity] - SEVERITY_RANK[catalogItem(a.id).severity]));
+      for (const r of unmet) {
+        const cat = catalogItem(r.id);
+        lines.push(`#### [${cat.severity}] ${cat.title}`);
+        lines.push(`- 무엇: ${fill(cat.plain, stack)}`);
+        lines.push(`- 지금 상태: ${r.observed}`);
+        if (cat.aiFix) lines.push(`- AI에게 이렇게 시켜주세요: \`${fill(cat.aiFix, stack)}\``);
+        lines.push('');
+      }
+    }
+    lines.push('');
+    lines.push(`> 정직 고지: 난독화나 Base64 인코딩은 비밀이 아니에요. 브라우저로 전달된 코드·데이터는 공개된 것으로 봐야 해요. 이 트랙은 "완전 보호"를 약속하지 않아요. 서버 분리, 복제 비용 상승 조치, 권리·이용 안내, 증거 준비의 현재 상태를 구분해 보여줄 뿐이에요.`);
+    return lines;
+  },
+
+  summaryLines({ result, results }) {
+    const p = result;
+    log.title(`내 앱 보호  권리: ${p.labels.rights} · 경계: ${p.labels.boundary} · 배포: ${p.labels.release} · 안내: ${p.labels.notice}`);
+    const unmet = results.filter(x => (x.status === 'fail' || x.status === 'pending') && catalogItem(x.id)?.track === 'protection');
+    for (const r of unmet.slice(0, 12)) {
+      const cat = catalogItem(r.id);
+      const mark = r.status === 'fail' ? color.red('x') : color.yellow('!');
+      log.plain(`  ${mark} [${cat.severity}] ${cat.title} — ${r.observed}`);
+    }
+    if (unmet.length > 12) log.plain(color.dim(`  ...${unmet.length - 12}건 더(REPORT.md 참고)`));
+  },
+
+  payloadSection({ result, config }) {
+    return { claimed: config.tracks?.includes('protection'), states: result.states, labels: result.labels, eligible: result.eligible };
+  },
+
+  roundSummary(result) {
+    return { states: result.states, eligible: result.eligible, unmet: result.unmet.map(u => u.id) };
+  },
+
+  passed(result) {
+    return result.eligible;
+  },
+
+  initNotes() {
+    log.title('내 앱 보호 트랙 시작 안내');
+    log.plain('  1) dcheck interview 로 권리·허용범위 설문 문항을 확인하고, 교사에게 쉬운 선택지로 물어보세요.');
+    log.plain('  2) 답을 파일로 모아 dcheck interview --answers <파일> 로 rights-profile 을 만드세요.');
+    log.plain('  3) scan → protect plan → (동의 후) protect apply --plan-sha256 <값> --confirm-apply → verify 순서로 진행하세요.');
+    log.plain(color.dim('  이 트랙의 적용 단계만 파일을 바꾸며, 반드시 계획 해시와 --confirm-apply 동의가 있어야 해요. 자동 배포는 하지 않아요.'));
+  },
+};
+
 // ── 레지스트리 ──
-export const TRACKS = [securityTrack, edzipTrack];
+export const TRACKS = [securityTrack, edzipTrack, protectionTrack];
 
 export function getTrack(id) {
   return TRACKS.find(t => t.id === id) || null;

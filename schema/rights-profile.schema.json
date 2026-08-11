@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shinnanchanguk/dorms-check/schema/rights-profile.schema.json",
+  "title": "dorms-check rights profile (rights-profile.json)",
+  "description": "protection 트랙의 권리 프로필. 이 앱의 권리관계와 허용 범위를 기록한다. 비공개 프롬프트 원문·민감 파일명은 넣지 않는다(자산은 이름·종류만).",
+  "type": "object",
+  "required": ["schemaVersion", "policyVersion", "rightsholder", "audience", "permissions"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "appId": { "type": "string", "description": "도름스 앱 id(선택)" },
+    "policyVersion": { "type": "string", "description": "이 프로필의 판(예: 2026-08-11.1)" },
+    "rightsholder": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["sole", "joint", "school_work_related", "third_party_included", "unconfirmed"], "description": "권리자 상태: 단독 / 공동 / 학교 업무 관련 / 제3자 자산 포함 / 미확인" },
+        "displayName": { "type": "string", "maxLength": 100, "description": "권리자 표시 이름(안내문에 쓰임)" },
+        "workForHireReview": { "enum": ["not_needed", "needed", "done", "unknown"], "description": "학교 업무 관련일 때 기관과의 권리 정리 검토 상태" }
+      }
+    },
+    "audience": { "enum": ["anyone", "dorms_members", "verified_teachers", "invited"], "description": "누구까지 쓰게 할지" },
+    "permissions": {
+      "type": "object",
+      "description": "행위별 허용 범위. 각 값: allowed(허용) | permission_required(허락 필요) | prohibited(금지)",
+      "required": ["useAsIs", "shareOriginalLink", "shareLockedAccess", "screenshotsWithAttribution", "modify", "redistribute", "commercialUse", "uploadPrivateAssetsToAI", "aiTrainingOrClone"],
+      "properties": {
+        "useAsIs": { "enum": ["allowed", "permission_required", "prohibited"], "description": "그대로 쓰기" },
+        "shareOriginalLink": { "enum": ["allowed", "permission_required", "prohibited"], "description": "원본 주소 공유" },
+        "shareLockedAccess": { "enum": ["allowed", "permission_required", "prohibited"], "description": "잠금 접근 공유(회원·교사 한정 등)" },
+        "screenshotsWithAttribution": { "enum": ["allowed", "permission_required", "prohibited"], "description": "출처 표기한 화면 캡처" },
+        "modify": { "enum": ["allowed", "permission_required", "prohibited"], "description": "고쳐 쓰기" },
+        "redistribute": { "enum": ["allowed", "permission_required", "prohibited"], "description": "재배포" },
+        "commercialUse": { "enum": ["allowed", "permission_required", "prohibited"], "description": "영리 이용" },
+        "uploadPrivateAssetsToAI": { "enum": ["allowed", "permission_required", "prohibited"], "description": "비공개 자산을 외부 AI 에 올리기" },
+        "aiTrainingOrClone": { "enum": ["allowed", "permission_required", "prohibited"], "description": "AI 학습·복제(클론) 이용" }
+      },
+      "additionalProperties": false
+    },
+    "attribution": {
+      "type": "object",
+      "properties": {
+        "required": { "type": "boolean", "description": "출처 표기 요구 여부" },
+        "text": { "type": "string", "maxLength": 200, "description": "표기 문구(예: 만든이 OOO)" }
+      }
+    },
+    "protectedAssets": {
+      "type": "array",
+      "description": "보호할 자산 목록. 원문·파일 경로가 아니라 이름과 종류만 적는다.",
+      "items": {
+        "type": "object",
+        "required": ["label", "kind"],
+        "properties": {
+          "label": { "type": "string", "maxLength": 80, "description": "자산 이름(예: 채점 지시문 v2). 원문 금지." },
+          "kind": { "enum": ["prompt", "logic", "data", "design", "content", "other"], "description": "자산 종류" },
+          "location": { "enum": ["server", "client", "mixed", "unknown"], "description": "현재 어디에 있는지" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "appSpecificAcceptance": { "type": "boolean", "description": "이 앱만의 추가 이용 조건 동의 화면이 필요한지" },
+    "customClauses": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 300 },
+      "description": "직접 적는 추가 조건(쉬운 말로)"
+    },
+    "legalReview": { "enum": ["not_done", "recommended", "done"], "description": "법률 자문 검토 상태(이 도구는 법률 자문이 아님)" }
+  }
+}
