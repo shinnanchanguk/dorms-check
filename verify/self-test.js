@@ -15,6 +15,7 @@ import { canonicalStringify, planSha256, checkPlanApproval } from '../core/prote
 import { redactPayload } from '../core/redact.js';
 import { buildPayload } from '../core/payload.js';
 import { PROTECTION_ITEMS } from '../catalog/protection.js';
+import { trackMenu, parseTrackSelection } from '../core/config.js';
 
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) { pass++; console.log('  v', name); } else { fail++; console.error('  x', name); } }
@@ -200,6 +201,19 @@ async function run() {
     const cfg2 = { ...cfg, tracks: ['security', 'protection'] };
     const v2 = buildPayload({ config: cfg2, results, trackResults: { security: scoreSecurity(results), protection: scoreProtection([]) }, bonus: [], toolVersion: 't' });
     ok('protection 포함 → schemaVersion 2 + tracks.protection', v2.schemaVersion === 2 && Boolean(v2.tracks.protection));
+  }
+
+  console.log('\n[13] 트랙 선택 파서 — 대화형 init 에서 고른 축(번호·이름)을 부분집합으로 정규화');
+  {
+    const menu = trackMenu();
+    ok('메뉴는 레지스트리 3축(순서 보존)', menu.length === 3 && menu[0].id === 'security' && menu[1].id === 'edzip' && menu[2].id === 'protection');
+    ok("번호 '1' → security 단일", JSON.stringify(parseTrackSelection('1', menu)) === JSON.stringify(['security']));
+    ok("번호 '1,3' → security+protection(부분집합)", JSON.stringify(parseTrackSelection('1,3', menu)) === JSON.stringify(['security', 'protection']));
+    ok("이름 'security,protection' → 동일", JSON.stringify(parseTrackSelection('security,protection', menu)) === JSON.stringify(['security', 'protection']));
+    ok('공백 구분·중복 제거', JSON.stringify(parseTrackSelection('2 2 security', menu)) === JSON.stringify(['edzip', 'security']));
+    ok('빈 입력 → 빈 배열(호출부가 기본값 처리)', parseTrackSelection('', menu).length === 0);
+    ok('전부 유효하지 않은 입력 → 빈 배열', parseTrackSelection('9,xyz', menu).length === 0);
+    ok('일부만 유효 → 유효한 것만(순서 보존)', JSON.stringify(parseTrackSelection('9,3,x,1', menu)) === JSON.stringify(['protection', 'security']));
   }
 
   console.log(`\n결과: ${pass} pass, ${fail} fail`);

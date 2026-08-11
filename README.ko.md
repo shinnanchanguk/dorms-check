@@ -31,6 +31,25 @@ npx -y github:shinnanchanguk/dorms-check status     # 남은 항목 + 고치는 
 npx -y github:shinnanchanguk/dorms-check submit      # 다 통과하면 증빙팩 + 신청 안내
 ```
 
+## 어떤 축을 점검할지 고르기
+세 축은 서로 독립입니다. 원하는 축만 골라 점검할 수 있고, 고른 축만 검사·판정합니다(나머지 축은 아예 돌지 않습니다).
+- **security**: 보안 점검(헤더·SSL·노출·CORS·RLS 실측). 도름스 "보안 검토" 마크만 원하면 이 축 하나면 됩니다.
+- **edzip**: 학운위·개인정보 준비(에듀집 필수기준 + 개인정보처리방침). 학교 심의에 낼 서류가 필요할 때만 고르세요.
+- **protection**: 내 앱 비법·저작권 보호(권리 확인·서버 분리·고지·증거). 내 아이디어를 지키고 싶을 때만 고르세요.
+
+`--track` 에 쉼표로 원하는 축만 넣으면 그 부분집합만 돌아갑니다.
+```bash
+# 보안 마크만 원하면 보안 축만(3번째 보호 축은 할 필요 없습니다)
+npx -y github:shinnanchanguk/dorms-check init --name "내 앱" --track security --confirm-ownership
+
+# 보안 + 보호만
+npx -y github:shinnanchanguk/dorms-check init --name "내 앱" --track security,protection --confirm-ownership
+
+# 세 축 전부
+npx -y github:shinnanchanguk/dorms-check init --name "내 앱" --track security,edzip,protection --confirm-ownership
+```
+사람이 터미널에서 `--track` 없이 `init` 을 실행하면, 세 축을 보여주고 원하는 것만 고르라고 물어봅니다(번호나 이름을 쉼표로, 예: `1,3` 또는 `security,protection`). AI 가 파이프로 자동 실행할 때(비대화형)는 묻지 않고 `--track` 값을, 없으면 기본값(security)을 그대로 씁니다.
+
 ## 무엇을 점검하나
 
 ### 축 1: 보안 점검 (security)

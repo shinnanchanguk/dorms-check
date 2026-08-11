@@ -22,6 +22,24 @@ export function unknownTracks(cfg) {
   return (cfg.tracks || []).filter(t => !known.has(t));
 }
 
+// 대화형 init 에서 보여줄 번호 매긴 트랙 메뉴(레지스트리 순서 = SSOT).
+export function trackMenu() {
+  return trackIds().map((id, i) => ({ n: i + 1, id }));
+}
+
+// 사용자가 고른 축(번호 또는 트랙 id, 쉼표/공백 구분)을 트랙 id 배열로 정규화한다.
+// 유효한 것만 남기고, 중복은 제거하며, 고른 순서를 보존한다. 유효한 게 없으면 빈 배열.
+// 순수 함수(입출력만) — 채점·판정 로직과 무관한 CLI 입력 파서다.
+export function parseTrackSelection(input, menu = trackMenu()) {
+  const tokens = String(input || '').split(/[\s,]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+  const ids = [];
+  for (const tk of tokens) {
+    const hit = menu.find(m => String(m.n) === tk || m.id === tk);
+    if (hit && !ids.includes(hit.id)) ids.push(hit.id);
+  }
+  return ids;
+}
+
 export function loadConfig(root) {
   const p = path.join(root, 'dorms-check.config.json');
   const fileExists = exists(p);

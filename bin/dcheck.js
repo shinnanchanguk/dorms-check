@@ -2,11 +2,12 @@
 // dorms-check CLI — 교사의 AI(코치)가 부르는 오케스트레이터.
 // 이 도구는 앱을 고치지도, 인증을 발급하지도 않는다. 평가·안내·증빙만.
 import path from 'node:path';
+import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { color, log, exists, readJsonSafe, writeText, ensureDir } from '../core/util.js';
 import { detectStack } from '../core/detect.js';
-import { loadConfig, writeConfig, defaultConfig, unknownTracks } from '../core/config.js';
+import { loadConfig, writeConfig, defaultConfig, unknownTracks, trackMenu, parseTrackSelection } from '../core/config.js';
 import { runExternalScan } from '../checks/external/index.js';
 import { runRuntimeProbe } from '../checks/runtime/index.js';
 import { runStaticScan } from '../checks/static/index.js';
@@ -44,6 +45,7 @@ function help() {
 
   ${color.bold('dcheck detect')}                 스택 감지(Next.js/Vite/정적, Supabase 여부, 빌드 산출물)
   ${color.bold('dcheck init')}  ${color.dim('--name --url --track security,edzip,protection --stack')}   설정 생성
+  ${color.dim('  터미널에서 --track 없이 실행하면 세 축 중 원하는 것만 골라 물어봐요(보안 마크만 원하면 보안만).')}
   ${color.bold('dcheck scan')}  ${color.dim('--url <URL> [--code-only]')}   결정적 스캔(외부 표면+RLS 실측+정적+보호 상태) + 리포트
   ${color.bold('dcheck judge --in <answers.json>')}   교사 AI가 판단한 ai-review 항목 병합(증거 필수)
   ${color.bold('dcheck interview')} ${color.dim('[--answers <file>]')}   권리·허용범위 설문 문항 출력 / 답으로 권리 프로필 생성
@@ -159,7 +161,41 @@ async function runScan() {
   honesty();
 }
 
-function runInit() {
+// 사람이 터미널에서 직접 실행할 때(TTY) 세 축 중 원하는 것만 고르게 물어본다.
+// AI 가 파이프로 실행할 때(비대화형)는 호출하지 않는다 — 그때는 --track 플래그/기본값을 쓴다.
+const AXIS_LABELS = {
+  security: '보안',
+  edzip: '학운위·개인정보',
+  protection: '내 앱 비법·저작권 보호',
+};
+async function promptTracks() {
+  const menu = trackMenu();
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = q => new Promise(res => rl.question(q, a => res(a)));
+  try {
+    log.title('어떤 축을 점검할까요? (쉼표로 여러 개)');
+    for (const m of menu) log.plain(`  ${m.n}) ${AXIS_LABELS[m.id] || m.id}`);
+    log.plain(color.dim('  보안 마크만 원하면 1 · 보안과 보호면 1,3 · 그냥 Enter 면 보안(1)만.'));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const ans = (await ask('선택> ')).trim();
+      if (!ans) return ['security'];
+      const ids = parseTrackSelection(ans, menu);
+      if (ids.length) {
+        const chosen = new Set(ids);
+        const tokens = ans.split(/[\s,]+/).filter(Boolean).length;
+        if (tokens > chosen.size) log.warn('알아듣지 못한 항목은 넘겼어요.');
+        return ids;
+      }
+      log.warn('숫자(1~3) 또는 축 이름을 쉼표로 골라주세요.');
+    }
+    log.warn('입력을 알아듣지 못해 보안(security)만 점검합니다.');
+    return ['security'];
+  } finally {
+    rl.close();
+  }
+}
+
+async function runInit() {
   const existing = loadConfig(root);
   if (existing._exists && !flag('force')) { log.warn('dorms-check.config.json 이미 존재(덮어쓰려면 --force).'); return; }
   const d = detectStack(root);
@@ -167,8 +203,18 @@ function runInit() {
   cfg.app.name = opt('name', cfg.app.name);
   cfg.app.url = opt('url', cfg.app.url);
   cfg.app.stack = opt('stack', d.framework);
-  const track = opt('track', 'security');
-  cfg.tracks = track.split(',').map(s => s.trim()).filter(Boolean);
+  // 트랙 선택 우선순위: ① --track 플래그가 있으면 그대로(비대화형 회귀 없음)
+  //   ② 플래그 없고 사람이 터미널에서 실행 중(TTY)이면 물어본다
+  //   ③ 플래그 없고 비대화형(파이프)이면 기존 기본값(security) 유지
+  let tracks;
+  if (args.includes('--track')) {
+    tracks = opt('track', 'security').split(',').map(s => s.trim()).filter(Boolean);
+  } else if (process.stdin.isTTY) {
+    tracks = await promptTracks();
+  } else {
+    tracks = defaultConfig().tracks; // ['security'] — 기존 비대화형 동작 그대로
+  }
+  cfg.tracks = tracks.length ? tracks : ['security'];
   cfg.teacher.dormsHandle = opt('handle', '');
   if (flag('confirm-ownership')) cfg.ownershipConfirmed = true;
   const p = writeConfig(root, cfg);
@@ -430,7 +476,7 @@ async function runProtectCmd() {
 async function main() {
   switch (cmd) {
     case 'detect': printDetect(); break;
-    case 'init': runInit(); break;
+    case 'init': await runInit(); break;
     case 'scan': await runScan(); break;
     case 'judge': runJudge(); break;
     case 'interview': runInterview(); break;

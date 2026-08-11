@@ -31,6 +31,25 @@ npx -y github:shinnanchanguk/dorms-check status     # remaining items + how to f
 npx -y github:shinnanchanguk/dorms-check submit      # once everything passes: evidence pack + how to apply
 ```
 
+## Choosing which axes to check
+The three tracks are independent. You can check only the ones you want, and only the chosen tracks are inspected and judged (the rest do not run at all).
+- **security**: security review (headers, SSL, exposure, CORS, live RLS). If you only want the DoRms "Security review" mark, this one track is enough.
+- **edzip**: school committee and privacy readiness (EDZIP essential criteria + privacy policy). Pick it only when you need documents for school review.
+- **protection**: protecting your app's secrets and copyright (rights check, server separation, notices, evidence). Pick it only when you want to protect your idea.
+
+Pass a comma-separated subset to `--track` and only that subset runs.
+```bash
+# Only want the security mark? Just the security track (no need for the 3rd protection track)
+npx -y github:shinnanchanguk/dorms-check init --name "My App" --track security --confirm-ownership
+
+# Security + protection only
+npx -y github:shinnanchanguk/dorms-check init --name "My App" --track security,protection --confirm-ownership
+
+# All three
+npx -y github:shinnanchanguk/dorms-check init --name "My App" --track security,edzip,protection --confirm-ownership
+```
+When a person runs `init` in a terminal without `--track`, it shows the three axes and asks which to check (numbers or names, comma-separated, e.g. `1,3` or `security,protection`). When an AI runs it non-interactively (piped), it does not prompt and uses the `--track` value, or the default (security) if none is given.
+
 ## What it checks
 
 ### Track 1: Security review (`security`)
