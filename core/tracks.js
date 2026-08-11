@@ -285,10 +285,12 @@ export function scoreProtection(results) {
 
   const rights = RIGHTS_IDS.every(ok) ? 'confirmed' : 'unresolved';
 
+  // 경계 판정은 보수적으로: 핵심 로직의 서버 분리(boundary.server)가 확인돼야 '분리'로 본다.
+  // 서버 분리가 미확인이면 클라이언트 전달분은 공개로 가정한다(공개 자산).
   const serverOk = ok('protection.boundary.server');
   let boundary;
   if (serverOk && BOUNDARY_LEAK_IDS.every(ok)) boundary = 'server_separated';
-  else if (serverOk || BOUNDARY_LEAK_IDS.some(id => st.get(id) === 'pass')) boundary = 'partially_separated';
+  else if (serverOk) boundary = 'partially_separated';
   else boundary = 'public_asset';
 
   const release = RELEASE_IDS.every(ok) ? 'copy_cost_raised' : 'not_hardened';
