@@ -45,12 +45,20 @@ brew install semgrep gitleaks   # macOS 예시
 
 ## 명령어 요약
 
+점검은 세 축으로 나뉘어요: `security`(보안 점검) · `edzip`(학운위·개인정보 준비) · `protection`(내 앱 비법·저작권 보호).
+보안·학운위는 검사만 하고 파일을 바꾸지 않아요. 보호 축의 적용 단계만, 계획을 보고 동의했을 때(계획 해시 + `--confirm-apply`) 파일을 바꿔요. 자동 배포는 하지 않아요.
+
 | 명령 | 하는 일 |
 | --- | --- |
-| `dcheck detect` | 스택을 감지해요 (Next.js·Vite·정적, Supabase 여부) |
-| `dcheck init --name --url --track security,edzip --confirm-ownership` | 설정을 만들어요 (본인 앱만 검사한다는 동의 포함) |
-| `dcheck scan --url <주소> [--code-only]` | 결정적 검사를 돌려요 (외부 표면 + RLS 실측 + 코드 정적 검사) |
+| `dcheck detect` | 스택을 감지해요 (Next.js·Vite·정적, Supabase 여부, 빌드 산출물) |
+| `dcheck init --name --url --track security,edzip,protection --confirm-ownership` | 설정을 만들어요 (본인 앱만 검사한다는 동의 포함) |
+| `dcheck scan --url <주소> [--code-only]` | 결정적 검사를 돌려요 (외부 표면 + RLS 실측 + 코드 정적 검사 + 보호 상태) |
 | `dcheck judge --in <answers.json>` | AI가 판단한 항목을 증거와 함께 기록해요 (증거 없는 통과는 거부) |
+| `dcheck interview [--answers <파일>]` | 권리·허용범위 설문 문항을 보여주고, 답으로 권리 프로필을 만들어요 |
+| `dcheck protect plan` | 무엇을 바꿀지 계획과 계획 해시를 만들어요 (아직 파일 안 바꿈) |
+| `dcheck protect apply --plan-sha256 <값> --confirm-apply` | 동의한 계획대로만 적용해요 (적용 전 백업, 실패 시 복원) |
+| `dcheck protect restore` | 마지막 백업으로 되돌려요 |
+| `dcheck verify` | 적용 전후 산출물을 비교해 앱이 깨지지 않았는지 확인해요 |
 | `dcheck status` | 아직 못 고친 항목과 고치는 법을 보여줘요 |
 | `dcheck report` | 전체 리포트를 출력해요 (`.dorms-check/REPORT.md`) |
 | `dcheck submit` | 다 통과하면 증빙팩을 만들고 마크 신청 방법을 안내해요 |
