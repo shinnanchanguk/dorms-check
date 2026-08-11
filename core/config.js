@@ -2,15 +2,24 @@
 import path from 'node:path';
 import { exists, readJsonSafe, writeText } from './util.js';
 
+// 유효한 트랙 목록은 레지스트리(core/tracks.js)가 SSOT.
+import { trackIds } from './tracks.js';
+
 export function defaultConfig() {
   return {
     app: { name: '', url: '', stack: '' },
-    tracks: ['security'], // 'security' | 'edzip'
+    tracks: ['security'], // 레지스트리 참조: 'security' | 'edzip' | 'protection'
     edzipCase: null,       // 'A' | 'B' | 'C' | 'D'
     teacher: { dormsHandle: '' },
     // 본인이 만들고 운영하는 앱만 스캔한다는 동의(비파괴 스캔 윤리).
     ownershipConfirmed: false,
   };
+}
+
+// config.tracks 중 레지스트리에 없는 트랙을 반환(오타 경고용).
+export function unknownTracks(cfg) {
+  const known = new Set(trackIds());
+  return (cfg.tracks || []).filter(t => !known.has(t));
 }
 
 export function loadConfig(root) {

@@ -6,15 +6,14 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { color, log, exists, readJsonSafe, writeText, ensureDir } from '../core/util.js';
 import { detectStack } from '../core/detect.js';
-import { loadConfig, writeConfig, defaultConfig } from '../core/config.js';
+import { loadConfig, writeConfig, defaultConfig, unknownTracks } from '../core/config.js';
 import { runExternalScan } from '../checks/external/index.js';
 import { runRuntimeProbe } from '../checks/runtime/index.js';
 import { runStaticScan } from '../checks/static/index.js';
-import { scoreSecurity, scoreEdzip } from '../core/score.js';
 import { renderReportMd, printSummary } from '../core/report.js';
 import { buildPayload } from '../core/payload.js';
 import { loadState, saveState, recordRound } from '../core/session.js';
-import { catalogItem, EDZIP_ITEMS, EDZIP_CASE_QUESTIONS } from '../catalog/index.js';
+import { catalogItem, TRACKS } from '../core/tracks.js';
 
 const root = process.cwd();
 const [, , cmd, ...args] = process.argv;
@@ -96,30 +95,30 @@ async function runScan() {
     if (existing) { existing.status = v.status; existing.observed = v.evidence || existing.observed; existing.evidence = { ...existing.evidence, aiJudgment: v }; }
     else results.push({ id, status: v.status, observed: v.evidence || '(AI 판단)', evidence: { aiJudgment: v } });
   }
-  // edzip 항목 seed(판단 안 된 건 pending)
-  if (tracks.includes('edzip')) {
-    for (const it of EDZIP_ITEMS) {
-      if (!results.find(r => r.id === it.id)) {
-        const rv = review[it.id];
-        results.push({ id: it.id, status: rv ? rv.status : 'pending', observed: rv ? rv.evidence : '아직 판단 안 됨(judge 필요)', evidence: rv ? { aiJudgment: rv } : {} });
-      }
-    }
+  // 트랙별 항목 보충(레지스트리 경유): edzip pending seed·protection 결정적 검사 등
+  for (const t of TRACKS) {
+    if (!tracks.includes(t.id) || !t.collect) continue;
+    results.push(...t.collect({ results, review, config: cfg, root }));
   }
 
-  const security = tracks.includes('security') ? scoreSecurity(results, bonus) : null;
-  const edzip = tracks.includes('edzip') ? scoreEdzip(results) : null;
+  // 트랙별 채점(레지스트리 경유)
+  const trackResults = {};
+  for (const t of TRACKS) {
+    if (!tracks.includes(t.id)) continue;
+    trackResults[t.id] = t.score(results, { bonus, config: cfg, root });
+  }
 
   // 상태 저장 + 리포트
   const state = loadState(root);
-  recordRound(state, { securityResult: security, edzipResult: edzip, results });
+  recordRound(state, { trackResults, results });
   saveState(root, state);
 
-  const md = renderReportMd({ config: { ...cfg, app: { ...cfg.app, stack } }, results, security, edzip, bonus });
+  const md = renderReportMd({ config: { ...cfg, app: { ...cfg.app, stack } }, results, trackResults, bonus });
   ensureDir(STATE_DIR);
   writeText(path.join(STATE_DIR, 'REPORT.md'), md);
   writeText(path.join(STATE_DIR, 'scan.json'), JSON.stringify({ at: new Date().toISOString(), url, results, raw }, null, 2));
 
-  printSummary({ security, edzip, results, config: { ...cfg, app: { ...cfg.app, stack } } });
+  printSummary({ trackResults, results, config: { ...cfg, app: { ...cfg.app, stack } } });
 
   // ai-review 해야 할 항목 안내(교사 AI에게)
   const pending = results.filter(r => r.status === 'pending' || (r.status === 'info' && String(r.id).startsWith('code.')));
@@ -150,9 +149,10 @@ function runInit() {
   const p = writeConfig(root, cfg);
   log.ok(`설정 생성: ${path.relative(root, p) || 'dorms-check.config.json'}`);
   log.plain('  app.url(배포 주소)·tracks·ownershipConfirmed 를 확인해주세요.');
-  if (cfg.tracks.includes('edzip')) {
-    log.title('학운위(에듀집) 케이스 진단 — 아래 3문항 답을 config.edzipCase 에 A/B/C/D 로 기록');
-    for (const q of EDZIP_CASE_QUESTIONS) log.plain(`  - ${q.id}: ${q.ask}`);
+  const unknown = unknownTracks(cfg);
+  if (unknown.length) log.warn(`알 수 없는 트랙: ${unknown.join(', ')} (사용 가능: ${TRACKS.map(t => t.id).join(', ')})`);
+  for (const t of TRACKS) {
+    if (cfg.tracks.includes(t.id) && t.initNotes) t.initNotes(cfg);
   }
 }
 
@@ -209,9 +209,12 @@ function runSubmit() {
   const stack = cfg.app?.stack || '';
   const results = scan.results || [];
   const bonus = [];
-  const security = cfg.tracks?.includes('security') ? scoreSecurity(results, bonus) : null;
-  const edzip = cfg.tracks?.includes('edzip') ? scoreEdzip(results) : null;
-  const payload = buildPayload({ config: { ...cfg, app: { ...cfg.app, stack } }, results, security, edzip, bonus, toolVersion: PKG.version });
+  const trackResults = {};
+  for (const t of TRACKS) {
+    if (!cfg.tracks?.includes(t.id)) continue;
+    trackResults[t.id] = t.score(results, { bonus, config: cfg, root });
+  }
+  const payload = buildPayload({ config: { ...cfg, app: { ...cfg.app, stack } }, results, trackResults, bonus, toolVersion: PKG.version });
 
   const outDir = path.resolve(root, opt('out', '.dorms-check/evidence'));
   ensureDir(outDir);
@@ -219,7 +222,7 @@ function runSubmit() {
   writeText(path.join(outDir, 'REPORT.md'), readFileSync(path.join(STATE_DIR, 'REPORT.md'), 'utf8'));
   log.ok(`증빙팩 생성: ${path.relative(root, outDir)}/ (report.json · REPORT.md)`);
 
-  const ready = (security ? security.eligible : true) && (edzip ? edzip.eligible : true);
+  const ready = TRACKS.every(t => !trackResults[t.id] || t.passed(trackResults[t.id]));
   log.title('도름스 마크 신청');
   if (!ready) {
     log.warn('아직 통과하지 못한 항목이 있어요. status 로 남은 항목을 고친 뒤 다시 scan → submit 하세요.');
@@ -228,13 +231,8 @@ function runSubmit() {
   log.plain('  2) 내가 만든 앱의 앱 공유 페이지에서 "보안 검토 마크 신청"을 누르세요.');
   log.plain('  3) 도름스 서버가 이 앱의 주소를 스스로 다시 검사합니다(외부 표면 + RLS 실측).');
   log.plain(color.dim('     서버 재검사에서 통과하지 못하면 마크가 발급되지 않습니다. 이 도구의 통과는 신청 준비일 뿐입니다.'));
-  if (cfg.tracks?.includes('edzip')) {
-    log.title('학운위 마크: 방침을 앱 안에서만 보여주는 앱이라면');
-    log.plain('  도름스는 앱 주소를 바깥에서 열어 개인정보처리방침 글자를 읽습니다. 방침을 별도 주소 없이');
-    log.plain('  앱 안 팝업으로만 띄우면(리액트·Vite 같은 한 장짜리 앱) 바깥에서는 빈 화면이라 못 읽을 수 있어요.');
-    log.plain('  "개인정보처리방침 필수 항목이 확인되지 않는다"가 뜨면 둘 중 하나로 푸세요.');
-    log.plain(`  · 방침을 /privacy 같은 주소로도 열리게 두기(권장)`);
-    log.plain(`  · 방금 만든 ${path.relative(root, path.join(outDir, 'report.json'))} 를 신청 화면의 "dorms-check 결과 올리기"에 올리기`);
+  for (const t of TRACKS) {
+    if (cfg.tracks?.includes(t.id) && t.submitNotes) t.submitNotes({ config: cfg, root, outDir });
   }
   honesty();
 }

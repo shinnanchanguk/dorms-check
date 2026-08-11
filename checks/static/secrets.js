@@ -5,7 +5,8 @@ import { walk, readTextSafe } from '../../core/util.js';
 const CODE_EXT = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.env', '.json', '.yml', '.yaml', '.py', '.rb', '.go'];
 
 // 대표 시크릿 패턴(오탐 줄이려 접두어 고정형 위주).
-const PATTERNS = [
+// core/redact.js(제출 페이로드 마스킹)가 같은 패턴을 재사용한다(SSOT).
+export const SECRET_PATTERNS = [
   { name: 'OpenAI/유사 sk- 키', re: /\bsk-[A-Za-z0-9]{20,}\b/ },
   { name: 'AWS Access Key', re: /\bAKIA[0-9A-Z]{16}\b/ },
   { name: 'Supabase service_role JWT', re: /service_role/ , extra: /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}/ },
@@ -28,7 +29,7 @@ export function checkSecrets(root) {
     const lines = text.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      for (const p of PATTERNS) {
+      for (const p of SECRET_PATTERNS) {
         if (p.re.test(line) && (!p.extra || p.extra.test(line) || p.extra.test(text))) {
           // 클라 노출 파일(.env는 서버측, NEXT_PUBLIC_ 접두 노출은 client-bundle 이 별도로 봄)
           hits.push({ file: path.relative(root, f), line: i + 1, kind: p.name });
