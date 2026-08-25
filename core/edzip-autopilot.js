@@ -14,6 +14,10 @@ const PRIVATE_REL = path.join('.dorms-check', 'private', 'edzip');
 const TEXT_EXTS = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.json', '.md', '.html', '.css', '.vue', '.svelte'];
 const MAX_READ = 256_000;
 const PII_ANSWER_KEYS = new Set(['name', 'email', 'phone', 'school', 'address', 'signature', 'seal']);
+const EDZIP_HOSTS = new Set(['edzip.kr', 'www.edzip.kr']);
+const EDZIP_ID_RE = /^[a-f0-9]{24}$/i;
+const EDZIP_RESPONSE_LIMIT = 2_000_000;
+const DOCUMENT_ATTRIBUTION = 'Team DoRm · 교사 홍창욱 제작 · https://dorms.school';
 
 export const EDZIP_PREPARE_QUESTIONS = [
   { id: 'studentData', ask: '학생의 이름·답안·작성물·학습 기록 등을 처리하나요?', values: ['yes', 'no', 'unknown'] },
@@ -72,21 +76,23 @@ export function buildEdzipPlan(root) {
   const inspection = inspectProject(root);
   const cfg = readJsonSafe(path.join(root, 'dorms-check.config.json')) || {};
   const privacySignal = inspection.evidence.find(x => x.signal === 'privacy-page');
+  const pkg = readJsonSafe(path.join(root, 'package.json')) || {};
   const plan = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     createdAt: new Date().toISOString(),
     root: '.',
     app: {
       name: cfg.app?.name || path.basename(root),
       url: cfg.app?.url || '',
       stack: cfg.app?.stack || inspection.detected.framework,
+      description: cfg.app?.description || cfg.app?.tagline || pkg.description || '',
     },
     inspection,
     questions: EDZIP_PREPARE_QUESTIONS,
     proposedChanges: [
       { path: '.gitignore', action: 'append-if-missing', detail: '.dorms-check/private/ 생성물 Git 추적 차단' },
       { path: privacySignal?.files?.[0] || 'docs/privacy-policy.md', action: privacySignal ? 'review-and-supplement-by-agent' : 'create-by-agent', detail: '실제 데이터 흐름에 맞는 공개 개인정보처리방침' },
-      { path: `${PRIVATE_REL}/YYYY-MM-DD/`, action: 'generate', detail: 'HWPX·PDF·Markdown 서류 패과 공식 원본·출처 복사본' },
+      { path: `${PRIVATE_REL}/YYYY-MM-DD/`, action: 'generate', detail: '에듀집 제출용 HWPX·PDF·Markdown 서류와 공식 원본·출처 복사본' },
     ],
     guardrails: [
       '개인정보·연락처·학교·서명·인영은 수집하지 않고 문서 빈칸으로 남긴다.',
@@ -148,6 +154,52 @@ function detectedServices(plan) {
   if (ids.has('anthropic')) services.push('Anthropic(외부 AI)');
   if (ids.has('vercel')) services.push('Vercel(웹 호스팅·접속 로그)');
   return services;
+}
+
+export function parseEdzipApprovalUrl(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) return { ok: false, error: '에듀집 확인 완료 주소를 입력하세요.' };
+  let url;
+  try { url = new URL(raw.trim()); } catch { return { ok: false, error: '에듀집 주소 형식을 확인하세요.' }; }
+  if (url.protocol !== 'https:' || !EDZIP_HOSTS.has(url.hostname.toLowerCase()) || url.username || url.password || url.search || url.hash) {
+    return { ok: false, error: 'https://edzip.kr 로 시작하는 제품 등록 주소만 사용할 수 있습니다.' };
+  }
+  const match = url.pathname.match(/^\/(?:utilization\/)?learning-sw\/([a-f0-9]{24})\/?$/i);
+  if (!match || !EDZIP_ID_RE.test(match[1])) return { ok: false, error: '에듀집 학습지원 소프트웨어 제품 주소를 확인하세요.' };
+  const id = match[1].toLowerCase();
+  return { ok: true, id, normalizedUrl: `https://edzip.kr/learning-sw/${id}` };
+}
+
+function comparableName(value) {
+  return String(value ?? '').normalize('NFKC').toLocaleLowerCase('ko-KR').replace(/[^0-9a-z가-힣]/g, '');
+}
+
+export function safeEdzipApproval(payload, appName, normalizedUrl, id) {
+  const data = payload?.data;
+  if (!data || typeof data !== 'object') return { ok: false, error: '에듀집 등록 정보를 확인하지 못했습니다.' };
+  const productName = typeof data.productName === 'string' ? data.productName.trim() : '';
+  const displayStatus = typeof data.displayStatus === 'string' ? data.displayStatus : '';
+  const confirmStatus = typeof data.confirmStatus === 'string' ? data.confirmStatus : '';
+  if (displayStatus !== 'enable' || confirmStatus !== 'confirmed') return { ok: false, error: '에듀집에서 공개와 확인이 모두 완료된 뒤 실행하세요.' };
+  if (!productName || comparableName(productName) !== comparableName(appName)) return { ok: false, error: `에듀집 제품명(${productName || '확인 불가'})과 프로젝트 앱 이름이 같아야 합니다.` };
+  return { ok: true, id, normalizedUrl, productName, displayStatus, confirmStatus, verifiedAt: new Date().toISOString() };
+}
+
+export async function verifyEdzipApproval({ url, appName, fetchImpl = fetch }) {
+  const parsed = parseEdzipApprovalUrl(url);
+  if (!parsed.ok) return parsed;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetchImpl(`https://api.edzip.kr/self-inspection/${parsed.id}`, {
+      method: 'GET', headers: { accept: 'application/json', 'user-agent': 'dorms-check/edzip-council' }, redirect: 'error', signal: controller.signal,
+    });
+    if (!response.ok) return { ok: false, error: '에듀집 등록 정보를 찾지 못했습니다.' };
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > EDZIP_RESPONSE_LIMIT) return { ok: false, error: '에듀집 응답이 너무 커서 확인을 중단했습니다.' };
+    return safeEdzipApproval(JSON.parse(text), appName, parsed.normalizedUrl, parsed.id);
+  } catch (error) {
+    return { ok: false, error: error?.name === 'AbortError' ? '에듀집 확인 시간이 초과되었습니다.' : '에듀집에 연결하지 못했습니다.' };
+  } finally { clearTimeout(timer); }
 }
 
 function privacyMarkdown(plan, answers) {
@@ -251,8 +303,8 @@ ${EDZIP_ITEMS.map(item => `| ${item.criterion} | ${item.title} | [충족/미충�
 `;
 }
 
-function committeeMarkdown(plan, scope) {
-  return `# ${plan.app.name} 학교운영위원회 심의 제공자 자료
+function providerBriefMarkdown(plan, scope) {
+  return `# ${plan.app.name} 에듀집 등록 제품 설명자료
 
 ## 1. 서비스 개요
 
@@ -261,9 +313,9 @@ function committeeMarkdown(plan, scope) {
 - 제공자: [제공자명을 입력하세요]
 - 적용 판정: ${scope.reason}
 
-## 2. 서비스 기능과 수업 활용
+## 2. 주요 기능과 활용 목적
 
-[작성자가 수업 목적·대상 학년·교과·사용 방법을 입력하세요]
+${plan.app.description || '[프로젝트 설명을 입력하세요]'}
 
 ## 3. 개인정보 처리와 안전조치
 
@@ -277,9 +329,9 @@ ${EDZIP_LEGAL_BASIS.map(x => `- ${x.law}: ${x.note} ${x.link}`).join('\n')}
 
 1. 학습지원 소프트웨어 필수기준 자가점검표
 2. 개인정보 처리방침
-3. 에듀집 확인 페이지 [등록 후 URL을 입력하세요]
+3. 에듀집 확인 페이지 [에듀집 확인 완료 뒤 주소를 입력하세요]
 
-> 이 문서는 공급자가 학교에 제공할 수 있는 초안입니다. 학교 내부 안건 상정·의견서·의결서는 학교가 작성합니다.
+> 이 문서는 에듀집 제출과 학교 전달에 사용할 제품 설명 초안입니다. 에듀집 확인 완료 뒤 \`dcheck edzip council\`을 실행하면 학교 내부 기안문과 학운위 안건 초안을 별도로 만듭니다.
 `;
 }
 
@@ -311,7 +363,7 @@ ${EDZIP_CONTACTS.map(c => `- ${c.topic}: ${c.organization}, ${(c.phones || []).j
 | 수집 항목 | 실제 수집 항목을 입력하세요 | 실제 코드와 대조해 입력 |
 | 아동 동의 | 법정대리인 동의를 받고 확인하는 실제 절차 | 해당하면 실제 절차 입력 |
 | 보호책임자 | 작성자가 성명을 입력하세요 | 성명·소속·연락처 입력 |
-| 서명·인영 | 등록 후 URL을 입력하세요 | 서명·인영 후 에듀집 URL 입력 |
+| 에듀집 주소 | 에듀집 확인 완료 뒤 주소를 입력하세요 | 확인 완료 뒤 공식 제품 주소 입력 |
 
 ## 공식 근거 원문
 
@@ -362,14 +414,182 @@ function uniqueOutputDir(root) {
 }
 
 async function writeDocSet(outDir, stem, title, markdown) {
+  const marked = `${markdown.trimEnd()}\n\n---\n\n${DOCUMENT_ATTRIBUTION}\n`;
   const mdFile = path.join(outDir, `${stem}.md`);
   const hwpxFile = path.join(outDir, `${stem}.hwpx`);
   const pdfFile = path.join(outDir, `${stem}.pdf`);
-  writeText(mdFile, markdown);
-  const bytes = await markdownToHwpx(markdown, { title, creator: 'dorms-check' });
+  writeText(mdFile, marked);
+  const bytes = await markdownToHwpx(marked, { title, creator: 'Team DoRm · 교사 홍창욱' });
   fs.writeFileSync(hwpxFile, Buffer.from(bytes), { flag: 'wx' });
-  await writePdf(pdfFile, title, markdown);
+  await writePdf(pdfFile, title, marked);
   return [mdFile, hwpxFile, pdfFile];
+}
+
+function fillTemplate(template, values) {
+  let result = template;
+  for (const [key, value] of Object.entries(values)) result = result.replaceAll(`{{${key}}}`, String(value));
+  const unresolved = result.match(/{{[A-Z_]+}}/g);
+  if (unresolved) throw new Error(`기안문 양식에 채우지 못한 항목이 있습니다: ${[...new Set(unresolved)].join(', ')}`);
+  return result;
+}
+
+function projectEvidenceMarkdown(plan) {
+  const rows = plan.inspection?.evidence || [];
+  if (!rows.length) return '- 자동 탐지된 근거 파일이 없습니다. 제출 전에 프로젝트 기능과 데이터 흐름을 직접 확인하세요.';
+  return rows.map(row => `- ${row.signal}: ${(row.files || []).slice(0, 6).join(', ')}`).join('\n');
+}
+
+function internalApprovalMarkdown(plan, approval) {
+  const template = readTextSafe(packageAsset('templates', 'school-internal-approval.md'));
+  if (!template) throw new Error('내부 기안문 한글 양식을 찾지 못했습니다.');
+  const privacyUrl = plan.app.url ? `${plan.app.url.replace(/\/$/, '')}/privacy` : '[개인정보처리방침 주소를 입력하세요]';
+  return fillTemplate(template, {
+    APP_NAME: plan.app.name,
+    APP_URL: plan.app.url || '[소프트웨어 접속 주소를 입력하세요]',
+    EDZIP_URL: approval.normalizedUrl,
+    PRIVACY_URL: privacyUrl,
+    APP_DESCRIPTION: plan.app.description || '[소프트웨어의 목적과 주요 기능을 입력하세요]',
+    APP_STACK: plan.app.stack || '[기술 구성을 입력하세요]',
+    DETECTED_SERVICES: detectedServices(plan).join(', ') || '자동 탐지되지 않음',
+    PROJECT_EVIDENCE: projectEvidenceMarkdown(plan),
+    LEGAL_BASIS: EDZIP_LEGAL_BASIS.map(x => `- ${x.law}: ${x.note} ${x.link}`).join('\n'),
+  });
+}
+
+function councilAgendaMarkdown(plan, approval) {
+  return `# 학교운영위원회 심의 안건문 초안
+
+- 안건명: 학습지원 소프트웨어 '${plan.app.name}' 선정에 관한 사항
+- 구분: 심의
+- 작성일: [학교에서 작성일을 입력하세요]
+- 회의명·회차: [학교에서 회의명과 회차를 입력하세요]
+
+## 1. 제안 사유
+
+${plan.app.description || `${plan.app.name}을 교육 자료로 선정해 수업과 학교 교육과정 운영에 활용하고자 합니다.`}
+
+## 2. 주요 내용
+
+- 소프트웨어명: ${plan.app.name}
+- 접속 주소: ${plan.app.url || '[소프트웨어 접속 주소를 입력하세요]'}
+- 기술 구성: ${plan.app.stack || '[기술 구성을 입력하세요]'}
+- 코드에서 확인한 외부 서비스: ${detectedServices(plan).join(', ') || '자동 탐지되지 않음'}
+
+## 3. 개인정보 보호 필수기준 확인
+
+- 에듀집 확인 완료 주소: ${approval.normalizedUrl}
+- 개인정보처리방침: ${plan.app.url ? `${plan.app.url.replace(/\/$/, '')}/privacy` : '[개인정보처리방침 주소를 입력하세요]'}
+- 에듀집 제출에 사용한 개인정보 처리방침과 필수기준 자가점검표를 붙임으로 제출합니다.
+
+## 4. 법적 근거
+
+${EDZIP_LEGAL_BASIS.map(x => `- ${x.law}: ${x.note} ${x.link}`).join('\n')}
+
+## 5. 심의 요청
+
+위 학습지원 소프트웨어의 교육 자료 선정과 운영에 대한 심의를 요청합니다.
+
+## 붙임
+
+1. 학습지원 소프트웨어 필수기준 자가점검표 1부.
+2. 개인정보 처리방침 1부.
+3. 에듀집 제품 설명자료 1부.
+4. 에듀집 확인 완료 주소 출력물 또는 링크 1부.  끝.
+
+> 실제 심의와 최종 선정은 학교가 합니다. 비용·대상 학년·활용 교과·운영 기간처럼 학교별 내용은 제출 전에 확인해 주세요.
+`;
+}
+
+function schoolSubmissionMarkdown(plan, approval, sourceDir) {
+  return `# 에듀집 확인 완료 뒤 학교 제출 안내
+
+## 준비 순서
+
+1. 에듀집 제출 때 사용한 \`01-privacy-policy.hwpx\`, \`02-required-checklist.hwpx\`, \`03-edzip-provider-brief.hwpx\`를 그대로 준비합니다.
+2. 에듀집 확인 완료 주소 ${approval.normalizedUrl}를 링크 또는 출력물로 붙입니다.
+3. \`05-internal-approval-draft.hwpx\`의 학교명·수신자·결재 경로·기안자·작성일을 학교 양식에 맞게 채웁니다.
+4. 내부 결재를 받아 \`06-council-agenda-draft.hwpx\`를 학교운영위원회 안건으로 제출합니다.
+5. 심의 결과를 반영해 학교장이 최종 선정·결재합니다.
+
+## 이 프로젝트에서 가져온 자료
+
+- 에듀집 준비 자료 폴더: ${path.basename(sourceDir)}
+- 제품명: ${plan.app.name}
+- 앱 주소: ${plan.app.url || '[앱 주소를 입력하세요]'}
+- 에듀집 확인 완료 주소: ${approval.normalizedUrl}
+
+## Ctrl+F로 직접 채울 곳
+
+| 무엇을 | 검색어 | 할 일 |
+|---|---|---|
+| 수신자 | 학교에서 수신자를 입력하세요 | 학교 결재 양식에 맞게 입력 |
+| 결재 경로 | 학교에서 결재 경로를 입력하세요 | 교감·정보부장·개인정보 담당 등 학교 결재선 확인 |
+| 기안자 | 기안자가 성명을 입력하세요 | 성명 입력 |
+| 작성일 | 학교에서 작성일을 입력하세요 | 기안일과 안건 제출일 입력 |
+| 회의 정보 | 학교에서 회의명과 회차를 입력하세요 | 학운위 회의명·회차 입력 |
+
+이 도구는 내부 결재나 학운위 제출을 대신하지 않습니다. 학교 규정과 담당자 안내를 확인한 뒤 제출하세요.
+`;
+}
+
+function resolvePreparationDir(root, requested) {
+  const privateRoot = path.join(root, PRIVATE_REL);
+  if (requested) {
+    const resolved = path.resolve(root, requested);
+    if (!withinRoot(privateRoot, path.relative(privateRoot, resolved))) throw new Error('--source-dir는 이 프로젝트의 .dorms-check/private/edzip 안을 가리켜야 합니다.');
+    if (!fs.statSync(resolved, { throwIfNoEntry: false })?.isDirectory()) throw new Error('--source-dir 폴더를 찾지 못했습니다.');
+    const realPrivateRoot = fs.realpathSync(privateRoot);
+    const realResolved = fs.realpathSync(resolved);
+    if (!withinRoot(realPrivateRoot, path.relative(realPrivateRoot, realResolved))) throw new Error('--source-dir의 실제 경로가 프로젝트의 비공개 에듀집 폴더 밖을 가리킵니다.');
+    return realResolved;
+  }
+  if (!exists(privateRoot)) throw new Error('먼저 dcheck edzip prepare --apply로 에듀집 제출 자료를 만드세요.');
+  const candidates = fs.readdirSync(privateRoot, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && exists(path.join(privateRoot, entry.name, 'manifest.json')))
+    .map(entry => path.join(privateRoot, entry.name))
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  if (!candidates.length) throw new Error('에듀집 제출 자료 manifest.json을 찾지 못했습니다.');
+  return candidates[0];
+}
+
+export async function prepareCouncilDocuments(root, { approvedUrl, confirmApply, sourceDir, fetchImpl = fetch }) {
+  if (!confirmApply) throw new Error('--confirm-apply가 필요합니다.');
+  const resolvedSource = resolvePreparationDir(root, sourceDir);
+  const manifestPath = path.join(resolvedSource, 'manifest.json');
+  const manifest = readJsonSafe(manifestPath);
+  if (!manifest || !manifest.planSha256 || manifest.piiStored !== false) throw new Error('에듀집 준비 자료의 manifest.json을 확인할 수 없습니다.');
+  const plan = readJsonSafe(path.join(root, PLAN_REL));
+  if (!plan || sha256(canonicalPlan(plan)) !== manifest.planSha256) throw new Error('현재 프로젝트 계획과 에듀집 제출 자료가 다릅니다. prepare부터 다시 실행하세요.');
+  const manifestHashes = new Map((manifest.files || []).map(file => [file.name, file.sha256]));
+  for (const name of ['01-privacy-policy.hwpx', '02-required-checklist.hwpx']) {
+    if (!exists(path.join(resolvedSource, name))) throw new Error(`에듀집 제출에 사용한 서류가 없습니다: ${name}`);
+    const actual = crypto.createHash('sha256').update(fs.readFileSync(path.join(resolvedSource, name))).digest('hex');
+    if (!manifestHashes.get(name) || manifestHashes.get(name) !== actual) throw new Error(`에듀집 제출 서류가 생성 뒤 바뀌었거나 원본 기록이 없습니다: ${name}`);
+  }
+  const providerBriefName = ['03-edzip-provider-brief.hwpx', '03-council-provider-brief.hwpx'].find(name => exists(path.join(resolvedSource, name)));
+  if (!providerBriefName) throw new Error('에듀집 제출에 사용한 제품 설명자료가 없습니다.');
+  const providerHash = crypto.createHash('sha256').update(fs.readFileSync(path.join(resolvedSource, providerBriefName))).digest('hex');
+  if (!manifestHashes.get(providerBriefName) || manifestHashes.get(providerBriefName) !== providerHash) throw new Error(`에듀집 제품 설명자료가 생성 뒤 바뀌었거나 원본 기록이 없습니다: ${providerBriefName}`);
+  const approval = await verifyEdzipApproval({ url: approvedUrl, appName: plan.app.name, fetchImpl });
+  if (!approval.ok) throw new Error(approval.error);
+  const targetFiles = ['05-internal-approval-draft.hwpx', '06-council-agenda-draft.hwpx', '07-school-submission-guide.hwpx'];
+  if (targetFiles.some(name => exists(path.join(resolvedSource, name)))) throw new Error('학교 제출 초안이 이미 있습니다. 기존 파일을 보존하기 위해 덮어쓰지 않았습니다.');
+
+  const files = [];
+  files.push(...await writeDocSet(resolvedSource, '05-internal-approval-draft', `${plan.app.name} 선정 심의 요청 기안`, internalApprovalMarkdown(plan, approval)));
+  files.push(...await writeDocSet(resolvedSource, '06-council-agenda-draft', `${plan.app.name} 학교운영위원회 심의 안건`, councilAgendaMarkdown(plan, approval)));
+  files.push(...await writeDocSet(resolvedSource, '07-school-submission-guide', '에듀집 확인 완료 뒤 학교 제출 안내', schoolSubmissionMarkdown(plan, approval, resolvedSource)));
+  const templates = path.join(resolvedSource, 'templates');
+  ensureDir(templates);
+  files.push(copyAsset(packageAsset('forms', 'school-internal-approval-blank.hwpx'), path.join(templates, 'school-internal-approval-blank.hwpx')));
+  manifest.schemaVersion = 2;
+  manifest.schoolReviewGeneratedAt = new Date().toISOString();
+  manifest.edzipApproval = approval;
+  manifest.files = [...(manifest.files || []), ...files.map(file => ({ name: path.relative(resolvedSource, file), sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') }))];
+  manifest.piiStored = false;
+  manifest.automaticSubmission = false;
+  writeText(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  return { applied: true, outDir: resolvedSource, approval, manifest, files };
 }
 
 function copyAsset(source, dest) {
@@ -398,7 +618,7 @@ export async function applyEdzipPlan(root, { planSha256, confirmApply, answersFi
   const files = [];
   files.push(...await writeDocSet(outDir, '01-privacy-policy', `${plan.app.name} 개인정보 처리방침`, privacyMarkdown(plan, answers)));
   files.push(...await writeDocSet(outDir, '02-required-checklist', `${plan.app.name} 필수기준 자가점검표`, checklistMarkdown(plan, answers, scope)));
-  files.push(...await writeDocSet(outDir, '03-council-provider-brief', `${plan.app.name} 학교운영위원회 제공자 자료`, committeeMarkdown(plan, scope)));
+  files.push(...await writeDocSet(outDir, '03-edzip-provider-brief', `${plan.app.name} 에듀집 등록 제품 설명자료`, providerBriefMarkdown(plan, scope)));
   files.push(...await writeDocSet(outDir, '04-submission-guide', '에듀집 제출 안내', submissionMarkdown(sourceChecks)));
 
   const originals = path.join(outDir, 'official-originals');

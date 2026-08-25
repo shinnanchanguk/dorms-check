@@ -10,10 +10,11 @@
 
 ---
 
-이 프로젝트의 보안, 개인정보, 그리고 내 앱의 비법과 저작권 보호 상태를 dorms-check 의 세 축(security 보안 점검, edzip 학운위·개인정보 준비, protection 내 앱 보호)으로 점검해줘. 이 도구는 npm 에 올라와 있지 않으니 아래처럼 깃허브 주소(github.com/shinnanchanguk/dorms-check)에서 바로 받아 실행해줘. 따로 설치할 건 없어. (너는 코드를 고치는 코치이고, 마크는 도름스에서 신청하면 도름스가 다시 확인해 발급한다는 점만 기억해줘.)
+이 프로젝트의 보안, 에듀집 제출·통과 준비, 그리고 내 앱의 비법과 저작권 보호 상태를 dorms-check 의 세 축(security 보안 점검, edzip 에듀집 준비와 승인 뒤 학교 서류, protection 내 앱 보호)으로 점검해줘. 이 도구는 npm 에 올라와 있지 않으니 아래처럼 깃허브 주소(github.com/shinnanchanguk/dorms-check)에서 바로 받아 실행해줘. 따로 설치할 건 없어. (너는 코드를 고치는 코치이고, 마크는 도름스에서 신청하면 도름스가 다시 확인해 발급한다는 점만 기억해줘.)
 
 1. **먼저 파일을 바꾸지 말고 스캔부터 해줘.** `npx -y github:shinnanchanguk/dorms-check detect` 로 스택을 확인하고, `npx -y github:shinnanchanguk/dorms-check init --name "내 앱 이름" --url "내 배포 주소" --track security,edzip,protection --confirm-ownership` 로 설정을 만든 다음, `npx -y github:shinnanchanguk/dorms-check scan --url "내 배포 주소"` 로 검사해줘.
-2. **학운위 서류가 필요하면 자율주행 준비를 시작해줘.** `npx -y github:shinnanchanguk/dorms-check edzip prepare`로 계획과 해시를 만든 뒤, 도구가 보여 주는 개인정보가 아닌 다섯 질문만 나에게 1~3개씩 물어봐줘. 계획을 보여 주고 내가 승인한 뒤에만 `edzip prepare --apply --plan-sha256 <계획 해시> --confirm-apply --answers <답변 파일>`을 실행해줘. HWPX·PDF·Markdown 서류, 공식 HWP 원본, 법령 원문 링크, 구글폼 제출 경로, KERIS 담당자 연락처를 결과 폴더에 함께 정리하고, 성명·학교·전화·서명은 받거나 저장하지 말고 문서에서 찾을 검색어를 알려줘. 자동 제출은 하지 마.
+2. **먼저 에듀집 통과 준비를 시작해줘.** `npx -y github:shinnanchanguk/dorms-check edzip prepare`로 계획과 해시를 만든 뒤, 도구가 보여 주는 개인정보가 아닌 다섯 질문만 나에게 1~3개씩 물어봐줘. 계획을 보여 주고 내가 승인한 뒤에만 `edzip prepare --apply --plan-sha256 <계획 해시> --confirm-apply --answers <답변 파일>`을 실행해줘. 개인정보처리방침, 필수기준 자가점검표, 에듀집 제품 설명자료와 제출 안내를 HWPX·PDF·Markdown으로 만들고 공식 HWP 원본, 법령 원문 링크, 구글폼 제출 경로, KERIS 담당자 연락처를 함께 정리해줘. 자동 제출은 하지 마.
+3. **에듀집 확인이 끝났다면 학교 서류까지 작성해줘.** 나에게 에듀집 확인 완료 제품 주소만 받아 `npx -y github:shinnanchanguk/dorms-check edzip council --approved-url "<공식 에듀집 주소>" --confirm-apply`를 실행해줘. 공식 API에서 공개·확인 완료와 제품명 일치를 검증하고, 에듀집에 냈던 서류와 승인 주소를 붙임으로 연결한 내부 기안문, 학운위 안건문, 학교 제출 안내를 내 프로젝트 정보에 맞춰 HWPX·PDF·Markdown으로 작성해줘. 성명·학교·전화·결재선·서명은 받거나 저장하지 말고 Ctrl+F 검색어와 채울 위치를 알려줘. 내부 결재나 학운위 제출은 자동으로 하지 마.
 3. **권리와 허용 범위는 나한테 쉬운 선택지로 1~3문항씩 물어봐줘.** `npx -y github:shinnanchanguk/dorms-check interview` 의 문항을 그대로 어려운 말 없이 물어보고 답을 모아 권리 프로필을 만들어줘.
 4. 검사가 "AI가 판단해야 할 항목"을 남기면 내 코드와 개인정보처리방침을 직접 읽고 `judge` 로 증거와 함께 판정해줘. 증거 없이 통과 처리하지 마.
 5. **내 앱을 지키는 계획을 한 번에 보여줘.** `protect plan`으로 계획을 보여 주고 내가 동의한 뒤에만 `protect apply --plan-sha256 <계획 해시> --confirm-apply`로 적용해줘.

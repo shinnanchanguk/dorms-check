@@ -16,6 +16,7 @@ import { redactPayload } from '../core/redact.js';
 import { buildPayload } from '../core/payload.js';
 import { PROTECTION_ITEMS } from '../catalog/protection.js';
 import { trackMenu, parseTrackSelection } from '../core/config.js';
+import { parseEdzipApprovalUrl, safeEdzipApproval } from '../core/edzip-autopilot.js';
 
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) { pass++; console.log('  v', name); } else { fail++; console.error('  x', name); } }
@@ -214,6 +215,19 @@ async function run() {
     ok('빈 입력 → 빈 배열(호출부가 기본값 처리)', parseTrackSelection('', menu).length === 0);
     ok('전부 유효하지 않은 입력 → 빈 배열', parseTrackSelection('9,xyz', menu).length === 0);
     ok('일부만 유효 → 유효한 것만(순서 보존)', JSON.stringify(parseTrackSelection('9,3,x,1', menu)) === JSON.stringify(['protection', 'security']));
+  }
+
+  console.log('\n[14] 에듀집 승인 주소 — 고정 호스트·경로·안전 필드만 허용');
+  {
+    const id = '6a0fd9e85a2ee7c772401a32';
+    const legacy = parseEdzipApprovalUrl(`https://edzip.kr/utilization/learning-sw/${id}`);
+    ok('과거 공식 경로 → 정규 주소', legacy.ok && legacy.normalizedUrl === `https://edzip.kr/learning-sw/${id}`);
+    ok('외부 호스트 → 거부', parseEdzipApprovalUrl(`https://evil.example/learning-sw/${id}`).ok === false);
+    ok('사용자정보 포함 URL → 거부', parseEdzipApprovalUrl(`https://name@edzip.kr/learning-sw/${id}`).ok === false);
+    const approved = safeEdzipApproval({ data: { productName: '살핌', displayStatus: 'enable', confirmStatus: 'confirmed', email: 'private@example.com', phoneNumber: '010-0000-0000' } }, '살핌', legacy.normalizedUrl, id);
+    ok('공개·확인 완료 + 제품명 일치 → 통과', approved.ok === true);
+    ok('PII 필드는 반환하지 않음', !('email' in approved) && !('phoneNumber' in approved));
+    ok('제품명 불일치 → 거부', safeEdzipApproval({ data: { productName: '다른 앱', displayStatus: 'enable', confirmStatus: 'confirmed' } }, '살핌', legacy.normalizedUrl, id).ok === false);
   }
 
   console.log(`\n결과: ${pass} pass, ${fail} fail`);

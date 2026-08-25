@@ -6,7 +6,7 @@ dorms-check 는 Node CLI이며 Claude·Codex·Gemini·Cursor 등 어떤 AI 코�
 
 세 축(트랙)이 있습니다.
 - `security` 보안 점검: 헤더·SSL·노출·CORS·RLS 실측.
-- `edzip` 학운위·개인정보 준비: 에듀집 필수기준 + 개인정보처리방침.
+- `edzip` 에듀집 제출·통과 준비와 승인 뒤 학교 서류: 필수기준 + 개인정보처리방침 + 내부 기안·학운위 안건.
 - `protection` 내 앱 비법·저작권 보호: 권리 확인·서버 분리·배포 위생·고지·증거.
 
 ## 먼저 사용자에게 전할 것 (정직한 한계)
@@ -22,7 +22,7 @@ dorms-check 는 Node CLI이며 Claude·Codex·Gemini·Cursor 등 어떤 AI 코�
 1. `npx -y github:shinnanchanguk/dorms-check detect`
 2. `npx -y github:shinnanchanguk/dorms-check init --name "<앱>" --url "<배포주소>" --track security,edzip,protection --confirm-ownership`
 3. `npx -y github:shinnanchanguk/dorms-check scan --url "<배포주소>"` — **먼저 파일을 바꾸지 말고 스캔부터.**
-4. 학운위·에듀집 서류가 필요하면 `edzip prepare`로 계획과 5가지 비개인정보 질문을 받고, 계획 승인 후 `edzip prepare --apply --plan-sha256 <값> --confirm-apply --answers <JSON>`를 실행하세요. 자세한 진행은 `skills/edzip-autopilot/SKILL.md`입니다.
+4. 에듀집 서류가 필요하면 `edzip prepare`로 계획과 5가지 비개인정보 질문을 받고, 계획 승인 후 `edzip prepare --apply --plan-sha256 <값> --confirm-apply --answers <JSON>`를 실행하세요. 에듀집 확인 완료 뒤에는 `edzip council --approved-url <공식 주소> --confirm-apply`로 내부 기안문과 학운위 안건문을 만드세요. 자세한 진행은 `skills/edzip-autopilot/SKILL.md`입니다.
 4. protection 트랙이면 `interview` 로 문항을 받아 사용자에게 **쉬운 선택지로 1~3문항씩** 묻고(권리자·학교 관여·기존 라이선스·AI 기여·제3자 자산·허용 범위), 답을 모아 `interview --answers <파일>` 로 권리 프로필을 만드세요. 프로필에 비밀 원문·민감 파일명을 넣지 마세요.
 5. 스캔이 "AI가 판단해야 할 항목"을 알려주면, 코드/개인정보처리방침을 직접 읽고 판정해 `judge --in answers.json` 으로 **증거(파일:라인)와 함께** 기록하세요. 증거 없는 pass 는 CLI 가 거부합니다. 보호 트랙의 결정적 항목은 judge 로 덮을 수 없습니다(스캔이 우선).
 6. protection 적용은 `protect plan` 으로 계획(서버 이전 후보·바꿀 파일·위험·복원 방법)을 사용자에게 보여주고 **동의를 받은 뒤에만** `protect apply --plan-sha256 <계획해시> --confirm-apply`. 적용 후 `verify`, 문제 시 `protect restore`. 재배포는 사용자가 따로 승인할 때만.

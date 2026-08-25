@@ -1,9 +1,9 @@
 ---
 name: dorms-check
-description: 교사 제작 앱을 보안·학운위/에듀집·지식재산권 세 축으로 점검하고, 학운위 준비 시 프로젝트를 보완한 뒤 HWPX·PDF 서류·법령 원문·에듀집 제출 경로·KERIS 문의처까지 준비하는 코치. 트리거는 보안 검토, 개인정보 점검, 학운위 심의 준비, 에듀집 등록, 도름스 인증마크, 저작권 보호, dorms-check다. 파일 적용은 승인된 계획 해시와 --confirm-apply가 맞을 때만 하고 자동 제출·배포는 하지 않는다.
+description: 교사 제작 앱을 보안·에듀집·지식재산권 세 축으로 점검하고, 에듀집 제출·통과 자료와 승인 뒤 내부 기안문·학운위 안건 HWPX까지 프로젝트에 맞춰 준비하는 코치. 트리거는 보안 검토, 개인정보 점검, 학운위 심의 준비, 에듀집 등록, 도름스 인증마크, 저작권 보호, dorms-check다. 파일 적용은 승인된 계획과 명시적 확인이 있을 때만 하고 자동 제출·배포는 하지 않는다.
 ---
 
-# dorms-check (교사 앱 점검 코치: 보안 · 학운위 · 내 앱 보호)
+# dorms-check (교사 앱 점검 코치: 보안 · 에듀집 · 내 앱 보호)
 
 교사가 "내가 만든 앱 안전한지 봐줘 / 인증마크 받고 싶어 / 내 앱 비법을 지키고 싶어"라고 하면, **그 앱 프로젝트 폴더에서** 이 스킬을 따라 점검한다. 이 도구는 의존성 0의 Node CLI(`dcheck`)이며, AI(당신)는 이 CLI를 호출하는 코치로 동작한다.
 
@@ -21,7 +21,7 @@ description: 교사 제작 앱을 보안·학운위/에듀집·지식재산권 �
 1. **설치 확인·감지**: `npx -y github:shinnanchanguk/dorms-check detect` — 스택(Next.js/Vite/정적)·Supabase 여부·빌드 산출물 확인.
 2. **설정**: `npx -y github:shinnanchanguk/dorms-check init --name "<앱이름>" --url "<배포 주소>" --track security,edzip,protection --confirm-ownership` — 본인이 만들고 운영하는 앱만 스캔한다는 동의 포함. 학운위(에듀집) 트랙이면 케이스 진단 3문항을 교사에게 물어 `dorms-check.config.json`의 `edzipCase`에 A/B/C/D로 적는다.
 3. **스캔**: `npx -y github:shinnanchanguk/dorms-check scan --url "<배포 주소>"` — 결정적 스캐너(외부 표면 + RLS 실측) + 로컬 코드 정적 검사 + 보호 상태 검사를 돌린다. 결과는 `.dorms-check/REPORT.md`·`scan.json`에 저장된다. 배포 전이면 `--code-only`. **먼저 파일을 바꾸지 말고 스캔부터.**
-4. **학운위·에듀집 자율주행**: 학운위 준비 요청이면 `skills/edzip-autopilot/SKILL.md`를 읽고 `edzip prepare`의 계획→비개인정보 5문항→해시 승인→코드 보완→HWPX·PDF 생성 순서를 따른다.
+4. **에듀집 통과 준비와 승인 뒤 학교 서류 작성**: `skills/edzip-autopilot/SKILL.md`를 읽고 `edzip prepare`의 계획→비개인정보 5문항→해시 승인→코드 보완→에듀집 제출 HWPX·PDF 생성 순서를 따른다. 확인 완료 뒤에는 공식 주소를 검증하고 `edzip council`로 내부 기안문·학운위 안건문을 만든다.
 4. **권리 설문(protection 트랙)**: `interview` 로 문항 JSON 을 받아, 교사에게 **쉬운 선택지로 1~3문항씩** 물어본다(권리자·학교 관여·기존 라이선스·AI 기여·제3자 자산·허용 범위). 답을 JSON 파일로 모아 `interview --answers <파일>` 을 실행하면 권리 프로필(`.dorms-check/rights-profile.json`)이 생성된다. **프로필에 비공개 프롬프트 원문·민감 파일명을 넣지 않는다(이름만).**
 5. **AI 판단(ai-review 항목)**: 스캔이 "AI가 판단해야 할 항목"을 알려주면(예: `code.endpoint.unauth`, `protection.boundary.server`, 에듀집 방침 의미 판단), 당신이 코드·개인정보처리방침을 **직접 읽고** 판정한다. `judge --in answers.json`으로 기록한다. 형식:
    ```json
@@ -36,7 +36,7 @@ description: 교사 제작 앱을 보안·학운위/에듀집·지식재산권 �
 
 ## 2. 세 트랙
 - **도름스 보안 체크리스트 충족(security)**: 보안 헤더·전송 보안·정보 유출·CORS·RLS(익명 접근)·코드 시크릿. 마크 자격 = 심각(critical)·높음(high) 항목이 0. 점수(0~100)·등급(A~F)은 참고로 함께 보여준다.
-- **학운위 심사 준비 완료(edzip)**: 에듀집 「학습지원 소프트웨어 필수기준 체크리스트」 5대기준 9세부 + 개인정보처리방침 공개. `templates/privacy-policy.ko.md`로 방침 초안을 만들고 실제 수집 항목에 맞게 채우도록 돕는다. 전 항목이 준비되면 `templates/committee-doc.md`로 학운위 제출 문서 초안을 만든다.
+- **에듀집 제출·통과 준비(edzip)**: 에듀집 필수기준 5대 영역 9개 항목 + 개인정보처리방침 공개. 1단계는 에듀집 제출 자료를 만들고, 2단계는 확인 완료 주소와 기존 제출 서류를 근거로 내부 기안문·학운위 안건문을 만든다.
 - **내 앱 보호(protection)**: 권리관계 확인(설문) · 비법 경계(배포물 시크릿·프롬프트·모델파일·서버 분리) · 배포 위생(소스맵·디버그·경로·소스 분리·지문) · 안내와 증거(사람용·기계용 고지·증거팩). 점수가 아니라 **6가지 상태**로 현재 위치를 보여준다.
 
 ## 3. 항상 지킬 것

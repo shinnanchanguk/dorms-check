@@ -20,7 +20,7 @@ import { buildProtectionPlan, writePlan, loadPlan, planPath, checkPlanApproval }
 import { runProtectSteps, runProtectVerify, resolveBuildDir, saveProtectState, loadProtectState } from '../protect/apply.js';
 import { restoreBackup, latestBackup } from '../core/util.js';
 import { verifyBuild } from '../protect/verify-static.js';
-import { applyEdzipPlan, buildEdzipPlan, writeEdzipPlan } from '../core/edzip-autopilot.js';
+import { applyEdzipPlan, buildEdzipPlan, prepareCouncilDocuments, writeEdzipPlan } from '../core/edzip-autopilot.js';
 
 const root = process.cwd();
 const [, , cmd, ...args] = process.argv;
@@ -37,11 +37,12 @@ function honesty() {
 }
 
 function help() {
-  log.title('dorms-check ' + color.dim('— 교사 앱 점검 코치 (보안 · 학운위 · 내 앱 보호)'));
+  log.title('dorms-check ' + color.dim('교사 앱 점검 코치 (보안 · 에듀집 · 내 앱 보호)'));
+  log.plain(color.dim('  Team DoRm · 교사 홍창욱 제작 · https://dorms.school'));
   log.plain(`
   세 축(트랙):
   ${color.bold('security')}    보안 점검 (헤더·SSL·노출·CORS·RLS 실측)
-  ${color.bold('edzip')}       학운위·개인정보 준비 (에듀집 필수기준 + 개인정보처리방침)
+  ${color.bold('edzip')}       에듀집 제출·통과 준비와 승인 뒤 학교 서류 작성
   ${color.bold('protection')}  내 앱 비법·저작권 보호 (권리 확인·서버 분리·고지·증거)
 
   ${color.bold('dcheck detect')}                 스택 감지(Next.js/Vite/정적, Supabase 여부, 빌드 산출물)
@@ -53,8 +54,9 @@ function help() {
   ${color.bold('dcheck protect plan')}           보호 계획 생성(무엇을 바꿀지 + 계획 해시. 파일 안 바꿈)
   ${color.bold('dcheck protect apply')} ${color.dim('--plan-sha256 <값> --confirm-apply')}   승인한 계획대로만 적용(백업 후)
   ${color.bold('dcheck protect restore')} ${color.dim('[--from <백업경로>]')}   마지막 백업으로 복원
-  ${color.bold('dcheck edzip prepare')}              학운위·에듀집 서류 계획 생성(파일 안 바꿈)
-  ${color.bold('dcheck edzip prepare')} ${color.dim('--apply --plan-sha256 <값> --confirm-apply --answers <JSON>')}  HWPX·PDF 서류 생성
+  ${color.bold('dcheck edzip prepare')}              에듀집 제출·통과 준비 계획 생성(파일 안 바꿈)
+  ${color.bold('dcheck edzip prepare')} ${color.dim('--apply --plan-sha256 <값> --confirm-apply --answers <JSON>')}  에듀집 제출용 HWPX·PDF 생성
+  ${color.bold('dcheck edzip council')} ${color.dim('--approved-url <에듀집 주소> --confirm-apply [--source-dir <폴더>]')}  승인 뒤 내부 기안·학운위 안건 HWPX 생성
   ${color.bold('dcheck verify')}                 적용 전후 산출물 정적 검사 비교(깨짐 확인)
   ${color.bold('dcheck status')}                 남은 미충족 항목 + 수정 프롬프트
   ${color.bold('dcheck report')}                 전체 리포트 출력(.dorms-check/REPORT.md)
@@ -478,15 +480,30 @@ async function runProtectCmd() {
 
 async function runEdzipCmd() {
   const sub = args[0];
-  if (sub !== 'prepare') {
-    log.err('사용법: dcheck edzip prepare [--apply --plan-sha256 <값> --confirm-apply --answers <JSON> --continue-out-of-scope]');
+  if (!['prepare', 'council'].includes(sub)) {
+    log.err('사용법: dcheck edzip prepare [...] | dcheck edzip council --approved-url <에듀집 주소> --confirm-apply [--source-dir <폴더>]');
     process.exitCode = 1;
+    return;
+  }
+  if (sub === 'council') {
+    try {
+      const result = await prepareCouncilDocuments(root, {
+        approvedUrl: opt('approved-url', ''), confirmApply: flag('confirm-apply'), sourceDir: opt('source-dir', ''),
+      });
+      log.ok(`내부 기안문·학운위 안건 초안 생성: ${path.relative(root, result.outDir)}`);
+      log.plain(`  에듀집 확인 완료: ${result.approval.productName}  ${result.approval.normalizedUrl}`);
+      log.plain('  05·06·07 HWPX의 Ctrl+F 안내로 학교명·기안자·결재선·일정을 직접 채우세요. 개인정보는 저장하지 않았습니다.');
+      log.plain('  내부 결재와 학운위 제출은 자동으로 하지 않았습니다. 학교 규정에 맞게 검토한 뒤 제출하세요.');
+    } catch (error) {
+      log.err(String(error?.message || error));
+      process.exitCode = 1;
+    }
     return;
   }
   if (!flag('apply')) {
     const plan = buildEdzipPlan(root);
     const file = writeEdzipPlan(root, plan);
-    log.ok(`학운위·에듀집 준비 계획: ${path.relative(root, file)}`);
+    log.ok(`에듀집 제출·통과 준비 계획: ${path.relative(root, file)}`);
     log.plain(`  계획 SHA-256: ${plan.sha256}`);
     log.title('개인정보를 받지 않는 5가지 확인');
     for (const q of plan.questions) log.plain(`  - ${q.id}: ${q.ask} (${q.values.join('|')})`);
@@ -513,10 +530,10 @@ async function runEdzipCmd() {
     log.plain('  그래도 자료를 준비하려면 같은 명령에 --continue-out-of-scope를 추가하세요.');
     return;
   }
-  log.ok(`HWPX·PDF 서류 패 생성: ${path.relative(root, result.outDir)}`);
+  log.ok(`에듀집 제출용 HWPX·PDF 서류 생성: ${path.relative(root, result.outDir)}`);
   log.plain(`  적용 판정: ${result.scope.status}  ${result.scope.reason}`);
   log.plain('  이름·소속·연락처·서명·인영은 빈칸으로 남겼습니다. 04-submission-guide.hwpx의 Ctrl+F 검색어로 찾아 직접 채우세요.');
-  log.plain('  제출·배포는 하지 않았습니다. 서명·인영·학교 내부 심의 절차를 확인한 뒤 제출하세요.');
+  log.plain('  에듀집 제출은 하지 않았습니다. 확인 완료 뒤 edzip council에 공식 주소를 넣으면 내부 기안문과 학운위 안건 초안을 만듭니다.');
 }
 
 async function main() {

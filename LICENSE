@@ -1,21 +1,42 @@
-MIT License
+DoRms Member Community License 1.0
 
-Copyright (c) 2026 shinnanchanguk (DoRms)
+Copyright (c) 2026 Hong Changuk, Team DoRm. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. DoRms member grant
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+A person who is a DoRms member may use, run, copy, and modify this Software
+freely for projects that person owns or is authorized to maintain, including
+educational and commercial projects. This grant does not permit publishing,
+selling, sublicensing, or distributing dorms-check itself or a substantially
+similar repackaged version as a separate tool or service.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2. Attribution and identity
+
+The notices “Team DoRm”, “dorms-check”, and “교사 홍창욱 제작”, including
+equivalent notices in generated documents, must not be removed or used to
+suggest that a modified or third-party product is an official Team DoRm product.
+
+3. Non-members
+
+Public access to the source code permits viewing and evaluation only. Any use,
+copying, modification, distribution, or commercial exploitation by a person
+who is not a DoRms member requires prior written permission from the copyright
+holder.
+
+4. Third-party materials
+
+Third-party packages, fonts, official forms, and source materials remain under
+their own licenses or official terms. This license does not expand those rights.
+
+5. Earlier releases
+
+Copies already received under the MIT License remain governed by that grant.
+This license applies to this version and later versions that include it.
+
+6. No warranty
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. TO THE MAXIMUM EXTENT
+PERMITTED BY LAW, THE COPYRIGHT HOLDER IS NOT LIABLE FOR CLAIMS OR DAMAGES
+ARISING FROM USE OF THE SOFTWARE.

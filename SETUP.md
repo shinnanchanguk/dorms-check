@@ -45,8 +45,8 @@ brew install semgrep gitleaks   # macOS 예시
 
 ## 명령어 요약
 
-점검은 세 축으로 나뉘어요: `security`(보안 점검) · `edzip`(학운위·개인정보 준비) · `protection`(내 앱 비법·저작권 보호).
-일반 보안·학운위 스캔은 검사만 합니다. 학운위 서류 생성과 보호 축 적용은 각각 계획을 보고 동의했을 때만 파일을 만들거나 바꿔요. 자동 제출과 자동 배포는 하지 않아요.
+점검은 세 축으로 나뉘어요: `security`(보안 점검) · `edzip`(에듀집 제출·통과 준비와 승인 뒤 학교 서류) · `protection`(내 앱 비법·저작권 보호).
+일반 스캔은 검사만 합니다. 에듀집 제출 서류, 승인 뒤 학교 서류, 보호 축 적용은 각각 계획이나 실행 내용을 보고 동의했을 때만 파일을 만들거나 바꿔요. 자동 제출과 자동 배포는 하지 않아요.
 
 | 명령 | 하는 일 |
 | --- | --- |
@@ -58,8 +58,9 @@ brew install semgrep gitleaks   # macOS 예시
 | `dcheck protect plan` | 무엇을 바꿀지 계획과 계획 해시를 만들어요 (아직 파일 안 바꿈) |
 | `dcheck protect apply --plan-sha256 <값> --confirm-apply` | 동의한 계획대로만 적용해요 (적용 전 백업, 실패 시 복원) |
 | `dcheck protect restore` | 마지막 백업으로 되돌려요 |
-| `dcheck edzip prepare` | 프로젝트를 읽고 학운위·에듀집 준비 계획과 확인 질문을 만들어요 |
-| `dcheck edzip prepare --apply --plan-sha256 <값> --confirm-apply --answers <파일>` | 승인한 계획대로 비공개 경로에 HWPX·PDF·Markdown 서류 묶음을 만들어요 |
+| `dcheck edzip prepare` | 프로젝트를 읽고 에듀집 제출·통과 준비 계획과 확인 질문을 만들어요 |
+| `dcheck edzip prepare --apply --plan-sha256 <값> --confirm-apply --answers <파일>` | 승인한 계획대로 비공개 경로에 에듀집 제출용 HWPX·PDF·Markdown 서류를 만들어요 |
+| `dcheck edzip council --approved-url <에듀집 주소> --confirm-apply` | 에듀집 확인 완료 뒤 내부 기안문·학운위 안건문·학교 제출 안내를 프로젝트에 맞게 만들어요 |
 | `dcheck verify` | 적용 전후 산출물을 비교해 앱이 깨지지 않았는지 확인해요 |
 | `dcheck status` | 아직 못 고친 항목과 고치는 법을 보여줘요 |
 | `dcheck report` | 전체 리포트를 출력해요 (`.dorms-check/REPORT.md`) |

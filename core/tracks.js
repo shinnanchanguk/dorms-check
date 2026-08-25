@@ -181,7 +181,7 @@ const securityTrack = {
 
 const edzipTrack = {
   id: 'edzip',
-  name: '학운위 심사 준비',
+  name: '에듀집 제출·통과 준비',
   description: '에듀집 필수기준 5대기준 9세부 + 개인정보처리방침 공개 준비',
   items: EDZIP_ITEMS,
   alwaysInPayload: true, // v1 호환
@@ -205,7 +205,7 @@ const edzipTrack = {
   reportSection({ result, stack }) {
     const edzip = result;
     const lines = [];
-    lines.push(`## 학운위 심사 준비(에듀집 필수기준)`);
+    lines.push(`## 에듀집 제출·통과 준비(필수기준)`);
     lines.push(`- 준비 상태: ${edzip.eligible ? '충족(제출 서류 준비됨)' : '미충족'}`);
     lines.push(`- 개인정보처리방침 공개: ${edzip.policyPresent ? '있음' : '없음'}`);
     if (edzip.unmet && edzip.unmet.length) {
@@ -227,7 +227,7 @@ const edzipTrack = {
 
   summaryLines({ result }) {
     const edzip = result;
-    log.title(`학운위 준비  ${edzip.eligible ? color.green('충족') : color.yellow('미충족')}`);
+    log.title(`에듀집 준비  ${edzip.eligible ? color.green('충족') : color.yellow('미충족')}`);
     for (const u of edzip.unmet || []) log.plain(`  ${color.yellow('!')} ${catalogItem(u.id).title}`);
   },
 

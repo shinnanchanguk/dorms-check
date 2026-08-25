@@ -1,7 +1,7 @@
 {
   "name": "dorms-check",
   "version": "0.1.0",
-  "description": "교사가 만든 앱을 보안·학운위/에듀집·지식재산권 세 축으로 점검하고, 승인된 계획에 따라 학운위 HWPX·PDF 서류 묶음과 제출 안내를 생성하는 코치. 외부 제출·자동 배포는 하지 않는다.",
+  "description": "교사가 만든 앱을 보안·에듀집·지식재산권 세 축으로 점검하고, 에듀집 제출 자료와 승인 뒤 학교 내부 기안·학운위 HWPX 문서를 만드는 코치. 외부 제출은 하지 않는다.",
   "type": "module",
   "bin": {
     "dcheck": "bin/dcheck.js"
@@ -12,6 +12,7 @@
     "./checks/runtime": "./checks/runtime/index.js"
   },
   "scripts": {
+    "assets:internal-approval": "node scripts/generate-internal-approval-template.mjs",
     "selftest": "node verify/self-test.js",
     "scan": "node bin/dcheck.js scan"
   },
@@ -26,8 +27,8 @@
     "personal-information-protection",
     "security-scanner"
   ],
-  "license": "MIT",
-  "author": "shinnanchanguk",
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "홍창욱 (Team DoRm)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/shinnanchanguk/dorms-check.git"
@@ -51,6 +52,8 @@
     "verify",
     "skills",
     "assets",
+    "LICENSE",
+    "NOTICE.md",
     "SKILL.md",
     "AGENTS.md",
     "README.md",

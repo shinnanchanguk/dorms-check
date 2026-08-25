@@ -4,9 +4,11 @@ English | [한국어](./README.ko.md)
 
 **A coach that helps teachers check the apps they built with vibe coding, and fix them alongside their own AI until they're actually safe.**
 
+> Made by teacher Hong Changuk of Team DoRm. DoRms members may use it freely in their own projects.
+
 If you built an app with vibe coding (making code with AI) and you're not a developer, dorms-check helps you inspect and fix your app along three tracks:
 - **Security review (`security`)**: is the app safe from hacking and data leaks?
-- **School committee readiness (`edzip`)**: are the privacy documents ready for school review?
+- **EDZIP submission and approval readiness (`edzip`)**: are the EDZIP documents ready, and are the post-approval school documents prepared?
 - **Protecting your app (`protection`)**: are your app's secrets (prompts, logic, data) and your rights prepared and protected?
 
 Pass the security and edzip tracks and you can apply for a DoRms community verification mark.
@@ -28,6 +30,7 @@ npx -y github:shinnanchanguk/dorms-check detect
 npx -y github:shinnanchanguk/dorms-check init --name "My App" --url "https://my-app-url" --track security,edzip,protection --confirm-ownership
 npx -y github:shinnanchanguk/dorms-check scan --url "https://my-app-url"
 npx -y github:shinnanchanguk/dorms-check edzip prepare # plan first; apply only after approval
+npx -y github:shinnanchanguk/dorms-check edzip council --approved-url "https://edzip.kr/learning-sw/<product-id>" --confirm-apply
 npx -y github:shinnanchanguk/dorms-check status     # remaining items + how to fix each
 npx -y github:shinnanchanguk/dorms-check submit      # once everything passes: evidence pack + how to apply
 ```
@@ -35,7 +38,7 @@ npx -y github:shinnanchanguk/dorms-check submit      # once everything passes: e
 ## Choosing which axes to check
 The three tracks are independent. You can check only the ones you want, and only the chosen tracks are inspected and judged (the rest do not run at all).
 - **security**: security review (headers, SSL, exposure, CORS, live RLS). If you only want the DoRms "Security review" mark, this one track is enough.
-- **edzip**: school committee and privacy readiness (EDZIP essential criteria + privacy policy). Pick it only when you need documents for school review.
+- **edzip**: EDZIP submission and approval readiness, followed by school approval and committee drafts. Pick it when you need educational-software adoption documents.
 - **protection**: protecting your app's secrets and copyright (rights check, server separation, notices, evidence). Pick it only when you want to protect your idea.
 
 Pass a comma-separated subset to `--track` and only that subset runs.
@@ -62,8 +65,8 @@ When a person runs `init` in a terminal without `--track`, it shows the three ax
 - **Code secrets**: hardcoded keys, client-side exposure
 - A score (0 to 100) and grade (A to F) are shown for reference. Mark eligibility means zero critical or high items.
 
-### Track 2: School Committee Ready (`edzip`)
-The EDZIP "Essential Criteria Checklist for Learning-Support Software": 5 criteria and 9 sub-items (minimal collection, safeguards, access/correction/deletion, protection of children under 14, officer/provision/outsourcing), plus a public privacy policy. `edzip prepare` first produces a reviewable plan. After explicit approval, it creates privacy policy, checklist, provider brief, and submission guide sets in HWPX, PDF, and Markdown, along with official source files, legal links, the teacher submission route, and KERIS contacts. Personal identity, school, phone, signature, and seal fields remain blank.
+### Track 2: EDZIP submission and approval (`edzip`)
+Stage 1, `edzip prepare`, creates the privacy policy, essential-criteria checklist, product brief, and EDZIP submission guide in HWPX, PDF, and Markdown. Stage 2, `edzip council --approved-url <official URL> --confirm-apply`, verifies the public confirmed EDZIP record and creates a project-specific internal approval draft, school committee agenda, and school submission guide. It reuses the documents submitted to EDZIP and attaches the approved URL. A blank editable HWPX template is bundled. Personal identity, school, approval route, date, phone, signature, and seal fields remain searchable blanks.
 
 ### Track 3: Protecting your app (`protection`)
 - **Rights check**: who made the app, whether school work is involved, third-party assets, AI contribution (a simple survey builds a rights profile; no secret text goes into it)
@@ -82,4 +85,4 @@ Even if a weaker AI mistakenly says "no problems," the verdict comes not from th
 - Optional: if tools like semgrep or gitleaks are installed, they add deeper checks, but the mark verdict is the same without them. `opentimestamps-client` (ots) is optional for blockchain timestamping of the evidence pack.
 
 ## License
-MIT
+DoRms Member Community License 1.0. DoRms members may use the tool freely in projects they own or are authorized to maintain. Repackaging, resale, and removal of attribution are restricted. Earlier copies received under MIT remain under that grant. See [`LICENSE`](./LICENSE) and [`NOTICE.md`](./NOTICE.md).
