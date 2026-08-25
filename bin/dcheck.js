@@ -493,7 +493,7 @@ async function runEdzipCmd() {
       log.ok(`내부 기안문·학운위 안건 초안 생성: ${path.relative(root, result.outDir)}`);
       log.plain(`  에듀집 확인 완료: ${result.approval.productName}  ${result.approval.normalizedUrl}`);
       log.plain('  05·06·07 HWPX의 Ctrl+F 안내로 학교명·기안자·결재선·일정을 직접 채우세요. 개인정보는 저장하지 않았습니다.');
-      log.plain('  한글에서 표 글자가 겹쳐 보이면 원본 복사본을 남기고 문서 전체를 복사해 새 빈 한글 문서에 붙여넣은 뒤 새 이름으로 저장하세요.');
+      log.plain('  한글에서 표 글자가 겹쳐 보이면 문서 전체를 드래그해 복사한 다음, 전체가 선택된 그 상태에서 바로 붙여넣으면 해결됩니다.');
       log.plain('  내부 결재와 학운위 제출은 자동으로 하지 않았습니다. 학교 규정에 맞게 검토한 뒤 제출하세요.');
     } catch (error) {
       log.err(String(error?.message || error));
@@ -535,7 +535,7 @@ async function runEdzipCmd() {
   log.plain(`  적용 판정: ${result.scope.status}  ${result.scope.reason}`);
   log.plain('  이름·소속·연락처·서명·인영은 빈칸으로 남겼습니다. 04-submission-guide.hwpx의 Ctrl+F 검색어로 찾아 직접 채우세요.');
   log.plain('  구글폼 제출 뒤 며칠이 지나도 결과나 연락이 없으면 KERIS 교수학습지원부(053-714-0357, 053-714-0308)로 문의해 보세요.');
-  log.plain('  한글에서 표 글자가 겹쳐 보이면 원본 복사본을 남기고 문서 전체를 복사해 새 빈 한글 문서에 붙여넣은 뒤 새 이름으로 저장하세요.');
+  log.plain('  한글에서 표 글자가 겹쳐 보이면 문서 전체를 드래그해 복사한 다음, 전체가 선택된 그 상태에서 바로 붙여넣으면 해결됩니다.');
   log.plain('  에듀집 제출은 하지 않았습니다. 확인 완료 뒤 edzip council에 공식 주소를 넣으면 내부 기안문과 학운위 안건 초안을 만듭니다.');
 }
 
