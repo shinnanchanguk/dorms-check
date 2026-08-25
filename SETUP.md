@@ -9,7 +9,7 @@ dorms-check는 따로 설치하지 않아도 돼요. 아래 한 줄이면 **이 
 npx -y github:shinnanchanguk/dorms-check detect
 ```
 
-Node.js만 깔려 있으면 되고, 여러분 프로젝트에 무언가를 추가로 설치하지 않아요. (전체 실행 흐름은 `README.ko.md`와 `USE-WITH-AI.md`를 보세요.)
+Node.js만 깔려 있으면 됩니다. 실행할 때 HWPX·PDF 생성 엔진과 한글 글꼴을 dorms-check 패키지 안에 함께 받아 오며, 점검받는 프로젝트의 의존성은 바꾸지 않아요. 전체 실행 흐름은 `README.ko.md`와 `USE-WITH-AI.md`를 보세요.
 
 저장소를 통째로 내려받아 쓰고 싶다면 이렇게 해도 똑같이 동작해요.
 ```bash
@@ -40,13 +40,13 @@ brew install semgrep gitleaks   # macOS 예시
 ```
 
 ## 필요 환경
-- Node.js 18 이상 (내장 fetch·tls를 써요). 추가 설치 의존성 없음.
+- Node.js 18 이상. HWPX·PDF 생성 엔진과 한글 글꼴은 dorms-check에 포함됩니다.
 - 검사할 앱은 배포된 주소(https://...)가 있으면 좋아요. 배포 전이면 `scan --code-only`로 코드만 먼저 볼 수 있어요.
 
 ## 명령어 요약
 
 점검은 세 축으로 나뉘어요: `security`(보안 점검) · `edzip`(학운위·개인정보 준비) · `protection`(내 앱 비법·저작권 보호).
-보안·학운위는 검사만 하고 파일을 바꾸지 않아요. 보호 축의 적용 단계만, 계획을 보고 동의했을 때(계획 해시 + `--confirm-apply`) 파일을 바꿔요. 자동 배포는 하지 않아요.
+일반 보안·학운위 스캔은 검사만 합니다. 학운위 서류 생성과 보호 축 적용은 각각 계획을 보고 동의했을 때만 파일을 만들거나 바꿔요. 자동 제출과 자동 배포는 하지 않아요.
 
 | 명령 | 하는 일 |
 | --- | --- |
@@ -58,6 +58,8 @@ brew install semgrep gitleaks   # macOS 예시
 | `dcheck protect plan` | 무엇을 바꿀지 계획과 계획 해시를 만들어요 (아직 파일 안 바꿈) |
 | `dcheck protect apply --plan-sha256 <값> --confirm-apply` | 동의한 계획대로만 적용해요 (적용 전 백업, 실패 시 복원) |
 | `dcheck protect restore` | 마지막 백업으로 되돌려요 |
+| `dcheck edzip prepare` | 프로젝트를 읽고 학운위·에듀집 준비 계획과 확인 질문을 만들어요 |
+| `dcheck edzip prepare --apply --plan-sha256 <값> --confirm-apply --answers <파일>` | 승인한 계획대로 비공개 경로에 HWPX·PDF·Markdown 서류 묶음을 만들어요 |
 | `dcheck verify` | 적용 전후 산출물을 비교해 앱이 깨지지 않았는지 확인해요 |
 | `dcheck status` | 아직 못 고친 항목과 고치는 법을 보여줘요 |
 | `dcheck report` | 전체 리포트를 출력해요 (`.dorms-check/REPORT.md`) |

@@ -1,7 +1,7 @@
 {
   "name": "dorms-check",
   "version": "0.1.0",
-  "description": "교사가 바이브코딩으로 만든 앱을 세 축(보안 점검·학운위/개인정보 준비·내 앱 비법/저작권 보호)으로 점검하고 자기 AI와 함께 고치는 코치. 보안·학운위는 검사만 하고, 보호 축의 적용 단계만 승인한 계획 해시와 --confirm-apply 가 있을 때 파일을 바꾼다(자동 배포 없음). 결정적 스캐너(헤더·SSL·노출·CORS·RLS 실측·산출물 검사)로 판정해 약한 모델의 할루시네이션을 구조적으로 막는다. 최종 인증마크는 도름스 서버가 스스로 재검증해 발급하며 이 도구의 통과가 마크를 보장하지 않는다.",
+  "description": "교사가 만든 앱을 보안·학운위/에듀집·지식재산권 세 축으로 점검하고, 승인된 계획에 따라 학운위 HWPX·PDF 서류 묶음과 제출 안내를 생성하는 코치. 외부 제출·자동 배포는 하지 않는다.",
   "type": "module",
   "bin": {
     "dcheck": "bin/dcheck.js"
@@ -49,6 +49,8 @@
     "templates",
     "schema",
     "verify",
+    "skills",
+    "assets",
     "SKILL.md",
     "AGENTS.md",
     "README.md",
@@ -56,5 +58,9 @@
     "SETUP.md",
     "DISCLAIMER.md",
     "USE-WITH-AI.md"
-  ]
+  ],
+  "dependencies": {
+    "hwp-convert": "1.13.0",
+    "pdfkit": "0.17.2"
+  }
 }

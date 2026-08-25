@@ -19,7 +19,7 @@ Pass the security and edzip tracks and you can apply for a DoRms community verif
 ## The honest line
 This tool does not issue any certification. It is a **coach** that tells you what is safe and what needs fixing. The final mark is issued only after the **DoRms server re-checks your app on its own**, and passing this tool does not guarantee the mark.
 
-**File-change policy**: the `security` and `edzip` tracks only inspect; they never modify files. Only the apply step of the `protection` track changes files, and only when the user has reviewed the plan and passed its hash with `--plan-sha256 <hash> --confirm-apply`. It never deploys automatically.
+**File-change policy**: ordinary `security` and `edzip` scans only inspect. `edzip prepare --apply` creates the approved HWPX/PDF/Markdown document set in a private project path, and `protection apply` changes only the approved protection plan. Both require the reviewed plan hash and `--confirm-apply`. The tool never submits or deploys automatically.
 
 ## How to fix (check and repair)
 When a requested mark comes back with items to fix, paste the prompt from [`USE-WITH-AI.md`](./USE-WITH-AI.md) into whichever AI you use (Claude Code, Cursor, Codex, Gemini, and so on). No install needed: it runs **straight from this GitHub repo**, so you always get the latest source. This package is not published to npm (a published copy goes stale every time the source changes), so use the `github:` spec below rather than a package name. Or run it directly:
@@ -27,6 +27,7 @@ When a requested mark comes back with items to fix, paste the prompt from [`USE-
 npx -y github:shinnanchanguk/dorms-check detect
 npx -y github:shinnanchanguk/dorms-check init --name "My App" --url "https://my-app-url" --track security,edzip,protection --confirm-ownership
 npx -y github:shinnanchanguk/dorms-check scan --url "https://my-app-url"
+npx -y github:shinnanchanguk/dorms-check edzip prepare # plan first; apply only after approval
 npx -y github:shinnanchanguk/dorms-check status     # remaining items + how to fix each
 npx -y github:shinnanchanguk/dorms-check submit      # once everything passes: evidence pack + how to apply
 ```
@@ -62,7 +63,7 @@ When a person runs `init` in a terminal without `--track`, it shows the three ax
 - A score (0 to 100) and grade (A to F) are shown for reference. Mark eligibility means zero critical or high items.
 
 ### Track 2: School Committee Ready (`edzip`)
-The EDZIP "Essential Criteria Checklist for Learning-Support Software": 5 criteria and 9 sub-items (minimal collection, safeguards, access/correction/deletion, protection of children under 14, officer/provision/outsourcing), plus a public privacy policy. Templates for the privacy policy and the school committee submission document are included.
+The EDZIP "Essential Criteria Checklist for Learning-Support Software": 5 criteria and 9 sub-items (minimal collection, safeguards, access/correction/deletion, protection of children under 14, officer/provision/outsourcing), plus a public privacy policy. `edzip prepare` first produces a reviewable plan. After explicit approval, it creates privacy policy, checklist, provider brief, and submission guide sets in HWPX, PDF, and Markdown, along with official source files, legal links, the teacher submission route, and KERIS contacts. Personal identity, school, phone, signature, and seal fields remain blank.
 
 ### Track 3: Protecting your app (`protection`)
 - **Rights check**: who made the app, whether school work is involved, third-party assets, AI contribution (a simple survey builds a rights profile; no secret text goes into it)
@@ -77,7 +78,7 @@ The EDZIP "Essential Criteria Checklist for Learning-Support Software": 5 criter
 Even if a weaker AI mistakenly says "no problems," the verdict comes not from the model's words but from **checks the program actually ran**. Data access (RLS) in particular is confirmed by sending real anonymous requests, and protection status is measured directly on the build artifacts. And the final mark is issued only when the **DoRms server re-inspects the app on its own** and it passes. See [`DISCLAIMER.md`](./DISCLAIMER.md) for the full limits and ethics.
 
 ## Requirements
-- Node.js 18 or later (uses built-in fetch and tls). No extra dependencies to install.
+- Node.js 18 or later. The package includes its HWPX/PDF engines and Korean font; it does not add dependencies to the project being checked.
 - Optional: if tools like semgrep or gitleaks are installed, they add deeper checks, but the mark verdict is the same without them. `opentimestamps-client` (ots) is optional for blockchain timestamping of the evidence pack.
 
 ## License

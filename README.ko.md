@@ -19,7 +19,7 @@
 ## 정직한 한 줄
 이 도구는 인증을 발급하지 않습니다. 무엇이 안전하고 무엇을 고쳐야 하는지 알려주는 **코치**입니다. 최종 인증마크는 도름스 서버가 **스스로 다시 검증**해 발급하며, 이 도구의 통과가 마크를 보장하지 않습니다.
 
-**파일 변경 원칙**: 보안 점검(security)과 학운위 준비(edzip)는 검사만 합니다. 내 앱 보호(protection)의 적용 단계만 파일을 바꾸는데, 그것도 사용자가 계획을 읽고 승인한 계획 해시(`--plan-sha256`)와 `--confirm-apply` 플래그가 함께 있을 때만이며, 자동 배포는 하지 않습니다.
+**파일 변경 원칙**: 보안 스캔은 검사만 합니다. 학운위 서류 생성(`edzip prepare --apply`)과 내 앱 보호(`protect apply`)는 사용자가 읽고 승인한 계획 해시(`--plan-sha256`)와 `--confirm-apply`가 함께 있을 때만 실행합니다. 자동 제출·배포는 하지 않습니다.
 
 ## 고칠 때 쓰는 법
 신청했을 때 고칠 항목이 나오면, 쓰고 있는 AI(Claude Code·Cursor 등)에 [`USE-WITH-AI.md`](./USE-WITH-AI.md)의 프롬프트를 붙여넣으세요. 따로 설치할 건 없고 **이 깃허브 저장소에서 바로 최신판이 실행**돼요. npm 에는 올리지 않습니다(올린 판은 소스를 손볼 때마다 다시 올려야 해서 금방 옛것이 돼요). 그래서 패키지 이름 대신 아래처럼 `github:` 주소를 씁니다. 또는 직접:
@@ -27,6 +27,7 @@
 npx -y github:shinnanchanguk/dorms-check detect
 npx -y github:shinnanchanguk/dorms-check init --name "내 앱" --url "https://내앱주소" --track security,edzip,protection --confirm-ownership
 npx -y github:shinnanchanguk/dorms-check scan --url "https://내앱주소"
+npx -y github:shinnanchanguk/dorms-check edzip prepare  # 학운위·에듀집 계획과 5가지 확인
 npx -y github:shinnanchanguk/dorms-check status     # 남은 항목 + 고치는 법
 npx -y github:shinnanchanguk/dorms-check submit      # 다 통과하면 증빙팩 + 신청 안내
 ```
@@ -62,7 +63,7 @@ npx -y github:shinnanchanguk/dorms-check init --name "내 앱" --track security,
 - 점수(0~100)·등급(A~F)은 참고로 함께. 마크 자격 = 심각·높음 항목 0.
 
 ### 축 2: 학운위·개인정보 준비 (edzip)
-에듀집 「학습지원 소프트웨어 필수기준 체크리스트」 5대기준 9세부(최소수집·안전조치·열람정정삭제·만14세미만·책임자/제공/위탁) + 개인정보처리방침 공개. 방침·학운위 제출문서 초안 템플릿 제공.
+에듀집 「학습지원 소프트웨어 필수기준 체크리스트」 5대기준 9세부와 개인정보처리방침 공개 상태를 점검합니다. `edzip prepare`는 프로젝트를 분석한 계획과 해시를 만듭니다. 승인 후에는 `.dorms-check/private/edzip/YYYY-MM-DD/`에 개인정보처리방침, 필수기준 자가점검표, 학운위 제공자 자료, 에듀집 제출 안내를 HWPX·PDF·Markdown으로 저장합니다. 양식 HWP 원본, 교육부 가이드라인, 법제처 직링크, 교사 개인 구글폼, KERIS·에듀집 문의처도 포함합니다.
 
 ### 축 3: 내 앱 비법·저작권 보호 (protection)
 - **권리관계 확인**: 누가 만든 앱인지, 학교 업무와 관련 있는지, 남의 재료·AI 기여는 어떤지(쉬운 설문 → 권리 프로필 생성. 비밀 원문은 넣지 않음)
@@ -77,7 +78,7 @@ npx -y github:shinnanchanguk/dorms-check init --name "내 앱" --track security,
 성능이 낮은 AI가 "문제 없다"고 착각해도, 판정은 모델의 말이 아니라 **프로그램이 실제로 실행한 검사 결과**입니다. 특히 데이터 접근(RLS)은 실제로 익명 요청을 보내 확인합니다. 그리고 최종 마크는 **도름스 서버가 앱을 스스로 다시 검사**해 통과할 때만 발급됩니다. 자세한 한계·윤리는 [`DISCLAIMER.md`](./DISCLAIMER.md).
 
 ## 필요 환경
-- Node.js 18 이상(내장 fetch·tls 사용). 추가 설치 의존성 없음.
+- Node.js 18 이상. 설치 시 HWPX·PDF 생성 엔진과 한글 글꼴이 함께 포함됩니다.
 - 선택: semgrep·gitleaks 등이 설치돼 있으면 심화 검사를 보태지만, 없어도 마크 판정은 동일하게 됩니다.
 
 ## 라이선스

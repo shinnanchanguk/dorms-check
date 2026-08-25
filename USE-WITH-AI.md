@@ -12,15 +12,16 @@
 
 이 프로젝트의 보안, 개인정보, 그리고 내 앱의 비법과 저작권 보호 상태를 dorms-check 의 세 축(security 보안 점검, edzip 학운위·개인정보 준비, protection 내 앱 보호)으로 점검해줘. 이 도구는 npm 에 올라와 있지 않으니 아래처럼 깃허브 주소(github.com/shinnanchanguk/dorms-check)에서 바로 받아 실행해줘. 따로 설치할 건 없어. (너는 코드를 고치는 코치이고, 마크는 도름스에서 신청하면 도름스가 다시 확인해 발급한다는 점만 기억해줘.)
 
-1. **먼저 파일을 바꾸지 말고 스캔부터 해줘.** `npx -y github:shinnanchanguk/dorms-check detect` 로 스택을 확인하고, `npx -y github:shinnanchanguk/dorms-check init --name "내 앱 이름" --url "내 배포 주소" --track security,edzip,protection --confirm-ownership` 로 설정을 만든 다음, `npx -y github:shinnanchanguk/dorms-check scan --url "내 배포 주소"` 로 검사해줘. (학운위 준비까지 하려면 학생 개인정보를 다루는지 3문항을 나한테 물어봐줘.)
-2. **권리와 허용 범위는 나한테 쉬운 선택지로 1~3문항씩 물어봐줘.** `npx -y github:shinnanchanguk/dorms-check interview` 의 문항(누가 만들었는지, 학교 일과 관련 있는지, 남의 재료를 썼는지, AI가 만든 부분, 누구까지 어떻게 쓰게 할지)을 그대로 어려운 말 없이 물어보고, 답을 모아 `interview --answers` 로 권리 프로필을 만들어줘.
-3. 검사가 "AI가 판단해야 할 항목"을 남기면, 내 코드와 개인정보처리방침을 직접 읽고 `judge` 로 증거(파일:라인)와 함께 판정해줘. 증거 없이 통과 처리하지 마.
-4. **내 앱을 지키는 계획을 한 번에 보여줘.** `npx -y github:shinnanchanguk/dorms-check protect plan` 으로 서버로 옮겨야 할 비법, 어쩔 수 없이 공개되는 부분, 넣을 안내와 증거, 문제 생겼을 때 되돌리는 방법을 한 계획으로 정리해서 나한테 보여주고, **내가 동의한 뒤에만** `protect apply --plan-sha256 <계획 해시> --confirm-apply` 로 적용해줘. 비법을 서버로 옮기는 코드 수정도 내 동의를 받고 해줘.
-5. **적용한 뒤에는 `verify` 로 앱이 깨지지 않았는지 확인하고, 문제가 있으면 `protect restore` 로 되돌려줘.** 배포는 네가 하지 말고, 내가 따로 승인할 때만 해줘.
-6. `npx -y github:shinnanchanguk/dorms-check status` 로 남은 항목을 보고, 각 항목을 왜 고쳐야 하는지 나한테 쉬운 말로 설명한 다음, 내 동의를 받고 내 앱 코드를 고쳐줘. 고친 뒤 다시 배포하고 세 축이 모두 통과할 때까지 반복해줘.
-7. 다 통과하면 `npx -y github:shinnanchanguk/dorms-check submit` 으로 증빙팩을 만들어줘. **마지막에는 비밀 원문이 들어가지 않은 보호 프로필(rights-profile)과 이용 안내가 남아야 해.** 개인정보처리방침을 별도 주소 없이 앱 안 팝업으로만 보여주는 앱이면, 거기서 만들어진 `report.json` 을 도름스 마크 신청 화면의 "dorms-check 결과 올리기"에 올려야 한다고 알려줘.
+1. **먼저 파일을 바꾸지 말고 스캔부터 해줘.** `npx -y github:shinnanchanguk/dorms-check detect` 로 스택을 확인하고, `npx -y github:shinnanchanguk/dorms-check init --name "내 앱 이름" --url "내 배포 주소" --track security,edzip,protection --confirm-ownership` 로 설정을 만든 다음, `npx -y github:shinnanchanguk/dorms-check scan --url "내 배포 주소"` 로 검사해줘.
+2. **학운위 서류가 필요하면 자율주행 준비를 시작해줘.** `npx -y github:shinnanchanguk/dorms-check edzip prepare`로 계획과 해시를 만든 뒤, 도구가 보여 주는 개인정보가 아닌 다섯 질문만 나에게 1~3개씩 물어봐줘. 계획을 보여 주고 내가 승인한 뒤에만 `edzip prepare --apply --plan-sha256 <계획 해시> --confirm-apply --answers <답변 파일>`을 실행해줘. HWPX·PDF·Markdown 서류, 공식 HWP 원본, 법령 원문 링크, 구글폼 제출 경로, KERIS 담당자 연락처를 결과 폴더에 함께 정리하고, 성명·학교·전화·서명은 받거나 저장하지 말고 문서에서 찾을 검색어를 알려줘. 자동 제출은 하지 마.
+3. **권리와 허용 범위는 나한테 쉬운 선택지로 1~3문항씩 물어봐줘.** `npx -y github:shinnanchanguk/dorms-check interview` 의 문항을 그대로 어려운 말 없이 물어보고 답을 모아 권리 프로필을 만들어줘.
+4. 검사가 "AI가 판단해야 할 항목"을 남기면 내 코드와 개인정보처리방침을 직접 읽고 `judge` 로 증거와 함께 판정해줘. 증거 없이 통과 처리하지 마.
+5. **내 앱을 지키는 계획을 한 번에 보여줘.** `protect plan`으로 계획을 보여 주고 내가 동의한 뒤에만 `protect apply --plan-sha256 <계획 해시> --confirm-apply`로 적용해줘.
+6. **적용한 뒤에는 `verify`로 앱이 깨지지 않았는지 확인하고 문제가 있으면 `protect restore`로 되돌려줘.** 배포는 내가 따로 승인할 때만 해줘.
+7. `status`로 남은 항목을 보고 쉬운 말로 설명한 다음 내 동의를 받고 코드를 고쳐줘.
+8. 다 통과하면 `submit`으로 증빙팩을 만들어줘. 비밀 원문이 들어가지 않은 보호 프로필과 이용 안내가 남아야 해.
 
-읽기 검사만 하고(비파괴), 내 앱만 검사해. 파일을 바꾸는 건 protection 적용 단계뿐이고, 그것도 내가 계획에 동의했을 때만이야. "대충 통과"시키지 말고, 실제로 확인된 것만 통과로 처리해줘. "완전 보호" 같은 말은 쓰지 말아줘.
+일반 스캔은 읽기 검사만 하고 내 앱만 검사해. 파일 생성·수정은 학운위 서류 준비와 protection 적용에서 내가 계획에 동의했을 때만 해. "대충 통과"시키지 말고 실제로 확인된 것만 통과로 처리해줘. "완전 보호" 같은 말은 쓰지 말아줘.
 
 ---
 

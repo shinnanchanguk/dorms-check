@@ -20,6 +20,7 @@ import { buildProtectionPlan, writePlan, loadPlan, planPath, checkPlanApproval }
 import { runProtectSteps, runProtectVerify, resolveBuildDir, saveProtectState, loadProtectState } from '../protect/apply.js';
 import { restoreBackup, latestBackup } from '../core/util.js';
 import { verifyBuild } from '../protect/verify-static.js';
+import { applyEdzipPlan, buildEdzipPlan, writeEdzipPlan } from '../core/edzip-autopilot.js';
 
 const root = process.cwd();
 const [, , cmd, ...args] = process.argv;
@@ -52,13 +53,15 @@ function help() {
   ${color.bold('dcheck protect plan')}           보호 계획 생성(무엇을 바꿀지 + 계획 해시. 파일 안 바꿈)
   ${color.bold('dcheck protect apply')} ${color.dim('--plan-sha256 <값> --confirm-apply')}   승인한 계획대로만 적용(백업 후)
   ${color.bold('dcheck protect restore')} ${color.dim('[--from <백업경로>]')}   마지막 백업으로 복원
+  ${color.bold('dcheck edzip prepare')}              학운위·에듀집 서류 계획 생성(파일 안 바꿈)
+  ${color.bold('dcheck edzip prepare')} ${color.dim('--apply --plan-sha256 <값> --confirm-apply --answers <JSON>')}  HWPX·PDF 서류 생성
   ${color.bold('dcheck verify')}                 적용 전후 산출물 정적 검사 비교(깨짐 확인)
   ${color.bold('dcheck status')}                 남은 미충족 항목 + 수정 프롬프트
   ${color.bold('dcheck report')}                 전체 리포트 출력(.dorms-check/REPORT.md)
   ${color.bold('dcheck submit')}                 증빙팩 생성 + 도름스 마크 신청 안내
   ${color.bold('dcheck help')}                   도움말
 `);
-  log.plain(color.dim('  security·edzip 은 검사만 합니다. protection 의 적용 단계만 파일을 바꾸며, 그것도'));
+  log.plain(color.dim('  security 스캔은 검사만 합니다. edzip prepare와 protection apply는 각각'));
   log.plain(color.dim('  사용자가 승인한 계획 해시와 --confirm-apply 플래그가 있을 때만입니다. 자동 배포는 하지 않습니다.'));
   honesty();
 }
@@ -473,6 +476,49 @@ async function runProtectCmd() {
   }
 }
 
+async function runEdzipCmd() {
+  const sub = args[0];
+  if (sub !== 'prepare') {
+    log.err('사용법: dcheck edzip prepare [--apply --plan-sha256 <값> --confirm-apply --answers <JSON> --continue-out-of-scope]');
+    process.exitCode = 1;
+    return;
+  }
+  if (!flag('apply')) {
+    const plan = buildEdzipPlan(root);
+    const file = writeEdzipPlan(root, plan);
+    log.ok(`학운위·에듀집 준비 계획: ${path.relative(root, file)}`);
+    log.plain(`  계획 SHA-256: ${plan.sha256}`);
+    log.title('개인정보를 받지 않는 5가지 확인');
+    for (const q of plan.questions) log.plain(`  - ${q.id}: ${q.ask} (${q.values.join('|')})`);
+    log.plain(color.dim('  답은 JSON 파일에 저장하세요. 이름·학교·연락처·서명은 넣지 마세요.'));
+    log.plain(color.dim('  계획을 확인한 뒤 --apply --plan-sha256 <값> --confirm-apply --answers <JSON>로 생성합니다.'));
+    return;
+  }
+  let result;
+  try {
+    result = await applyEdzipPlan(root, {
+      planSha256: opt('plan-sha256', ''),
+      confirmApply: flag('confirm-apply'),
+      answersFile: opt('answers', ''),
+      continueOutOfScope: flag('continue-out-of-scope'),
+    });
+  } catch (error) {
+    log.err(String(error?.message || error));
+    process.exitCode = 1;
+    return;
+  }
+  if (result.needsContinueConfirmation) {
+    log.warn(`현재 답변으로는 선정 기준 적용 대상이 아닐 가능성이 큽니다: ${result.scope.reason}`);
+    for (const source of result.sources) log.plain(`  - ${source.title}: ${source.url}`);
+    log.plain('  그래도 자료를 준비하려면 같은 명령에 --continue-out-of-scope를 추가하세요.');
+    return;
+  }
+  log.ok(`HWPX·PDF 서류 패 생성: ${path.relative(root, result.outDir)}`);
+  log.plain(`  적용 판정: ${result.scope.status}  ${result.scope.reason}`);
+  log.plain('  이름·소속·연락처·서명·인영은 빈칸으로 남겼습니다. 04-submission-guide.hwpx의 Ctrl+F 검색어로 찾아 직접 채우세요.');
+  log.plain('  제출·배포는 하지 않았습니다. 서명·인영·학교 내부 심의 절차를 확인한 뒤 제출하세요.');
+}
+
 async function main() {
   switch (cmd) {
     case 'detect': printDetect(); break;
@@ -481,6 +527,7 @@ async function main() {
     case 'judge': runJudge(); break;
     case 'interview': runInterview(); break;
     case 'protect': await runProtectCmd(); break;
+    case 'edzip': await runEdzipCmd(); break;
     case 'verify': runVerify(); break;
     case 'status': runStatus(); break;
     case 'report': runReport(); break;
