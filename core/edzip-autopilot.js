@@ -337,6 +337,9 @@ ${EDZIP_LEGAL_BASIS.map(x => `- ${x.law}: ${x.note} ${x.link}`).join('\n')}
 
 function submissionMarkdown(sourceChecks) {
   const sourceMap = new Map(sourceChecks.map(x => [x.id, x]));
+  const kerisContact = EDZIP_CONTACTS.find(c => c.organization === '한국교육학술정보원 교수학습지원부');
+  if (!kerisContact?.phones?.length) throw new Error('KERIS 에듀집 업무 담당자 연락처를 찾지 못했습니다.');
+  const kerisPhones = kerisContact.phones.join(', ');
   const line = source => {
     const check = sourceMap.get(source.id);
     const state = check?.ok ? `접속 확인 ${check.checkedAt}` : `실행 시 확인 전${check?.checkedAt ? ` ${check.checkedAt}` : ''}`;
@@ -349,6 +352,12 @@ function submissionMarkdown(sourceChecks) {
 - 교사 등 개인 제작자 구글폼: https://forms.gle/aCa4mjvgtmovEf1eA
 - 에듀집 필수기준 점검결과: https://edzip.kr/learning-sw
 - 이 도구는 제출 페이지를 안내하지만 로그인·서명·제출 버튼 클릭은 작성자가 직접 합니다.
+
+## 구글폼 제출 뒤 확인
+
+- 구글폼 제출을 마치면 접수 결과나 보완 연락을 기다립니다.
+- 며칠이 지나도 결과나 연락이 없으면 한국교육학술정보원 교수학습지원부(${kerisPhones})로 접수 여부와 진행 상태를 문의해 보세요.
+- 문의할 때는 제품명, 구글폼 제출일, 제출에 사용한 구글 계정을 확인할 수 있게 준비하되 이 문서에는 개인정보를 적지 않습니다.
 
 ## 문의처
 
@@ -368,6 +377,10 @@ ${EDZIP_CONTACTS.map(c => `- ${c.topic}: ${c.organization}, ${(c.phones || []).j
 ## 공식 근거 원문
 
 ${EDZIP_OFFICIAL_SOURCES.map(line).join('\n')}
+
+## 한글 표의 글자가 겹쳐 보일 때
+
+먼저 원본 파일의 복사본을 남기세요. 한글에서 문서 전체를 드래그하거나 Ctrl+A로 선택해 복사한 뒤, 새 빈 한글 문서에 다시 붙여넣으면 한글이 줄 배치를 다시 계산해 표 칸의 글자 겹침이 풀립니다. 붙여넣은 문서는 표와 쪽 나눔을 확인한 뒤 새 이름으로 저장하세요.
 `;
 }
 
@@ -529,6 +542,10 @@ function schoolSubmissionMarkdown(plan, approval, sourceDir) {
 | 회의 정보 | 학교에서 회의명과 회차를 입력하세요 | 학운위 회의명·회차 입력 |
 
 이 도구는 내부 결재나 학운위 제출을 대신하지 않습니다. 학교 규정과 담당자 안내를 확인한 뒤 제출하세요.
+
+## 한글 표의 글자가 겹쳐 보일 때
+
+먼저 원본 파일의 복사본을 남기세요. 한글에서 문서 전체를 드래그하거나 Ctrl+A로 선택해 복사한 뒤, 새 빈 한글 문서에 다시 붙여넣으면 한글이 줄 배치를 다시 계산해 표 칸의 글자 겹침이 풀립니다. 붙여넣은 문서는 표와 쪽 나눔을 확인한 뒤 새 이름으로 저장하세요.
 `;
 }
 
