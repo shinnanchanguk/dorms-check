@@ -91,6 +91,18 @@ function findGitRoot(cwd) {
   catch { return null; }
 }
 
+function sameDirectoryIdentity(left, right, platform = process.platform) {
+  const realLeft = fs.realpathSync(left);
+  const realRight = fs.realpathSync(right);
+  const leftStat = fs.statSync(realLeft, { bigint: true });
+  const rightStat = fs.statSync(realRight, { bigint: true });
+  const hasFileIdentity = leftStat.dev !== 0n || leftStat.ino !== 0n || rightStat.dev !== 0n || rightStat.ino !== 0n;
+  if (hasFileIdentity) return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
+  return platform === 'win32'
+    ? path.win32.normalize(realLeft).toLowerCase() === path.win32.normalize(realRight).toLowerCase()
+    : realLeft === realRight;
+}
+
 function isAbsoluteExecutablePath(value) {
   return path.isAbsolute(value) || path.win32.isAbsolute(value);
 }
@@ -1268,12 +1280,7 @@ function validateStagedInvocation(args, cwd, expectedSha, platform = process.pla
   let gitRoot;
   try {
     gitRoot = findGitRoot(cwd);
-    const realCwd = fs.realpathSync(cwd);
-    const realRoot = gitRoot ? fs.realpathSync(gitRoot) : '';
-    const sameRoot = platform === 'win32'
-      ? path.win32.normalize(realCwd).toLowerCase() === path.win32.normalize(realRoot).toLowerCase()
-      : realCwd === realRoot;
-    if (!gitRoot || !sameRoot) {
+    if (!gitRoot || !sameDirectoryIdentity(cwd, gitRoot, platform)) {
       return { ok: false, reason: 'strict staged production은 현재 clean Git 저장소 루트에서 직접 실행해야 합니다.' };
     }
   } catch {
