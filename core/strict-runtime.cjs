@@ -1264,11 +1264,16 @@ function stagedGitSha(args) {
   return values.length === 1 ? values[0] : '';
 }
 
-function validateStagedInvocation(args, cwd, expectedSha) {
+function validateStagedInvocation(args, cwd, expectedSha, platform = process.platform) {
   let gitRoot;
   try {
     gitRoot = findGitRoot(cwd);
-    if (!gitRoot || fs.realpathSync(cwd) !== fs.realpathSync(gitRoot)) {
+    const realCwd = fs.realpathSync(cwd);
+    const realRoot = gitRoot ? fs.realpathSync(gitRoot) : '';
+    const sameRoot = platform === 'win32'
+      ? path.win32.normalize(realCwd).toLowerCase() === path.win32.normalize(realRoot).toLowerCase()
+      : realCwd === realRoot;
+    if (!gitRoot || !sameRoot) {
       return { ok: false, reason: 'strict staged production은 현재 clean Git 저장소 루트에서 직접 실행해야 합니다.' };
     }
   } catch {
@@ -1780,7 +1785,7 @@ function evaluateVercelCommand(command, cwd, options = {}) {
       if (!cliVersion.ok) return { relevant: true, allowed: false, reason: cliVersion.reason, gate: cliVersion };
       const gate = verifyCodeGate({ cwd: invocationCwd }, options);
       if (!gate.ok) return { relevant: true, allowed: false, reason: gate.reason, gate };
-      const staged = validateStagedInvocation(args, invocationCwd, gate.project.gitSha);
+      const staged = validateStagedInvocation(args, invocationCwd, gate.project.gitSha, options.platform || process.platform);
       if (!staged.ok) return { relevant: true, allowed: false, reason: staged.reason, gate };
       lastGate = gate;
       continue;

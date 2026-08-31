@@ -106,7 +106,8 @@ function createRepo() {
 }
 
 function runPowerShell(executable, command, cwd, environment, input = '') {
-  return spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+  const propagateNativeExit = `${command}; exit $LASTEXITCODE`;
+  return spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', propagateNativeExit], {
     cwd,
     env: environment,
     input,
