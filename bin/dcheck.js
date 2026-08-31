@@ -25,6 +25,7 @@ import {
   STRICT_EXIT,
   STRICT_GATE_SCHEMA,
   STRICT_RUNTIME_DIGEST,
+  SUPPORTED_VERCEL_CLI_VERSION,
   createReceipt,
   evaluateStrictSecurity,
   invalidateReceipt,
@@ -32,6 +33,7 @@ import {
   normalizeDeploymentUrl,
   projectIdentity,
   storeReceipt,
+  verifyCodeGate,
   verifyGate,
 } from '../core/strict.js';
 import { ALL_AGENTS, hookStatus, installHooks, uninstallHooks } from '../core/hooks.js';
@@ -84,11 +86,17 @@ function help() {
 `);
   log.plain(color.dim('  security 스캔은 검사만 합니다. edzip prepare와 protection apply는 각각'));
   log.plain(color.dim('  사용자가 승인한 계획 해시와 --confirm-apply 플래그가 있을 때만입니다. 자동 배포는 하지 않습니다.'));
-  log.plain(color.dim('  staged는 literal vercel/vc 단일 명령과 githubDeployment=1 + full githubCommitSha metadata를 요구합니다.'));
+  log.plain(color.dim('  staged는 지원 Bash/WSL에서 literal vercel 단일 명령, --yes, githubDeployment=1 + full githubCommitSha metadata를 요구합니다.'));
+  log.plain(color.dim(`  배포 파일 열거와 metadata 결합은 Vercel CLI ${SUPPORTED_VERCEL_CLI_VERSION}에 고정되며 다른 버전은 차단합니다.`));
   log.plain(color.dim('  promote도 exact literal URL/ID 단일 명령만 허용하며 wrapper·변수·스크립트·override 옵션은 차단합니다.'));
-  log.plain(color.dim('  rollback·redeploy·rolling release·alias/API 쓰기는 차단하고 명시적 status/list 조회만 허용합니다.'));
-  log.plain(color.dim('  훅 설치는 현재 호스트 홈만 덮으며 Windows·WSL은 각각 확인해야 합니다. 120초 host timeout도 fail-open일 수 있습니다.'));
-  log.plain(color.dim('  전역 훅은 AI 셸의 Vercel CLI만 다룹니다. 대시보드·Git 자동 production·외부 CI는 별도로 막아야 합니다.'));
+  log.plain(color.dim('  이 둘 외 Vercel 쓰기는 모두 차단하고 명시적 list/inspect/status/get/help/version/whoami 조회만 허용합니다.'));
+  log.plain(color.dim('  code 영수증은 Git 배포 입력, 허용된 project state, .vercel/project.json의 project/org와 digest에 묶여 사용자 홈에만 저장됩니다.'));
+  log.plain(color.dim('  link/switch와 foreign project/org/team env, ambient token/scope/config override는 차단합니다.'));
+  log.plain(color.dim('  command substitution·caret/backtick·runtime·package/workspace·task launcher도 보수적으로 차단합니다.'));
+  log.plain(color.dim('  훅은 사용자 지정 config root와 검증된 절대 Node를 기록하지만 configured만 증명합니다.'));
+  log.plain(color.dim('  현재 호스트 활성화는 unknown이므로 재시작·신뢰·안전한 차단 challenge가 필요합니다.'));
+  log.plain(color.dim('  native Windows/PowerShell Vercel 명령은 차단됩니다. WSL은 별도 설치하며 120초 host timeout도 fail-open일 수 있습니다.'));
+  log.plain(color.dim('  전역 훅은 AI 셸 명령 경로만 관찰합니다. 대시보드·Git 자동 production·외부 CI는 별도로 막아야 합니다.'));
   honesty();
 }
 
@@ -100,6 +108,18 @@ function printDetect() {
   log.plain(`  적용 태그: ${d.applies.join(', ') || '(없음)'}`);
   if (d.buildDir) log.plain(`  빌드 산출물: ${d.buildDir} ${color.dim('(protection 트랙 검사 대상)')}`);
   return d;
+}
+
+function strictIdentityBinding(project) {
+  return JSON.stringify({
+    root: project?.root || '',
+    rootHash: project?.rootHash || '',
+    gitSha: project?.gitSha || '',
+    treeSha: project?.treeSha || '',
+    clean: project?.clean === true,
+    vercel: project?.vercel || {},
+    deploymentInputs: project?.deploymentInputs || {},
+  });
 }
 
 async function runScan() {
@@ -151,6 +171,13 @@ async function runScan() {
       fail(STRICT_EXIT.BINDING_MISMATCH, `--git-sha ${requestedSha}와 현재 HEAD ${project.gitSha}가 다릅니다.`);
       return;
     }
+    if (phase === 'live') {
+      const codeGate = verifyCodeGate({ cwd: root, gitSha: requestedSha });
+      if (!codeGate.ok) {
+        fail(codeGate.exitCode, `live strict 전에 현재 Vercel 프로젝트에 묶인 code strict PASS가 필요합니다. ${codeGate.reason}`);
+        return;
+      }
+    }
     // A failed or interrupted re-scan must not leave an older PASS receipt
     // usable for the same source/deployment.
     invalidateReceipt(phase, project, root);
@@ -182,6 +209,10 @@ async function runScan() {
       deploymentGitSha = deploymentBinding.gitSha;
       vercelProjectId = deploymentBinding.projectId;
       vercelOrgId = deploymentBinding.orgId;
+      if (vercelProjectId !== project.vercel.projectId || vercelOrgId !== project.vercel.orgId) {
+        fail(STRICT_EXIT.BINDING_MISMATCH, 'live 검사 중 Vercel project/org 링크가 code strict 시점과 달라졌습니다.');
+        return;
+      }
     }
   }
 
@@ -224,7 +255,10 @@ async function runScan() {
   }
 
   if (!json) log.step('로컬 코드 정적 검사 …');
-  results.push(...runStaticScan(root).items);
+  const deploymentFiles = strict
+    ? (project?.deploymentInputs?.manifest || [])
+    : null;
+  results.push(...runStaticScan(root, strict ? { files: deploymentFiles } : {}).items);
 
   // ai-review 판단(review.json) 병합
   const review = strict ? {} : (readJsonSafe(REVIEW) || {});
@@ -253,20 +287,39 @@ async function runScan() {
     trackResults[t.id] = t.score(results, { bonus, config: cfg, root });
   }
 
-  // 상태 저장 + 리포트
-  const state = loadState(root);
-  recordRound(state, { trackResults, results });
-  saveState(root, state);
+  // Strict receipts live only in the trusted user home. Writing reports into
+  // the project here would mutate the exact deployment inputs between scan and
+  // stage. Legacy/non-strict scans retain their existing project reports.
+  if (!strict) {
+    const state = loadState(root);
+    recordRound(state, { trackResults, results });
+    saveState(root, state);
 
-  const md = renderReportMd({ config: { ...cfg, app: { ...cfg.app, stack } }, results, trackResults, bonus });
-  ensureDir(STATE_DIR);
-  writeText(path.join(STATE_DIR, 'REPORT.md'), md);
-  writeText(path.join(STATE_DIR, 'scan.json'), JSON.stringify({ at: new Date().toISOString(), url, results, bonus, raw }, null, 2));
+    const md = renderReportMd({ config: { ...cfg, app: { ...cfg.app, stack } }, results, trackResults, bonus });
+    ensureDir(STATE_DIR);
+    writeText(path.join(STATE_DIR, 'REPORT.md'), md);
+    writeText(path.join(STATE_DIR, 'scan.json'), JSON.stringify({ at: new Date().toISOString(), url, results, bonus, raw }, null, 2));
+  }
 
   if (strict) {
     const strictResult = evaluateStrictSecurity(results, phase);
     let stored = null;
     if (strictResult.status === 'PASS') {
+      const refreshedProject = projectIdentity(root);
+      if (!refreshedProject.ok || !refreshedProject.clean || strictIdentityBinding(refreshedProject) !== strictIdentityBinding(project)) {
+        fail(STRICT_EXIT.BINDING_MISMATCH, 'strict 검사 중 Git, Vercel 링크 또는 실제 배포 입력이 바뀌어 영수증을 만들지 않았습니다.', {
+          detail: refreshedProject.reason || 'source binding changed during scan',
+        });
+        return;
+      }
+      project = refreshedProject;
+      if (phase === 'live') {
+        const freshCodeGate = verifyCodeGate({ cwd: root, gitSha: project.gitSha });
+        if (!freshCodeGate.ok) {
+          fail(freshCodeGate.exitCode, `live strict 완료 직전 code 영수증을 다시 확인하지 못했습니다: ${freshCodeGate.reason}`);
+          return;
+        }
+      }
       const receipt = createReceipt({
         phase,
         project,
@@ -288,7 +341,13 @@ async function runScan() {
       phase,
       status: strictResult.status,
       gate: { schema: STRICT_GATE_SCHEMA, runtimeSha256: STRICT_RUNTIME_DIGEST },
-      project: { gitSha: project.gitSha, treeSha: project.treeSha, clean: project.clean },
+      project: {
+        gitSha: project.gitSha,
+        treeSha: project.treeSha,
+        clean: project.clean,
+        vercel: project.vercel,
+        deploymentInputs: project.deploymentInputs,
+      },
       deployment: phase === 'live' ? {
         url: normalizeDeploymentUrl(url),
         id: deploymentId,
@@ -298,7 +357,7 @@ async function runScan() {
       } : null,
       strict: strictResult,
       results,
-      receipt: stored ? { trustedFile: stored.trustedFile, projectFile: stored.projectFile, expiresAt: stored.receipt.expiresAt } : null,
+      receipt: stored ? { trustedFile: stored.trustedFile, expiresAt: stored.receipt.expiresAt } : null,
     };
     if (json) console.log(JSON.stringify(output, null, 2));
     else if (strictResult.status === 'PASS') log.ok(`${phase} strict 보안 게이트 PASS`);
@@ -760,17 +819,39 @@ function runHooksCmd() {
     }
     if (sub === 'status') {
       const status = hookStatus();
-      const allEffective = requestedAgents.every(agent => status.agents[agent]?.effective);
-      outputMachineResult({ ok: allEffective, exitCode: allEffective ? STRICT_EXIT.PASS : STRICT_EXIT.INCOMPLETE, ...status }, { json, success: '선택한 전역 배포 차단 훅이 모두 유효합니다.' });
+      const parseErrors = requestedAgents.map(agent => status.agents[agent]?.parseError).filter(Boolean);
+      const allConfigured = requestedAgents.every(agent => status.agents[agent]?.configured);
+      const exitCode = parseErrors.length ? STRICT_EXIT.USAGE_CONFIG : STRICT_EXIT.INCOMPLETE;
+      outputMachineResult({
+        ok: false,
+        exitCode,
+        configured: allConfigured,
+        reason: parseErrors.length
+          ? `에이전트 설정을 파싱하지 못했습니다: ${parseErrors.join(' | ')}`
+          : (allConfigured
+              ? '훅 파일과 설정은 구성됐지만 현재 호스트가 훅을 로드·신뢰했는지는 관찰할 수 없습니다. 재시작·신뢰 뒤 안전한 차단 challenge를 실제 에이전트 셸에서 확인하세요.'
+              : '선택한 훅 설정이 모두 구성되지 않았습니다.'),
+        ...status,
+      }, { json });
       return;
     }
     const result = sub === 'install' ? installHooks({ agents: selected }) : uninstallHooks({ agents: selected });
     const ok = sub === 'install'
-      ? result.agents.every(agent => result.status.agents[agent]?.effective)
-      : result.agents.every(agent => !result.status.agents[agent]?.installed);
-    outputMachineResult({ ok, exitCode: ok ? STRICT_EXIT.PASS : STRICT_EXIT.INCOMPLETE, ...result }, {
+      ? false
+      : result.agents.every(agent => !result.status.agents[agent]?.managedPresent);
+    outputMachineResult({
+      ok,
+      exitCode: ok ? STRICT_EXIT.PASS : STRICT_EXIT.INCOMPLETE,
+      ...(sub === 'install' ? {
+        configured: result.agents.every(agent => result.status.agents[agent]?.configured),
+        activation: 'unknown',
+        ready: false,
+        reason: '훅 설정을 기록했습니다. 호스트 활성화는 아직 unknown이므로 재시작·신뢰 뒤 안전한 차단 challenge를 실제 에이전트 셸에서 확인하세요.',
+      } : {}),
+      ...result,
+    }, {
       json,
-      success: sub === 'install' ? '전역 Vercel 보안 게이트 훅을 설치했습니다.' : 'dorms-check 전역 훅을 제거했습니다.',
+      success: 'dorms-check 전역 훅을 제거했습니다.',
     });
   } catch (error) {
     outputMachineResult({ ok: false, exitCode: error.exitCode || STRICT_EXIT.USAGE_CONFIG, reason: error.message }, { json });

@@ -4,25 +4,33 @@
 
 ## 한눈에 보는 흐름
 
-1. 현재 앱 코드를 커밋하고 Git 작업트리를 깨끗하게 만듭니다.
-2. 현재 Git SHA로 code strict 검사를 통과합니다.
+1. 현재 앱을 `vercel link`로 연결한 뒤 코드를 커밋하고 Git 작업트리를 깨끗하게 만듭니다.
+2. 현재 Git SHA와 `.vercel/project.json`의 project/org/digest로 code strict 검사를 통과합니다.
 3. 전역 Vercel 훅을 설치하고 설정 상태를 확인합니다.
 4. 현재 HEAD를 두 Git metadata 값에 literal로 넣은 단일 `vercel --prod --skip-domain` 명령으로 staged production을 만듭니다.
 5. 그 명령이 stdout으로 돌려준 배포 URL 하나를 live strict 검사에 넣습니다.
 6. 영수증과 현재 Git, Vercel 배포 URL/ID가 모두 일치하는지 확인합니다.
 7. 같은 URL 또는 검증된 ID만 `vercel promote`로 연결합니다.
 
-훅은 4번 전에 유효한 code 영수증을 요구합니다. 7번 전에는 유효한 code 영수증과 live 영수증을 모두 요구합니다. rollback, redeploy, rolling release, alias 변경, 임의 Vercel API는 자동 실행하지 못하게 차단합니다. 영수증은 발급 후 15분 동안만 유효합니다.
+훅은 4번 전에 유효한 code 영수증을 요구합니다. 7번 전에는 유효한 code 영수증과 live 영수증을 모두 요구합니다. 검증된 staged와 promote 외 모든 Vercel 쓰기는 차단합니다. 영수증은 발급 후 15분 동안만 유효합니다.
 
 ## 설치 버전을 고정하세요
 
 배포 게이트에서는 기본 브랜치의 최신판을 그대로 실행하지 마세요. 검토를 마친 정확한 Git 커밋 SHA를 고정한 실행 명령을 사용합니다.
 
 ```text
-npx -y github:shinnanchanguk/dorms-check#정확한_40자리_커밋_SHA
+npm install --global github:shinnanchanguk/dorms-check#정확한_40자리_커밋_SHA
 ```
 
-이 문서의 예시는 읽기 쉽도록 이미 고정 설치된 실행 파일을 `dcheck`라고 씁니다. AI는 교육 자료나 릴리스 노트에 적힌 검토 완료 SHA를 사용하고, 실행할 때마다 같은 SHA인지 확인해야 합니다. 아직 원격 저장소에 push하지 않은 로컬 커밋은 `github:` 주소로 설치할 수 없습니다.
+이 문서의 예시는 이렇게 고정 설치한 실행 파일을 `dcheck`라고 씁니다. AI는 교육 자료나 릴리스 노트에 적힌 검토 완료 SHA를 사용하고, 실행할 때마다 같은 SHA인지 확인해야 합니다. 아직 원격 저장소에 push하지 않은 로컬 커밋은 `github:` 주소로 설치할 수 없습니다.
+
+배포 파일 제외 규칙과 deployment metadata 응답은 Vercel CLI 버전에 따라 달라지므로, strict 게이트가 검토한 버전도 훅을 설치하기 전에 고정합니다.
+
+```text
+npm install --global vercel@59.10.0
+```
+
+다른 Vercel CLI 버전은 code 영수증이 있어도 staged, live, promote에서 차단됩니다.
 
 ## 최초 설정
 
@@ -46,17 +54,21 @@ dcheck hooks status --agents codex,claude,gemini --json
 
 각 에이전트만 설치하려면 `--agents codex`, `--agents claude`, `--agents gemini` 중 하나를 씁니다. 설정 위치는 다음과 같습니다.
 
-| 에이전트 | 설정 | 이벤트와 matcher |
-|---|---|---|
-| Codex | `~/.codex/config.toml` | `PreToolUse`, `^Bash$` |
-| Claude Code | `~/.claude/settings.json` | `PreToolUse`, `Bash|PowerShell` |
-| Gemini CLI | `~/.gemini/settings.json` | `BeforeTool`, `^run_shell_command$` |
+| 에이전트 | 기본 설정 | 공식 사용자 지정 루트 | 이벤트와 matcher |
+|---|---|---|---|
+| Codex | `~/.codex/config.toml` | `$CODEX_HOME/config.toml` | `PreToolUse`, `^Bash$` |
+| Claude Code | `~/.claude/settings.json` | `$CLAUDE_CONFIG_DIR/settings.json` | `PreToolUse`, `Bash|PowerShell` |
+| Gemini CLI | `~/.gemini/settings.json` | `$GEMINI_CLI_HOME/.gemini/settings.json` | `BeforeTool`, `^run_shell_command$` |
 
-세 설정 모두 `~/.dorms-check/hooks/vercel-guard.cjs`를 호출하며 timeout은 120초입니다. 기존 설정은 보존하고, 바꾸기 전 사본은 `~/.dorms-check/backups/`에 둡니다. 모든 선택 설정을 먼저 파싱한 뒤 쓰므로 뒤쪽 JSON이 손상된 경우 앞쪽 설정만 바뀌지 않습니다. 같은 설치 명령을 다시 실행해도 중복 훅을 만들지 않습니다.
+사용자 지정 루트는 절대 경로여야 합니다. status는 각 에이전트의 실제 `configRoot`와 `configRootSource`를 보여 줍니다. 세 설정 모두 `~/.dorms-check/hooks/vercel-guard.cjs`를 호출하며, PATH의 `node` 문자열이 아니라 설치 시 검증한 현재 호스트의 절대 Node 실행 파일을 기록합니다. timeout은 120초입니다. 기존 설정은 보존하고, 바꾸기 전 사본은 `~/.dorms-check/backups/`에 둡니다. 모든 선택 설정을 먼저 파싱한 뒤 쓰므로 뒤쪽 JSON이 손상된 경우 앞쪽 설정만 바뀌지 않습니다. 같은 설치 명령을 다시 실행해도 중복 훅을 만들지 않습니다.
 
-`hooks status --json`의 `hostPlatform`, `home`, `isWSL`, `installationScope`, `timeoutSeconds`, `hostTimeoutMayFailOpen`을 확인합니다. 설치 범위는 `current-host-only`입니다. Windows와 WSL은 홈과 프로세스가 다른 별도 호스트이므로 실제 배포에 쓸 쪽마다 설치·확인해야 합니다. 사용하려는 호스트가 덮이지 않으면 READY로 보고하지 않습니다. 호스트 자체가 command hook timeout을 fail-open으로 처리할 가능성은 로컬 훅이 제거할 수 없습니다.
+Claude의 `Bash|PowerShell` matcher는 native PowerShell 우회를 놓치지 않기 위한 범위입니다. 그러나 Windows의 alias, function, `.ps1`, `.cmd` 실행 파일 우선순위를 훅 입력만으로 결정적으로 증명할 수 없으므로 native Windows와 PowerShell에서 Vercel 명령은 조회까지 모두 fail-closed 차단합니다. production write의 exact 허용 흐름은 macOS/Linux Bash 또는 별도로 훅을 설치한 WSL에서만 실행합니다. native PowerShell에서 시작했다면 WSL로 이동한 뒤 code strict부터 같은 호스트에서 다시 수행합니다.
 
-설정 파일이 올바르다는 것과 현재 실행 중인 AI 프로세스가 새 훅을 이미 불러왔다는 것은 다릅니다. 설치 뒤 각 CLI가 재시작이나 신뢰 확인을 요구하면 사용자가 그 동작만 완료해야 합니다. Codex는 `/hooks`에서 새 훅을 검토하고 신뢰해야 할 수 있습니다. 이 신뢰 단계를 자동 우회하지 않습니다.
+`hooks install`과 `hooks status`는 설정 파일을 쓴 사실만 `configured`로 보고합니다. 현재 실행 중인 호스트가 훅을 로드하고 신뢰했는지는 관찰할 수 없으므로 `activation: unknown`, `ready: false`, 종료 코드 3을 유지합니다. 이것을 PASS로 바꾸어 해석하지 않습니다. `hooks status --json`의 에이전트별 `configRoot`, `configRootSource`와 공통 `nodeExecutable`, `nodeExecutableVerified`, `hostPlatform`, `home`, `isWSL`, `installationScope`, `timeoutSeconds`, `hostTimeoutMayFailOpen`도 확인합니다. 설치 범위는 `current-host-only`입니다. Windows와 WSL은 홈과 프로세스가 다른 별도 호스트이므로 실제 배포에 쓸 쪽마다 설치·확인해야 합니다. 사용하려는 호스트가 덮이지 않으면 READY로 보고하지 않습니다. 호스트 자체가 command hook timeout을 fail-open으로 처리할 가능성은 로컬 훅이 제거할 수 없습니다.
+
+설정 파일이 올바르다는 것과 현재 실행 중인 AI 프로세스가 새 훅을 이미 불러왔다는 것은 다릅니다. 설치 뒤 각 CLI를 재시작하고 필요한 신뢰 확인을 사용자가 완료해야 합니다. Codex는 `/hooks`에서 새 훅을 검토하고 신뢰해야 할 수 있습니다. 이 신뢰 단계를 자동 우회하지 않습니다. Codex TOML이 파싱되지 않거나 `features.hooks=false`, 과거 별칭 `features.codex_hooks=false`이면 configured가 아닙니다. Gemini의 `hooksConfig.enabled=false` 또는 `hooksConfig.disabled`에 dorms-check 훅 이름이 있어도 configured가 아닙니다. Codex의 `--disable hooks`, Claude의 `--bare`, `--safe-mode`, `--settings`, `--setting-sources`, Gemini의 프로젝트·시스템 설정처럼 실행 시점 또는 상위 우선순위 설정은 이 사용자 설정 검사만으로 관찰할 수 없습니다.
+
+재시작과 신뢰 뒤 각 실제 에이전트 셸에서 `vercel promote https://dcheck-hook-challenge.invalid`를 한 번 요청합니다. 올바른 결과는 Vercel CLI가 실행되기 전에 dorms-check 훅이 exit 2로 차단하는 것입니다. `.invalid`는 실제 배포 대상이 아니므로 호스트가 훅을 불러오지 않은 경우에도 성공적인 promote 대상이 될 수 없습니다. 이 실제 차단을 보지 못하면 NOT READY이며 배포를 진행하지 않습니다. CLI status 자체는 이 외부 관측을 저장하거나 PASS로 주장하지 않습니다.
 
 제거:
 
@@ -86,17 +98,23 @@ $sha = (git rev-parse HEAD).Trim()
 dcheck scan --track security --strict --json --code-only --git-sha $sha
 ```
 
-작업트리가 더럽거나 요청 SHA가 현재 HEAD와 다르면 영수증을 만들지 않습니다. AI가 만든 설명이나 `judge` 결과는 하드코딩 시크릿, 클라이언트 시크릿 같은 결정적 판정을 덮을 수 없습니다.
+작업트리가 더럽거나 요청 SHA가 현재 HEAD와 다르면 영수증을 만들지 않습니다. `assume-unchanged`나 `skip-worktree` 플래그, Git clean filter로 tracked 변경을 숨긴 경우도 차단합니다. Vercel이 업로드할 모든 파일의 실제 작업 폴더 경로·원본 바이트 SHA-256·크기·mode manifest를 묶으므로 Git tree가 같아도 실제 업로드 바이트나 실행 mode가 바뀌면 중단합니다. Vercel이 업로드할 수 있는 ignored 또는 untracked 파일, symlink가 하나라도 있으면 Git HEAD에 묶을 수 없으므로 차단합니다. `.vercelignore`나 `.nowignore`의 negation 규칙은 Vercel 기본 제외 파일을 다시 포함할 수 있으므로 strict에서 차단하고, 두 ignore 파일의 동시 사용도 허용하지 않습니다. Vercel CLI가 특별히 업로드하는 `.vercel/routes.json`은 ignored 상태여도 원본 manifest에 포함하고, symlink `.vercel`은 허용하지 않습니다. 예전 일반 검사 상태 중 정확히 허용된 `.dorms-check/REPORT.md`, `review.json`, `scan.json`, `state.json`, `strict-code.json`, `strict-live.json`만 내용 digest로 묶고, 그 밖의 `.dorms-check/**` 파일은 배포 입력 우회가 될 수 있어 차단합니다. 파일당 100 MiB, 전체 1 GiB, 20,000개를 넘거나 해시 중 파일이 바뀌어도 실패합니다. strict 검사 자체는 프로젝트 안에 report나 영수증을 새로 쓰지 않습니다.
+
+`.vercel/project.json`을 안전하게 읽을 수 없거나 projectId/orgId가 없으면 code 영수증도 만들지 않습니다. 이 파일의 project/org와 정확한 파일 SHA-256 digest가 code 영수증에 서명됩니다. 이후 `vercel link`, `vercel switch`, `vercel git connect`로 바꾸면 staged와 live가 중단됩니다. `VERCEL_PROJECT_ID`, `NOW_PROJECT_ID`, `VERCEL_ORG_ID`, `NOW_ORG_ID`, `VERCEL_TEAM_ID`가 설정된 경우 서명된 링크와 정확히 같아야 합니다. `VERCEL_TOKEN`, `NOW_TOKEN`, `VERCEL_SCOPE`, `VERCEL_TEAM`, `VERCEL_PROJECT`, `VERCEL_CWD`, `VERCEL_CONFIG`, `VERCEL_GLOBAL_CONFIG`, `VERCEL_LOCAL_CONFIG` 같은 ambient target·token·config override는 strict 흐름에서 차단합니다. AI가 만든 설명이나 `judge` 결과는 하드코딩 시크릿, 클라이언트 시크릿 같은 결정적 판정을 덮을 수 없습니다.
+
+Git 조회는 replace refs를 무시한 실제 HEAD를 사용합니다. `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, object directory/alternate, namespace, replace/config override처럼 repository identity를 바꾸는 ambient Git 환경변수는 차단합니다. Vercel 환경변수는 서명된 값과 같은 project/org/team identity만 허용하며 그 밖의 비어 있지 않은 `VERCEL*`/`NOW*` 값은 artifact·target 우회를 막기 위해 차단합니다. 표준 `core.autocrlf`/EOL 변환은 Git canonical blob으로 HEAD와 비교하고, 실제 업로드 원본 바이트와 mode는 별도 manifest digest에 묶습니다. 정적 시크릿 검사는 manifest의 path·size·mode·SHA-256과 검사 직전/직후 파일 snapshot을 다시 확인하므로 검사 사이에 바뀐 파일을 PASS로 읽지 않습니다.
 
 ### 2. 도메인을 붙이지 않은 staged production
 
+macOS, Linux, WSL Bash 전용:
+
 ```bash
-vercel --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=0123456789abcdef0123456789abcdef01234567
+vercel --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=0123456789abcdef0123456789abcdef01234567 --yes
 ```
 
 위 SHA는 형식 예시입니다. AI는 먼저 `git rev-parse HEAD` 결과를 읽고, 실제 40자리 값을 명령 문자열에 직접 넣어 독립된 한 명령으로 실행합니다. `$SHA`, `${SHA}`, `%SHA%`, 명령 치환을 Vercel 명령에 넣으면 훅이 차단합니다. `githubDeployment=1`과 `githubCommitSha=<실제 HEAD>`는 Vercel CLI 배포에 Git 정보를 연결하는 정확히 두 metadata이며, 중복·추가 metadata도 허용하지 않습니다.
 
-Vercel CLI는 성공하면 stdout에 정확한 Deployment URL을 출력합니다. AI는 그 값을 그대로 보관해야 합니다. `--skip-domain` 없는 직접 production 배포, code 영수증 없음·만료, 저장소 루트가 아닌 위치, `--prebuilt`, `--archive`, `--cwd`, `--local-config`, `--project`, `--scope`, `--env`, `--build-env` 같은 source·artifact·project override는 차단합니다. `deploy`와 비대화형 `--yes`만 선택적으로 덧붙일 수 있습니다.
+Vercel CLI는 성공하면 stdout에 정확한 Deployment URL을 출력합니다. AI는 그 값을 그대로 보관해야 합니다. `--skip-domain` 없는 직접 production 배포, code 영수증 없음·만료, 저장소 루트가 아닌 위치, `--prebuilt`, `--archive`, `--cwd`, `--local-config`, `--project`, `--scope`, `--env`, `--build-env` 같은 source·artifact·project override는 차단합니다. `deploy`는 명령의 첫 subcommand로 정확히 한 번만, 비대화형 `--yes`는 한 번만 선택적으로 덧붙일 수 있습니다. `vercel deploy deploy ...`처럼 두 번째 `deploy`나 다른 positional source path를 넣는 형식은 차단합니다.
 
 ### 3. 같은 배포의 live strict
 
@@ -114,7 +132,9 @@ $deploymentUrl = "vercel_명령이_stdout으로_돌려준_정확한_URL"
 dcheck scan --track security --strict --json --url $deploymentUrl --git-sha $sha --vercel-deployment $deploymentUrl
 ```
 
-`dcheck`는 로컬 `.vercel/project.json`과 `vercel inspect <URL|ID> --json`을 함께 확인합니다. URL/ID, `READY`, production target뿐 아니라 배포 source Git SHA가 현재 HEAD인지, Vercel projectId와 orgId/teamId가 현재 링크와 같은지 확인해 영수증에 묶습니다. Git metadata가 없거나 프로젝트 정보가 없으면 `INCOMPLETE`, 값이 다르면 `BINDING_MISMATCH`입니다. 최초 URL이 다른 origin으로 redirect되어 그쪽 내용을 검사하는 경우도 바인딩 불일치로 중단합니다.
+`dcheck`는 code 영수증, 현재 `.vercel/project.json`, `vercel inspect <URL|ID> --format=json`, 내부 read-only `GET /v13/deployments/<ID>` metadata를 함께 확인합니다. 사용자에게 임의 `vercel api` 실행을 허용하는 것이 아니라 고정 dcheck가 exact deployment ID와 linked org로 GET 한 번만 수행합니다. 두 응답의 URL/ID, `READY`, production target뿐 아니라 `githubDeployment=1`, exact `githubCommitSha`, 배포 source Git SHA가 현재 HEAD인지, Vercel projectId와 ownerId/orgId가 서명된 링크와 같은지 확인해 영수증에 묶습니다. canonical Git metadata가 없거나 프로젝트 정보가 없으면 `INCOMPLETE`, 값이 다르면 `BINDING_MISMATCH`입니다. 최초 URL이 다른 origin으로 redirect되어 그쪽 내용을 검사하는 경우도 바인딩 불일치로 중단합니다. HTTP 강제 이동도 `https://evil.example` 같은 외부 origin이나 malformed Location은 실패하며, 검사 중인 정확한 배포 origin의 HTTPS로 갈 때만 통과합니다.
+
+외부·런타임 검사가 오래 걸릴 수 있으므로 live PASS 영수증을 쓰기 직전에 code 영수증의 15분 만료와 현재 source binding을 다시 확인합니다. 그 사이 만료되거나 바뀌면 live 성공을 보고하지 않고 code strict부터 다시 시작합니다.
 
 live strict는 다음 critical/high 항목을 모두 관측해야 합니다.
 
@@ -140,22 +160,17 @@ dcheck gate verify --git-sha 0123456789abcdef0123456789abcdef01234567 --vercel-d
 vercel promote https://my-app-abc123.vercel.app
 ```
 
-Windows PowerShell:
-
-```powershell
-dcheck gate verify --git-sha 0123456789abcdef0123456789abcdef01234567 --vercel-deployment https://my-app-abc123.vercel.app --url https://my-app-abc123.vercel.app --json
-vercel promote https://my-app-abc123.vercel.app
-```
+native Windows PowerShell에서는 `dcheck gate verify` 조회까지만 실행할 수 있고 `vercel promote`는 훅이 차단합니다. promote는 code strict부터 영수증을 만든 동일한 macOS/Linux Bash 또는 WSL 호스트에서 실행합니다.
 
 SHA와 URL은 예시를 복사하는 것이 아니라 직전 출력의 실제 literal 값으로 바꿉니다. `vercel promote`는 영수증에 기록된 정확한 URL 또는 검증된 ID 하나만 받는 단일 literal 명령이어야 합니다. 셸 변수, 추가 옵션, `npx`·`pnpm`·`bunx`, package script, 셸·Node 스크립트, `;`, `&&`, pipe, redirect를 쓰면 차단합니다.
 
-### rollback의 정확한 규칙
+### Vercel 쓰기 명령의 정확한 규칙
 
-`vercel rollback`은 즉시 프로덕션 트래픽을 바꾸므로 영수증이 정확해도 모든 쓰기 형태를 차단합니다. AI는 자동 실행하지 않고 사용자에게 복구 절차만 제시합니다. `vercel redeploy`, `vercel rolling-release`, alias 설정·제거·구형 alias 문법, `vercel api`도 모두 차단합니다. `vercel rollback status`, `vercel promote status`, `vercel alias list` 같은 명시적 조회형만 허용합니다.
+strict 훅은 위의 검증된 staged와 exact promote 두 쓰기만 허용합니다. 그 밖의 직접 Vercel 명령도 기본 차단하며, 명시적 `list`/`ls`, `inspect`, `status`, `get`, `help`, `version`, `whoami` 조합만 read-only allowlist로 통과시킵니다. `vercel rollback`은 즉시 프로덕션 트래픽을 바꾸므로 영수증이 정확해도 차단합니다. `rollback status`만 조회입니다. `redeploy`, `rolling-release`와 별칭 `rr`, alias/domain/DNS/env/project/Git/flag/webhook/route/firewall/deploy-hook 변경, `vercel api`, preview deploy, link/switch도 모두 차단합니다. AI는 자동 실행하지 않고 필요한 절차만 제시합니다.
 
 ## 영수증과 종료 코드
 
-영수증은 현재 저장소의 실제 경로 해시, clean Git SHA/tree, 검사 결과 digest, Vercel URL/ID, 배포 source Git SHA, Vercel project/org ID, 게이트 schema와 strict-runtime SHA-256, 발급·만료 시각을 담습니다. 로컬 키로 HMAC-SHA256 서명하고, 신뢰용 사본은 `~/.dorms-check/receipts/`, 프로젝트 확인용 사본은 `.dorms-check/`에 둡니다. 다른 dorms-check 런타임이 만든 영수증은 서명이 유효해도 거부합니다.
+영수증은 현재 저장소의 실제 경로 해시, clean Git SHA/tree, 실제 Vercel 업로드 파일 path·bytes·size·mode manifest digest, 허용된 legacy 상태 파일 digest, `.vercel/project.json`의 project/org/name와 정확한 파일 digest, 검사 결과 digest, Vercel URL/ID, 배포 source Git SHA, 게이트 schema와 strict-runtime SHA-256, 발급·만료 시각을 담습니다. 로컬 키로 HMAC-SHA256 서명하고 `~/.dorms-check/receipts/`에만 둡니다. strict 검사 결과와 영수증을 프로젝트의 `.dorms-check/`에 복사하지 않습니다. 다른 dorms-check 런타임이 만든 영수증은 서명이 유효해도 거부합니다.
 
 | 코드 | 상태 | 뜻 |
 |---:|---|---|
@@ -163,18 +178,21 @@ SHA와 URL은 예시를 복사하는 것이 아니라 직전 출력의 실제 li
 | 1 | `SECURITY_BLOCKED` | 확인된 보안 결함이 있음 |
 | 2 | `USAGE_CONFIG` | 인자나 설정이 잘못됨 |
 | 3 | `INCOMPLETE` | 필수 검사를 끝내지 못함 |
-| 4 | `BINDING_MISMATCH` | Git, URL, 배포 ID 중 하나가 영수증과 다름 |
+| 4 | `BINDING_MISMATCH` | Git, Vercel project/org/link digest, URL, 배포 ID 중 하나가 영수증과 다름 |
 | 5 | `RECEIPT_INVALID` | 영수증 없음, 만료, 손상, 서명 불일치 |
 
 1만 실제 보안 결함입니다. 2부터 5까지를 “안전”이나 “통과”로 바꾸어 해석하면 안 됩니다. 15분이 지나면 같은 현재 소스에서 code strict와 필요한 live strict를 다시 실행합니다.
 
 ## 정확한 한계
 
-- 프로덕션 변경은 현재 Git 루트에서 실행하는 단 하나의 literal `vercel` 또는 `vc` 명령만 허용합니다. 알려진 wrapper와 스크립트뿐 아니라 이름을 바꾼 실행 파일, 동적 변수, 중첩 셸, 복합 명령도 보수적으로 차단합니다. read-only Vercel 명령은 이 제한 대상이 아닙니다.
+- 원격 상태 변경은 macOS/Linux Bash 또는 WSL의 현재 Git 루트에서 실행하는 검증된 staged 또는 promote 단 하나의 literal canonical `vercel` 명령만 허용합니다. native Windows와 PowerShell의 Vercel 명령은 실행 파일 해석을 증명할 수 없어 조회도 차단합니다. `vc` 축약과 명시적 `.cmd`·`.exe` 토큰은 버전 검사 대상과 실제 실행 파일이 갈라질 수 있어 차단합니다. 알려진 wrapper와 스크립트, 경로 기반 또는 명령에 상태 변경 동작이 드러난 이름 변경 실행 파일, 동적 변수, 중첩 셸, 복합 명령을 보수적으로 차단합니다. 지원 Bash 호스트에서도 read-only는 명시적 command+verb allowlist만 허용합니다.
+- 훅은 셸 문법 전체를 안전하게 증명할 수 있다고 주장하지 않습니다. command substitution, 실행 파일 위치의 변수 확장, Bash ANSI-C quoting, `eval`, Windows caret·환경변수 확장·`call`, PowerShell backtick·call operator·동적 실행 cmdlet, 셸·런타임·로컬 경로 실행 파일, package manager·script·workspace·task runner, `exec`·`xargs`·`awk`·`busybox` 같은 process launcher를 보수적으로 차단합니다. 이 때문에 strict 훅이 활성화된 AI 셸에서는 Vercel과 무관한 `node`, `python`, `npm install`, `npm run`, `make` 같은 간접 실행도 막힐 수 있습니다. 고정 dorms-check 설치와 앱 의존성 설치는 훅 설치 전에 끝내고, 이후 필요한 작업은 검토 가능한 literal 직접 실행 파일 명령으로 나눕니다. production 변경은 문서의 두 정확한 Vercel 형식만 사용합니다.
 - 설치는 현재 호스트와 현재 홈만 보호합니다. Windows와 WSL, 다른 사용자, 다른 컴퓨터에는 자동 전파되지 않습니다. 훅 timeout은 120초지만 호스트가 timeout을 fail-open으로 처리할 수 있다는 한계가 있습니다.
 - Vercel 대시보드에서 직접 누르는 배포, Git push로 자동 실행되는 production 배포, 다른 CI 사용자의 명령은 이 로컬 훅이 볼 수 없습니다. strict 흐름을 쓸 프로젝트는 Vercel의 Git production 자동 배포와 임의 도메인 자동 연결을 별도로 제한해야 합니다.
 - 같은 운영체제 사용자와 같은 권한을 가진 악의적 코드는 로컬 훅이나 로컬 HMAC 키를 바꿀 수 있습니다. 이 게이트는 실수와 AI의 우발적 우회를 막는 장치이지, 관리자 권한 공격자에 대한 보안 경계가 아닙니다.
-- 새 훅을 신뢰하지 않았거나 에이전트 설정에서 훅을 껐다면 강제되지 않습니다. `hooks status`는 파일과 설정 무결성을 확인하지만, 실행 중인 호스트 프로세스의 신뢰 UI까지 대신 누르지는 않습니다.
+- 이름을 바꾼 임의의 네이티브 실행 파일이나 직접 REST/API 요청까지 모든 프로그램의 내부 동작을 증명하지는 않습니다. 이 흐름에서는 문서에 적힌 명령만 실행하고, 다른 배포 도구나 API 클라이언트로 production을 바꾸지 않습니다.
+- source manifest는 고정 `vercel@59.10.0`의 upload 제외 규칙에 맞춥니다. Rust `Cargo.toml`의 동적 `/target` 제외처럼 안전하게 자동 증명하지 못한 프로젝트별 제외는 업로드되지 않더라도 보수적으로 차단될 수 있습니다.
+- 새 훅을 신뢰하지 않았거나 에이전트·프로젝트·시스템 설정에서 훅을 껐다면 강제되지 않습니다. `hooks status`는 홈 파일과 설정 무결성만 configured로 확인하며 실제 activation은 항상 unknown입니다. 재시작·신뢰 뒤 안전한 invalid-target 차단 challenge를 각 호스트에서 직접 관측해야 합니다.
 - dorms-check 통과는 인증서가 아닙니다. 최종 도름스 마크는 도름스 서버가 별도로 재검증합니다.
 
 ## 공식 근거
@@ -185,6 +203,9 @@ SHA와 URL은 예시를 복사하는 것이 아니라 직전 출력의 실제 li
 - [Vercel metadata로 배포 목록 필터링](https://vercel.com/docs/cli/list)
 - [Vercel CLI 배포의 Git metadata 연결](https://vercel.com/kb/guide/branch-variables-and-domains-not-linked-to-cli-deployments)
 - [Vercel inspect](https://vercel.com/docs/cli/inspect)
+- [Vercel CLI 명령 목록](https://vercel.com/docs/cli)
+- [Vercel domains](https://vercel.com/docs/cli/domains)
+- [Vercel DNS](https://vercel.com/docs/cli/dns)
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks)
 - [Gemini CLI hooks reference](https://geminicli.com/docs/hooks/reference/)
 - [Codex hooks](https://learn.chatgpt.com/docs/hooks)

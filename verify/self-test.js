@@ -7,6 +7,7 @@ import { checkHeaders } from '../checks/external/headers.js';
 import { validateCsp, validateFrameProtection } from '../checks/external/header-policy.js';
 import { checkTls } from '../checks/external/tls.js';
 import { checkExposure } from '../checks/external/exposure.js';
+import { checkSecrets } from '../checks/static/secrets.js';
 import { checkCors } from '../checks/external/cors.js';
 import { rlsProbe } from '../checks/runtime/rls-probe.js';
 import { firebaseProbe } from '../checks/runtime/firebase-probe.js';
@@ -44,6 +45,19 @@ function mockFetch(routes) {
 }
 
 async function run() {
+  const secretCase = (name, text) => {
+    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'dcheck-secret-fixture-'));
+    fs.writeFileSync(path.join(fixture, name), text);
+    return checkSecrets(fixture)[0].status === 'fail';
+  };
+  ok('대문자 SUPABASE_SERVICE_ROLE_KEY JWT → hardcoded secret fail', secretCase('legacy.env', 'SUPABASE_SERVICE_ROLE_KEY=eyJAAAAAAAAAAAA.eyJBBBBBBBBBBBB.signature\n'));
+  ok('새 sb_secret_ Supabase key → hardcoded secret fail', secretCase('modern.env', 'SUPABASE_SECRET_KEY=sb_secret_abcdefghijklmnopqrstuvwxyz_123456\n'));
+  ok('OpenAI sk-proj 형식 → hardcoded secret fail', secretCase('openai.env', `OPENAI_API_KEY=sk-proj-${'A'.repeat(32)}\n`));
+  ok('Anthropic sk-ant 형식 → hardcoded secret fail', secretCase('anthropic.env', `ANTHROPIC_API_KEY=sk-ant-${'B'.repeat(32)}\n`));
+  ok('GitHub fine-grained token 형식 → hardcoded secret fail', secretCase('github.env', `GITHUB_TOKEN=github_pat_${'C'.repeat(32)}\n`));
+  const serviceRolePayload = Buffer.from(JSON.stringify({ role: 'service_role', ref: 'fixture' })).toString('base64url');
+  ok('변수명 없는 service_role JWT payload → hardcoded secret fail', secretCase('payload.js', `export const token = "eyJhbGciOiJIUzI1NiJ9.${serviceRolePayload}.signature";\n`));
+
   console.log('\n[1] 보안 헤더, 누락·무효·약한 값은 fail, 실제 방어 값만 pass');
   const noHdr = checkHeaders({ headers: {} });
   ok('헤더 없음 → csp fail', noHdr.results.find(r => r.id === 'sec.header.csp').status === 'fail');
@@ -70,7 +84,7 @@ async function run() {
     'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; object-src 'none'; base-uri 'self'; form-action 'self'",
   } });
   ok('unsafe-inline·unsafe-eval CSP → fail', weakCsp.results.find(r => r.id === 'sec.header.csp').status === 'fail');
-  const cspPrefix = "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action ";
+  const cspPrefix = "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action ";
   ok("form-action 'none' 단일 값 → pass", validateCsp(`${cspPrefix}'none'`).valid);
   ok('form-action 외부 HTTPS source → fail', !validateCsp(`${cspPrefix}https://evil.example`).valid);
   ok('form-action data: source → fail', !validateCsp(`${cspPrefix}data:`).valid);
@@ -81,6 +95,9 @@ async function run() {
   ok('frame-ancestors 외부 HTTPS source → fail', !validateFrameProtection('', `${frameCspPrefix}https://evil.example`).valid);
   ok('frame-ancestors data: source → fail', !validateFrameProtection('', `${frameCspPrefix}data:`).valid);
   ok('frame-ancestors 복수 source → fail', !validateFrameProtection('', `${frameCspPrefix}'self' https://evil.example`).valid);
+  const unsafeFrameCsp = "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors https://evil.example";
+  ok('unsafe frame-ancestors makes the strict CSP check fail', !validateCsp(unsafeFrameCsp).valid);
+  ok('unsafe CSP frame-ancestors overrides X-Frame-Options DENY', !validateFrameProtection('DENY', unsafeFrameCsp).valid);
   const shortHsts = checkHeaders({ headers: { 'strict-transport-security': 'max-age=1' } });
   ok('너무 짧은 HSTS → fail', shortHsts.results.find(r => r.id === 'sec.header.hsts').status === 'fail');
 
@@ -103,6 +120,34 @@ async function run() {
     },
   );
   ok('TLS 1.3 + 승인된 인증서 → ssl pass', tlsGood.find(r => r.id === 'sec.transport.ssl-valid').status === 'pass');
+  ok('같은 배포 origin의 HTTP→HTTPS 리다이렉트 → pass', tlsGood.find(r => r.id === 'sec.transport.https-redirect').status === 'pass');
+  const tlsCrossOrigin = await checkTls(
+    { finalUrl: 'https://app.example', headers: {} },
+    'https://app.example',
+    {
+      requestImpl: async () => ({ status: 301, headers: { location: 'https://evil.example/login' }, finalUrl: 'http://app.example' }),
+      negotiateImpl: async () => ({ protocol: 'TLSv1.3', authorized: true }),
+    },
+  );
+  ok('다른 origin으로 보내는 HTTPS 리다이렉트 → fail', tlsCrossOrigin.find(r => r.id === 'sec.transport.https-redirect').status === 'fail');
+  const tlsConflictingRedirect = await checkTls(
+    { finalUrl: 'https://app.example', headers: {} },
+    'https://app.example',
+    {
+      requestImpl: async () => ({ status: 301, headers: { location: 'https://evil.example/login' }, finalUrl: 'https://app.example' }),
+      negotiateImpl: async () => ({ protocol: 'TLSv1.3', authorized: true }),
+    },
+  );
+  ok('리다이렉트 Location이 외부면 finalUrl이 같아도 fail', tlsConflictingRedirect.find(r => r.id === 'sec.transport.https-redirect').status === 'fail');
+  const tlsMalformedRedirect = await checkTls(
+    { finalUrl: 'https://app.example', headers: {} },
+    'https://app.example',
+    {
+      requestImpl: async () => ({ status: 301, headers: { location: 'https://[malformed' }, finalUrl: 'http://app.example' }),
+      negotiateImpl: async () => ({ protocol: 'TLSv1.3', authorized: true }),
+    },
+  );
+  ok('해석할 수 없는 HTTPS 리다이렉트 → fail', tlsMalformedRedirect.find(r => r.id === 'sec.transport.https-redirect').status === 'fail');
 
   console.log('\n[2] .env 오탐 방지 — 진짜 env 는 fail, SPA fallback(HTML) 은 pass');
   const envReal = mockFetch([

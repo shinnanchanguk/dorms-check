@@ -50,6 +50,8 @@ description: 교사 제작 앱을 보안·에듀집·지식재산권 세 축으�
 
 ## 4. 사용자가 strict Vercel 배포 게이트를 요청한 경우
 
-먼저 `docs/STRICT-SECURITY-GATE.ko.md`를 끝까지 읽는다. 일반 점검과 달리 검토 완료 커밋 SHA를 고정하고, clean Git code strict, 현재 호스트의 전역 훅 상태 확인, 두 Git metadata를 literal로 넣은 단일 staged `vercel` 명령, stdout의 정확한 URL live strict, `gate verify`, 같은 literal URL/ID의 단일 promote 순서를 지킨다. 운영체제와 셸은 직접 감지하고 명령도 직접 실행한다. 사용자는 로그인, 훅 신뢰, 모르는 변경 확인만 한다.
+먼저 `docs/STRICT-SECURITY-GATE.ko.md`를 끝까지 읽는다. 일반 점검과 달리 검토 완료 커밋 SHA와 `vercel@59.10.0`을 훅 설치 전에 고정하고, clean Git code strict, 현재 호스트의 전역 훅 상태 확인, 두 Git metadata를 literal로 넣은 단일 staged `vercel` 명령, stdout의 정확한 URL live strict, `gate verify`, 같은 literal URL/ID의 단일 promote 순서를 지킨다. 운영체제와 셸은 직접 감지하고 명령도 직접 실행한다. 사용자는 로그인, 훅 신뢰, 모르는 변경 확인만 한다.
 
-결정적 검사 누락을 통과로 추정하지 않는다. `SECURITY_BLOCKED`, `INCOMPLETE`, `BINDING_MISMATCH`, `RECEIPT_INVALID`를 `judge`나 설명으로 덮지 않는다. 훅 설치는 자동 배포 권한이 아니며, 사용자가 배포를 명시적으로 요청한 범위에서만 staged production과 promote를 실행한다. Vercel production 변경에 wrapper, 변수, 스크립트, 복합 명령, source/artifact/project override를 쓰지 않는다. rollback·redeploy·rolling release·alias/API 쓰기는 자동 실행하지 않고 명시적 status/list 조회만 허용한다. Windows와 WSL은 각각의 현재 호스트에서 훅 상태를 확인한다.
+비대화형 staged에는 `--yes`를 붙입니다. Vercel staged와 promote는 macOS/Linux Bash 또는 별도로 훅을 설치한 WSL에서만 실행하고 native Windows와 PowerShell에서는 Vercel 조회와 쓰기를 모두 차단합니다.
+
+결정적 검사 누락을 통과로 추정하지 않는다. `SECURITY_BLOCKED`, `INCOMPLETE`, `BINDING_MISMATCH`, `RECEIPT_INVALID`를 `judge`나 설명으로 덮지 않는다. 훅 설치는 자동 배포 권한이 아니며, 사용자가 배포를 명시적으로 요청한 범위에서만 staged production과 promote를 실행한다. Vercel production 변경에 wrapper, 변수, 스크립트, 복합 명령, source/artifact/project override를 쓰지 않는다. command substitution, caret/backtick, runtime·package·workspace·task launcher도 strict 훅이 보수적으로 막는다는 점을 숨기지 않는다. 검증된 staged와 promote 외 모든 Vercel 쓰기는 자동 실행하지 않고 명시적 list/inspect/status/get/help/version/whoami 조회만 허용한다. code 영수증 뒤 `.vercel/project.json`, Git 배포 입력, 허용된 `.dorms-check` 상태 digest를 바꾸지 않는다. `VERCEL_PROJECT_ID`·`VERCEL_ORG_ID`·`VERCEL_TEAM_ID`는 링크와 정확히 같아야 하고 token/scope/config ambient override는 쓰지 않는다. Windows와 WSL은 각각 확인하고, 사용자 지정 config root와 절대 Node 실행 파일을 확인했더라도 훅 파일 configured만으로 활성화라고 하지 않는다. 실제 호스트 활성화는 재시작·신뢰·안전한 차단 challenge 전까지 unknown으로 보고한다.

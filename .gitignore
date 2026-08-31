@@ -3,3 +3,4 @@ node_modules/
 dorms-check.config.json
 *.log
 .DS_Store
+.vercel

@@ -37,9 +37,10 @@ npx -y github:shinnanchanguk/dorms-check submit      # once everything passes: e
 
 ### Strict Vercel deployment gate
 
-For a production-blocking gate, pin an exact reviewed Git commit instead of running the moving default branch. Strict mode issues signed 15-minute receipts bound to a clean Git SHA/tree, exact Vercel URL/ID, source SHA, project/org, and gate runtime. Production changes must be one literal `vercel`/`vc` command; staged deploys require both `githubDeployment=1` and the full literal `githubCommitSha` metadata. All rollback, redeploy, rolling-release, alias, and arbitrary API writes are denied; only explicit status/list queries are exempt.
+For a production-blocking gate, pin an exact reviewed Git commit and install the audited `vercel@59.10.0` CLI instead of running moving versions. Strict mode issues signed 15-minute receipts, stored only in the trusted user home, bound to a clean Git SHA/tree, Git-bound deployment inputs, the linked `.vercel/project.json` project/org and file digest, exact Vercel URL/ID and source SHA, and the gate runtime. Production changes must be one literal canonical `vercel` command on macOS/Linux Bash or WSL; native Windows and PowerShell Vercel commands fail closed because executable resolution cannot be proven. The `vc` shorthand and explicit `.cmd`/`.exe` tokens are denied so the version probe and executed CLI cannot diverge. Staged deploys require both `githubDeployment=1` and the full literal `githubCommitSha` metadata. Apart from the verified staged deploy and promote, all Vercel writes are denied; only explicit list/inspect/status/get/help/version/whoami queries are allowlisted on a supported Bash host. Indirect runtime, script, workspace, task-runner, and dynamic-shell launchers are conservatively denied. Hook `configured` status verifies an absolute Node path and user config files only, honoring `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `GEMINI_CLI_HOME`; host activation remains `unknown` until restart/trust and a safe blocking challenge.
 
 ```bash
+npm install --global vercel@59.10.0
 dcheck hooks install --global --agents codex,claude,gemini --provider vercel --security-only
 dcheck hooks status --agents codex,claude,gemini --json
 ```

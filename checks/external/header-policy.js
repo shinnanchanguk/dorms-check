@@ -75,22 +75,25 @@ export function validateCsp(value) {
   if (!form || form.length !== 1 || !["'self'", "'none'"].includes(form[0])) {
     return result(false, "form-action must be exactly 'self' or 'none'");
   }
+  const ancestors = directives.get('frame-ancestors');
+  if (!ancestors || ancestors.length !== 1 || !["'self'", "'none'"].includes(ancestors[0])) {
+    return result(false, "frame-ancestors must be exactly 'self' or 'none'");
+  }
   return result(true);
 }
 
 export function validateFrameProtection(xFrameOptions, cspValue) {
-  const xfo = String(xFrameOptions || '').trim().toUpperCase();
-  if (xfo === 'DENY' || xfo === 'SAMEORIGIN') return result(true, `x-frame-options: ${xfo}`);
-
   const directives = parseCsp(cspValue);
   const ancestors = directives && directives.get('frame-ancestors');
-  if (!ancestors || ancestors.length === 0) {
-    return result(false, xFrameOptions ? 'X-Frame-Options is not DENY or SAMEORIGIN' : 'frame protection is missing');
+  if (ancestors) {
+    if (ancestors.length !== 1 || !["'self'", "'none'"].includes(ancestors[0])) {
+      return result(false, "frame-ancestors must be exactly 'self' or 'none'");
+    }
+    return result(true, 'CSP frame-ancestors');
   }
-  if (ancestors.length !== 1 || !["'self'", "'none'"].includes(ancestors[0])) {
-    return result(false, "frame-ancestors must be exactly 'self' or 'none'");
-  }
-  return result(true, 'CSP frame-ancestors');
+  const xfo = String(xFrameOptions || '').trim().toUpperCase();
+  if (xfo === 'DENY' || xfo === 'SAMEORIGIN') return result(true, `x-frame-options: ${xfo}`);
+  return result(false, xFrameOptions ? 'X-Frame-Options is not DENY or SAMEORIGIN' : 'frame protection is missing');
 }
 
 export function validateHsts(value) {

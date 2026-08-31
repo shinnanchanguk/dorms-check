@@ -66,6 +66,7 @@
     "USE-WITH-AI.md"
   ],
   "dependencies": {
+    "@iarna/toml": "2.2.5",
     "hwp-convert": "1.13.0",
     "pdfkit": "0.17.2"
   }

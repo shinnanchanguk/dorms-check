@@ -6,6 +6,25 @@ function hostOf(url) {
   try { return new URL(url).hostname; } catch { return null; }
 }
 
+export function validateHttpsRedirect(expectedUrl, status, location, finalUrl = '') {
+  let expected;
+  try { expected = new URL(expectedUrl); }
+  catch { return { ok: false, reason: 'expected URL is malformed' }; }
+  expected.protocol = 'https:';
+  if (expected.port === '80') expected.port = '';
+  const isRedirect = status >= 300 && status < 400;
+  const candidates = isRedirect ? (location ? [location] : []) : (finalUrl ? [finalUrl] : []);
+  for (const value of candidates) {
+    try {
+      const candidate = new URL(value, `http://${expected.host}/`);
+      if (candidate.protocol === 'https:' && candidate.origin === expected.origin) {
+        return { ok: true, url: candidate.toString(), origin: candidate.origin };
+      }
+    } catch { /* A malformed redirect is not an HTTPS enforcement result. */ }
+  }
+  return { ok: false, reason: 'redirect is not HTTPS on the exact expected deployment origin' };
+}
+
 // 협상된 TLS 프로토콜 버전·인증서 유효성 '관측'(구버전 TLS·인증서 경고 보고용). 실패해도 스캔은 계속.
 // 주의: rejectUnauthorized:false 는 '나쁜 인증서를 신뢰'하려는 게 아니라, 잘못된 인증서에서도
 // 연결을 끊지 않고 sock.authorized / authorizationError 를 읽어 '인증서 무효'를 결함으로 보고하기 위함이다.
@@ -40,7 +59,7 @@ export async function checkTls(mainRes, url, opts = {}) {
     const requestImpl = opts.requestImpl || request;
     const r = await requestImpl('http://' + host, { redirect: 'manual', captureBody: false, timeout: 12000 });
     const loc = r.headers['location'] || '';
-    redirectsHttps = (r.status >= 300 && r.status < 400 && /^https:\/\//i.test(loc)) || (r.finalUrl || '').startsWith('https://');
+    redirectsHttps = validateHttpsRedirect(url, r.status, loc, r.finalUrl || '').ok;
     httpObserved = `HTTP ${r.status}${loc ? ' -> ' + loc : ''}`;
   }
   results.push({

@@ -4,10 +4,10 @@ import { checkClientBundle } from './client-bundle.js';
 import { checkHeadersConfig } from './headers-config.js';
 import { checkDangerous } from './dangerous.js';
 
-export function runStaticScan(root) {
+export function runStaticScan(root, options = {}) {
   const items = [];
-  try { items.push(...checkSecrets(root)); } catch { /* skip */ }
-  try { items.push(...checkClientBundle(root)); } catch { /* skip */ }
+  try { items.push(...checkSecrets(root, options)); } catch { /* Missing required strict items become INCOMPLETE. */ }
+  try { items.push(...checkClientBundle(root, options)); } catch { /* Missing required strict items become INCOMPLETE. */ }
   try { items.push(...checkHeadersConfig(root)); } catch { /* skip */ }
   try { items.push(...checkDangerous(root)); } catch { /* skip */ }
   return { items };
