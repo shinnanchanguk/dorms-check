@@ -62,13 +62,17 @@ dcheck hooks status --agents codex,claude,gemini --json
 
 사용자 지정 루트는 절대 경로여야 합니다. status는 각 에이전트의 실제 `configRoot`와 `configRootSource`를 보여 줍니다. 세 설정 모두 `~/.dorms-check/hooks/vercel-guard.cjs`를 호출하며, PATH의 `node` 문자열이 아니라 설치 시 검증한 현재 호스트의 절대 Node 실행 파일을 기록합니다. timeout은 120초입니다. 기존 설정은 보존하고, 바꾸기 전 사본은 `~/.dorms-check/backups/`에 둡니다. 모든 선택 설정을 먼저 파싱한 뒤 쓰므로 뒤쪽 JSON이 손상된 경우 앞쪽 설정만 바뀌지 않습니다. 같은 설치 명령을 다시 실행해도 중복 훅을 만들지 않습니다.
 
-Claude의 `Bash|PowerShell` matcher는 native PowerShell 우회를 놓치지 않기 위한 범위입니다. 그러나 Windows의 alias, function, `.ps1`, `.cmd` 실행 파일 우선순위를 훅 입력만으로 결정적으로 증명할 수 없으므로 native Windows와 PowerShell에서 Vercel 명령은 조회까지 모두 fail-closed 차단합니다. production write의 exact 허용 흐름은 macOS/Linux Bash 또는 별도로 훅을 설치한 WSL에서만 실행합니다. native PowerShell에서 시작했다면 WSL로 이동한 뒤 code strict부터 같은 호스트에서 다시 수행합니다.
+native Windows에서 `hooks install`은 기본 제공 Windows PowerShell 5.1 `powershell.exe`와 `Get-Command vercel -All -CommandType Application`으로 exact `vercel.cmd`를 찾고 `vercel@59.10.0`인지 확인한 뒤 절대 경로·SHA-256·버전과 PowerShell 경로·해시를 manifest에 고정합니다. 그 실제 CLI는 직접 노출하지 않고 같은 strict gate를 스스로 실행하는 관리형 `~/.dorms-check/hooks/vercel.cmd` proxy를 `windowsVercelExecutable`로 제공합니다. 이 proxy는 Codex의 `PreToolUse`가 호스트 문제로 발화하지 않아도 영수증 검사 없이 backing Vercel CLI를 실행하지 않습니다. status의 `windowsPowerShellSupported`, `windowsVercelExecutableVerified`, `windowsVercelExecutable`, `windowsVercelExecutableSha256`, `windowsVercelBackingExecutable`, `windowsVercelBackingExecutableSha256`, `windowsVercelVersion`, `windowsPowerShellExecutableSha256`를 모두 확인합니다. 명령은 status가 반환한 proxy 경로 철자를 대소문자까지 그대로 복사해야 합니다. PowerShell 7 셸에서도 proxy 호출은 가능하지만 설치와 Codex CMD launcher 검증에는 Windows PowerShell 5.1이 필요합니다.
+
+Windows 업데이트나 npm 재설치로 proxy, backing `vercel.cmd`, PowerShell 해시 중 하나라도 바뀌면 훅과 proxy는 fail-closed로 멈춥니다. `vercel@59.10.0`을 확인한 뒤 훅 설치를 다시 실행해 새 해시를 고정합니다.
+
+Codex는 Windows의 CMD 훅 런처 제약을 피하도록 고정 PowerShell의 quote-free `-EncodedCommand`를 기록하고, Claude는 절대 Node exec form, Gemini는 PowerShell call-operator 형식으로 같은 guard를 호출합니다. 검사 대상 Vercel 명령은 관리형 proxy 경로를 직접 쓴 `& '<exact windowsVercelExecutable>' <literal args>` 단일 형식만 허용합니다. alias, function, `vercel.ps1`, backing 또는 다른 `.cmd`·`.exe`, 변수, splatting, `--%`, backtick, 동적 cmdlet, wrapper, pipe, redirect, 복합 명령은 차단합니다.
 
 `hooks install`과 `hooks status`는 설정 파일을 쓴 사실만 `configured`로 보고합니다. 현재 실행 중인 호스트가 훅을 로드하고 신뢰했는지는 관찰할 수 없으므로 `activation: unknown`, `ready: false`, 종료 코드 3을 유지합니다. 이것을 PASS로 바꾸어 해석하지 않습니다. `hooks status --json`의 에이전트별 `configRoot`, `configRootSource`와 공통 `nodeExecutable`, `nodeExecutableVerified`, `hostPlatform`, `home`, `isWSL`, `installationScope`, `timeoutSeconds`, `hostTimeoutMayFailOpen`도 확인합니다. 설치 범위는 `current-host-only`입니다. Windows와 WSL은 홈과 프로세스가 다른 별도 호스트이므로 실제 배포에 쓸 쪽마다 설치·확인해야 합니다. 사용하려는 호스트가 덮이지 않으면 READY로 보고하지 않습니다. 호스트 자체가 command hook timeout을 fail-open으로 처리할 가능성은 로컬 훅이 제거할 수 없습니다.
 
 설정 파일이 올바르다는 것과 현재 실행 중인 AI 프로세스가 새 훅을 이미 불러왔다는 것은 다릅니다. 설치 뒤 각 CLI를 재시작하고 필요한 신뢰 확인을 사용자가 완료해야 합니다. Codex는 `/hooks`에서 새 훅을 검토하고 신뢰해야 할 수 있습니다. 이 신뢰 단계를 자동 우회하지 않습니다. Codex TOML이 파싱되지 않거나 `features.hooks=false`, 과거 별칭 `features.codex_hooks=false`이면 configured가 아닙니다. Gemini의 `hooksConfig.enabled=false` 또는 `hooksConfig.disabled`에 dorms-check 훅 이름이 있어도 configured가 아닙니다. Codex의 `--disable hooks`, Claude의 `--bare`, `--safe-mode`, `--settings`, `--setting-sources`, Gemini의 프로젝트·시스템 설정처럼 실행 시점 또는 상위 우선순위 설정은 이 사용자 설정 검사만으로 관찰할 수 없습니다.
 
-재시작과 신뢰 뒤 각 실제 에이전트 셸에서 `vercel promote https://dcheck-hook-challenge.invalid`를 한 번 요청합니다. 올바른 결과는 Vercel CLI가 실행되기 전에 dorms-check 훅이 exit 2로 차단하는 것입니다. `.invalid`는 실제 배포 대상이 아니므로 호스트가 훅을 불러오지 않은 경우에도 성공적인 promote 대상이 될 수 없습니다. 이 실제 차단을 보지 못하면 NOT READY이며 배포를 진행하지 않습니다. CLI status 자체는 이 외부 관측을 저장하거나 PASS로 주장하지 않습니다.
+재시작과 신뢰 뒤 각 실제 에이전트 셸에서 안전한 invalid-target promote를 한 번 요청합니다. Bash는 `vercel promote https://dcheck-hook-challenge.invalid`, native PowerShell은 status의 실제 경로를 넣은 `& '<exact windowsVercelExecutable>' promote https://dcheck-hook-challenge.invalid`를 씁니다. 올바른 결과는 backing Vercel CLI가 실행되기 전에 exit 2로 차단되는 것입니다. Windows의 관리형 proxy 차단은 호스트 훅 발화 여부와 무관하게 동작합니다. 이 실제 차단을 보지 못하면 NOT READY이며 배포를 진행하지 않습니다.
 
 제거:
 
@@ -106,13 +110,19 @@ Git 조회는 replace refs를 무시한 실제 HEAD를 사용합니다. `GIT_DIR
 
 ### 2. 도메인을 붙이지 않은 staged production
 
-macOS, Linux, WSL Bash 전용:
+macOS, Linux, WSL Bash:
 
 ```bash
 vercel --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=0123456789abcdef0123456789abcdef01234567 --yes
 ```
 
-위 SHA는 형식 예시입니다. AI는 먼저 `git rev-parse HEAD` 결과를 읽고, 실제 40자리 값을 명령 문자열에 직접 넣어 독립된 한 명령으로 실행합니다. `$SHA`, `${SHA}`, `%SHA%`, 명령 치환을 Vercel 명령에 넣으면 훅이 차단합니다. `githubDeployment=1`과 `githubCommitSha=<실제 HEAD>`는 Vercel CLI 배포에 Git 정보를 연결하는 정확히 두 metadata이며, 중복·추가 metadata도 허용하지 않습니다.
+native Windows PowerShell:
+
+```powershell
+& 'C:\Users\me\.dorms-check\hooks\vercel.cmd' --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=0123456789abcdef0123456789abcdef01234567 --yes
+```
+
+위 SHA와 Windows 경로는 형식 예시입니다. AI는 `git rev-parse HEAD`의 실제 40자리 값과 `hooks status --json`의 실제 `windowsVercelExecutable`을 명령 문자열에 직접 넣습니다. `$SHA`, `$path`, `${...}`, `%...%`, 명령 치환, splatting을 Vercel 명령에 넣으면 차단합니다. `githubDeployment=1`과 `githubCommitSha=<실제 HEAD>`는 정확히 두 metadata이며, 중복·추가 metadata도 허용하지 않습니다.
 
 Vercel CLI는 성공하면 stdout에 정확한 Deployment URL을 출력합니다. AI는 그 값을 그대로 보관해야 합니다. `--skip-domain` 없는 직접 production 배포, code 영수증 없음·만료, 저장소 루트가 아닌 위치, `--prebuilt`, `--archive`, `--cwd`, `--local-config`, `--project`, `--scope`, `--env`, `--build-env` 같은 source·artifact·project override는 차단합니다. `deploy`는 명령의 첫 subcommand로 정확히 한 번만, 비대화형 `--yes`는 한 번만 선택적으로 덧붙일 수 있습니다. `vercel deploy deploy ...`처럼 두 번째 `deploy`나 다른 positional source path를 넣는 형식은 차단합니다.
 
@@ -160,9 +170,14 @@ dcheck gate verify --git-sha 0123456789abcdef0123456789abcdef01234567 --vercel-d
 vercel promote https://my-app-abc123.vercel.app
 ```
 
-native Windows PowerShell에서는 `dcheck gate verify` 조회까지만 실행할 수 있고 `vercel promote`는 훅이 차단합니다. promote는 code strict부터 영수증을 만든 동일한 macOS/Linux Bash 또는 WSL 호스트에서 실행합니다.
+native Windows PowerShell:
 
-SHA와 URL은 예시를 복사하는 것이 아니라 직전 출력의 실제 literal 값으로 바꿉니다. `vercel promote`는 영수증에 기록된 정확한 URL 또는 검증된 ID 하나만 받는 단일 literal 명령이어야 합니다. 셸 변수, 추가 옵션, `npx`·`pnpm`·`bunx`, package script, 셸·Node 스크립트, `;`, `&&`, pipe, redirect를 쓰면 차단합니다.
+```powershell
+dcheck gate verify --git-sha 0123456789abcdef0123456789abcdef01234567 --vercel-deployment https://my-app-abc123.vercel.app --url https://my-app-abc123.vercel.app --json
+& 'C:\Users\me\.dorms-check\hooks\vercel.cmd' promote https://my-app-abc123.vercel.app
+```
+
+SHA, URL, Windows proxy 경로는 예시를 복사하지 말고 직전 출력의 실제 literal 값으로 바꿉니다. promote는 영수증에 기록된 정확한 URL 또는 검증된 ID 하나만 받는 단일 literal 명령이어야 합니다. 셸 변수, 추가 옵션, wrapper, package script, `;`, `&&`, pipe, redirect를 쓰면 차단합니다.
 
 ### Vercel 쓰기 명령의 정확한 규칙
 
@@ -185,8 +200,9 @@ strict 훅은 위의 검증된 staged와 exact promote 두 쓰기만 허용합�
 
 ## 정확한 한계
 
-- 원격 상태 변경은 macOS/Linux Bash 또는 WSL의 현재 Git 루트에서 실행하는 검증된 staged 또는 promote 단 하나의 literal canonical `vercel` 명령만 허용합니다. native Windows와 PowerShell의 Vercel 명령은 실행 파일 해석을 증명할 수 없어 조회도 차단합니다. `vc` 축약과 명시적 `.cmd`·`.exe` 토큰은 버전 검사 대상과 실제 실행 파일이 갈라질 수 있어 차단합니다. 알려진 wrapper와 스크립트, 경로 기반 또는 명령에 상태 변경 동작이 드러난 이름 변경 실행 파일, 동적 변수, 중첩 셸, 복합 명령을 보수적으로 차단합니다. 지원 Bash 호스트에서도 read-only는 명시적 command+verb allowlist만 허용합니다.
-- 훅은 셸 문법 전체를 안전하게 증명할 수 있다고 주장하지 않습니다. command substitution, 실행 파일 위치의 변수 확장, Bash ANSI-C quoting, `eval`, Windows caret·환경변수 확장·`call`, PowerShell backtick·call operator·동적 실행 cmdlet, 셸·런타임·로컬 경로 실행 파일, package manager·script·workspace·task runner, `exec`·`xargs`·`awk`·`busybox` 같은 process launcher를 보수적으로 차단합니다. 이 때문에 strict 훅이 활성화된 AI 셸에서는 Vercel과 무관한 `node`, `python`, `npm install`, `npm run`, `make` 같은 간접 실행도 막힐 수 있습니다. 고정 dorms-check 설치와 앱 의존성 설치는 훅 설치 전에 끝내고, 이후 필요한 작업은 검토 가능한 literal 직접 실행 파일 명령으로 나눕니다. production 변경은 문서의 두 정확한 Vercel 형식만 사용합니다.
+- 원격 상태 변경은 현재 Git 루트의 검증된 staged 또는 promote 단 하나의 literal 명령만 허용합니다. macOS/Linux/WSL은 canonical `vercel`, native Windows PowerShell은 status의 관리형 `windowsVercelExecutable` proxy 절대 경로만 씁니다. `vc`, backing CLI 직접 실행, 다른 `.cmd`·`.exe`, wrapper, 변수, 중첩 셸, 복합 명령을 차단합니다. read-only도 명시적 command+verb allowlist만 허용합니다.
+- 훅은 셸 문법 전체를 증명하지 않습니다. command substitution, 변수 확장, Bash ANSI-C quoting, `eval`, Windows caret·`call`, PowerShell backtick·splatting·동적 cmdlet, runtime·package·workspace·task launcher를 보수적으로 차단합니다. 관리형 Windows proxy는 인자를 받은 뒤 동일한 strict runtime을 다시 실행하여 호스트 훅 미발화에 대비하지만, 같은 사용자가 backing CLI·manifest·proxy를 악의적으로 변조하는 것까지 막는 시스템 보안 경계는 아닙니다.
+- backing `vercel.cmd` 해시와 매 쓰기 직전의 `--version` 확인은 예상치 못한 버전 변경을 차단하지만, npm 패키지 트리 전체의 암호학적 공급망 증명은 아닙니다. 정확히 `vercel@59.10.0`을 설치하고 같은 사용자 권한의 악의적 변조는 별도 운영 통제로 다룹니다.
 - 설치는 현재 호스트와 현재 홈만 보호합니다. Windows와 WSL, 다른 사용자, 다른 컴퓨터에는 자동 전파되지 않습니다. 훅 timeout은 120초지만 호스트가 timeout을 fail-open으로 처리할 수 있다는 한계가 있습니다.
 - Vercel 대시보드에서 직접 누르는 배포, Git push로 자동 실행되는 production 배포, 다른 CI 사용자의 명령은 이 로컬 훅이 볼 수 없습니다. strict 흐름을 쓸 프로젝트는 Vercel의 Git production 자동 배포와 임의 도메인 자동 연결을 별도로 제한해야 합니다.
 - 같은 운영체제 사용자와 같은 권한을 가진 악의적 코드는 로컬 훅이나 로컬 HMAC 키를 바꿀 수 있습니다. 이 게이트는 실수와 AI의 우발적 우회를 막는 장치이지, 관리자 권한 공격자에 대한 보안 경계가 아닙니다.

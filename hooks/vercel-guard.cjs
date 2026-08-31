@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const path = require('node:path');
 const runtime = require('./strict-runtime.cjs');
 
 function readStdin() {
@@ -46,11 +47,25 @@ async function main() {
     process.stderr.write('dorms-check: 지원하는 셸 tool_name을 훅 입력에서 확인하지 못해 안전하게 차단했습니다.\n');
     process.exit(2);
   }
-  const verdict = runtime.evaluateVercelCommand(command, cwd, { shellTool: toolName });
-  if ((process.platform === 'win32' || toolName === 'PowerShell') && verdict.relevant) {
-    process.stderr.write('dorms-check: native Windows 또는 PowerShell에서는 Vercel 실행 파일 해석을 결정적으로 증명할 수 없어 strict Vercel 명령을 차단했습니다. Bash 환경 또는 WSL의 literal vercel 명령을 사용하세요.\n');
-    process.exit(2);
+  const runtimeOptions = { shellTool: toolName, platform: process.platform };
+  if (process.platform === 'win32' || toolName === 'PowerShell') {
+    try {
+      const pinned = runtime.loadPinnedWindowsVercelExecutable({ hookManifestPath: path.join(__dirname, 'manifest.json') });
+      Object.assign(runtimeOptions, {
+        vercelExecutable: pinned.path,
+        vercelExecutableSha256: pinned.sha256,
+        vercelExecutableVersion: pinned.version,
+        vercelBackingExecutable: pinned.backingPath,
+        vercelBackingExecutableSha256: pinned.backingSha256,
+        powerShellExecutable: pinned.powerShellPath,
+        powerShellExecutableSha256: pinned.powerShellSha256,
+      });
+    } catch (error) {
+      process.stderr.write(`dorms-check: Windows strict 실행 파일 고정을 확인하지 못해 안전하게 차단했습니다: ${error.message}\n`);
+      process.exit(2);
+    }
   }
+  const verdict = runtime.evaluateVercelCommand(command, cwd, runtimeOptions);
   if (verdict.relevant && !verdict.allowed) {
     process.stderr.write(`dorms-check: ${verdict.reason}\n`);
     process.exit(2);

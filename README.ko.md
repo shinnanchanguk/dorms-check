@@ -37,13 +37,15 @@ npx -y github:shinnanchanguk/dorms-check submit      # 다 통과하면 증빙�
 
 ### Vercel 배포를 실제로 막는 strict 모드
 
-배포 직전 강제 게이트가 필요하면 기본 브랜치 최신판이 아니라 **검토를 마친 정확한 커밋 SHA**와 검증한 `vercel@59.10.0` CLI를 고정해 실행하세요. strict 모드는 clean Git SHA/tree, Git에 묶인 배포 입력, `.vercel/project.json`의 project/org와 파일 digest, exact Vercel URL/ID·source SHA, 현재 gate runtime에 묶인 15분짜리 서명 영수증을 사용자 홈에만 만듭니다. production 변경은 macOS/Linux Bash 또는 WSL의 단일 literal canonical `vercel` 명령만 허용하며 native Windows와 PowerShell의 Vercel 명령은 fail-closed 차단합니다. 버전 검사 대상과 실제 실행 파일이 갈라지지 않도록 `vc` 축약과 명시적 `.cmd`·`.exe` 토큰은 차단합니다. staged에는 `githubDeployment=1`과 full `githubCommitSha` metadata가 모두 필요합니다. 검증된 staged와 promote 외 모든 Vercel 쓰기는 차단하고 지원 Bash 호스트에서만 명시적 list/inspect/status/get/help/version/whoami 조회를 허용합니다. 간접 runtime·script·workspace·task launcher와 동적 셸 문법도 보수적으로 차단합니다. 훅 상태의 `configured`는 절대 Node 경로와 사용자 설정 파일만 확인한 결과이며, 사용자 지정 `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME`을 따릅니다. 실제 호스트 활성화는 재시작·신뢰·안전한 차단 challenge 전까지 `unknown`입니다.
+배포 직전 강제 게이트가 필요하면 **검토를 마친 정확한 커밋 SHA**와 `vercel@59.10.0`을 고정하세요. strict 모드는 clean Git, Git에 묶인 배포 입력, `.vercel/project.json`, exact Vercel URL/ID·source SHA, gate runtime에 묶인 15분짜리 서명 영수증을 사용자 홈에만 만듭니다. macOS/Linux/WSL은 단일 literal `vercel` 명령을 씁니다. native Windows는 `Get-Command`로 찾은 backing `vercel.cmd`·PowerShell의 경로와 해시, Vercel 버전을 고정한 뒤 strict 관리형 `windowsVercelExecutable` proxy를 만듭니다. PowerShell은 `& '<status의 windowsVercelExecutable>' <literal args>`만 씁니다. `vc`, backing 또는 다른 `.cmd`·`.exe`, 변수·splatting·backtick·wrapper·복합 명령은 차단합니다. staged에는 `githubDeployment=1`과 full literal `githubCommitSha`가 모두 필요합니다. 검증된 staged와 promote 외 모든 Vercel 쓰기는 차단합니다. 훅 `configured`는 설정과 고정 경로 무결성만 확인하며, 실제 호스트 활성화는 차단 challenge 전까지 `unknown`입니다.
 
 ```bash
 npm install --global vercel@59.10.0
 dcheck hooks install --global --agents codex,claude,gemini --provider vercel --security-only
 dcheck hooks status --agents codex,claude,gemini --json
 ```
+
+Windows status의 `windowsVercelBackingExecutable`은 `Get-Command`로 검증한 실제 CLI이고, 사용할 `windowsVercelExecutable`은 호스트 훅 미발화에도 영수증을 검사하는 관리형 proxy입니다.
 
 전체 순서, code/live 명령, 종료 코드, 훅 설정 위치와 한계는 [`docs/STRICT-SECURITY-GATE.ko.md`](./docs/STRICT-SECURITY-GATE.ko.md)에 있습니다. 일반 점검용 `github:` 최신판 예시와 strict 배포 게이트용 고정 SHA를 혼동하지 마세요.
 

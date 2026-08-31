@@ -1,0 +1,26 @@
+name: Strict Windows PowerShell
+
+on:
+  push:
+    branches:
+      - main
+      - codex/dorms-check-strict-20260831
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm install --global vercel@59.10.0
+      - run: npm run test:windows

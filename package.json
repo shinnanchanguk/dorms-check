@@ -15,6 +15,7 @@
     "assets:internal-approval": "node scripts/generate-internal-approval-template.mjs",
     "selftest": "node verify/self-test.js && node verify/strict-test.js",
     "test:strict": "node verify/strict-test.js",
+    "test:windows": "node verify/windows-powershell-test.js",
     "scan": "node bin/dcheck.js scan"
   },
   "keywords": [

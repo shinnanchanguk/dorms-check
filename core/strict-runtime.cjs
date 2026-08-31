@@ -18,6 +18,8 @@ const RECEIPT_KIND = 'dorms-check.strict-security-receipt';
 const RECEIPT_TTL_MS = 15 * 60 * 1000;
 const GATE_SCHEMA = 5;
 const SUPPORTED_VERCEL_CLI_VERSION = '59.10.0';
+const HOOK_MANIFEST_SCHEMA = 4;
+const HOOK_MANAGED_TAG = 'dorms-check-security-only';
 const REQUIRED_BY_PHASE = Object.freeze({
   code: Object.freeze([
     'code.hardcoded-secret',
@@ -76,7 +78,10 @@ function ambientGitOverrides(environment = process.env) {
     'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS', 'GIT_ATTR_SOURCE',
   ]);
   return Object.entries(environment || {})
-    .filter(([name, value]) => String(value || '') && (exact.has(name) || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)))
+    .filter(([name, value]) => {
+      const normalized = String(name).toUpperCase();
+      return String(value || '') && (exact.has(normalized) || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(normalized));
+    })
     .map(([name]) => name)
     .sort();
 }
@@ -86,24 +91,181 @@ function findGitRoot(cwd) {
   catch { return null; }
 }
 
+function isAbsoluteExecutablePath(value) {
+  return path.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
+function validateWindowsVercelExecutable(candidate, expectedSha256 = '') {
+  const requested = String(candidate || '').trim();
+  if (!requested || !isAbsoluteExecutablePath(requested) || /[\0\r\n]/.test(requested)) {
+    throw new Error('Windows Vercel 실행 파일은 줄바꿈이 없는 절대 vercel.cmd 경로여야 합니다.');
+  }
+  if (path.win32.basename(requested).toLowerCase() !== 'vercel.cmd') {
+    throw new Error('Windows strict 게이트는 Get-Command vercel로 확인한 vercel.cmd만 고정합니다.');
+  }
+  let stat;
+  let resolved;
+  let bytes;
+  try {
+    stat = fs.lstatSync(requested);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 1024 * 1024) {
+      throw new Error('regular non-symlink 1 MiB 이하 파일이 아닙니다.');
+    }
+    resolved = fs.realpathSync(requested);
+    if (!isAbsoluteExecutablePath(resolved) || path.win32.basename(resolved).toLowerCase() !== 'vercel.cmd') {
+      throw new Error('실제 경로가 절대 vercel.cmd가 아닙니다.');
+    }
+    if (/[\0\r\n]/.test(resolved)) throw new Error('실제 경로에 줄바꿈이 있습니다.');
+    bytes = fs.readFileSync(resolved);
+  } catch (error) {
+    throw new Error(`Windows Vercel 실행 파일을 안전하게 확인하지 못했습니다: ${requested} (${error.message})`);
+  }
+  const executableSha256 = sha256(bytes);
+  if (expectedSha256 && executableSha256 !== expectedSha256) {
+    throw new Error('고정한 Windows vercel.cmd 파일이 훅 설치 뒤 바뀌었습니다. vercel@59.10.0을 확인하고 훅을 다시 설치하세요.');
+  }
+  return { path: resolved, sha256: executableSha256 };
+}
+
+function validateWindowsPowerShellExecutable(candidate, expectedSha256 = '') {
+  const requested = String(candidate || '').trim();
+  const name = path.win32.basename(requested).toLowerCase();
+  if (!requested || !isAbsoluteExecutablePath(requested) || /[\0\r\n]/.test(requested) || !['powershell.exe', 'pwsh.exe'].includes(name)) {
+    throw new Error('Windows PowerShell 실행 파일은 절대 powershell.exe 또는 pwsh.exe 경로여야 합니다.');
+  }
+  let resolved;
+  let bytes;
+  try {
+    const stat = fs.lstatSync(requested);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 10 * 1024 * 1024) {
+      throw new Error('regular non-symlink 10 MiB 이하 파일이 아닙니다.');
+    }
+    resolved = fs.realpathSync(requested);
+    const resolvedName = path.win32.basename(resolved).toLowerCase();
+    if (!isAbsoluteExecutablePath(resolved) || !['powershell.exe', 'pwsh.exe'].includes(resolvedName) || /[\0\r\n]/.test(resolved)) {
+      throw new Error('실제 경로가 절대 PowerShell 실행 파일이 아닙니다.');
+    }
+    bytes = fs.readFileSync(resolved);
+  } catch (error) {
+    throw new Error(`Windows PowerShell 실행 파일을 안전하게 확인하지 못했습니다: ${requested} (${error.message})`);
+  }
+  const executableSha256 = sha256(bytes);
+  if (expectedSha256 && executableSha256 !== expectedSha256) {
+    throw new Error('훅 설치 때 고정한 Windows PowerShell 실행 파일이 바뀌었습니다. 훅을 다시 설치하세요.');
+  }
+  return { path: resolved, sha256: executableSha256 };
+}
+
+function powerShellSingleQuoted(value) {
+  const text = String(value);
+  if (/[\0\r\n]/.test(text)) throw new Error('PowerShell literal에 줄바꿈이나 NUL을 넣을 수 없습니다.');
+  return `'${text.replaceAll("'", "''")}'`;
+}
+
+function pinnedWindowsVercelManifestPath(options = {}) {
+  if (options.hookManifestPath) return path.resolve(options.hookManifestPath);
+  return path.join(resolveHome(options), '.dorms-check', 'hooks', 'manifest.json');
+}
+
+function loadPinnedWindowsVercelExecutable(options = {}) {
+  const manifestPath = pinnedWindowsVercelManifestPath(options);
+  let manifest;
+  try {
+    const stat = fs.lstatSync(manifestPath);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 1024 * 1024) {
+      throw new Error('regular non-symlink 1 MiB 이하 파일이 아닙니다.');
+    }
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`Windows strict 훅 manifest를 읽지 못했습니다: ${manifestPath} (${error.message})`);
+  }
+  if (manifest?.schemaVersion !== HOOK_MANIFEST_SCHEMA || manifest?.tag !== HOOK_MANAGED_TAG) {
+    throw new Error('Windows strict 훅 manifest 버전 또는 관리 태그가 현재 runtime과 다릅니다. 훅을 다시 설치하세요.');
+  }
+  const record = manifest?.windowsVercelExecutable;
+  if (!record
+    || record.version !== SUPPORTED_VERCEL_CLI_VERSION
+    || !/^[a-f0-9]{64}$/.test(String(record.sha256 || ''))
+    || !/^[a-f0-9]{64}$/.test(String(record.backingSha256 || ''))
+    || !/^[a-f0-9]{64}$/.test(String(record.powerShellSha256 || ''))) {
+    throw new Error(`Windows strict 훅에 고정 Vercel CLI ${SUPPORTED_VERCEL_CLI_VERSION} 실행 파일 정보가 없습니다.`);
+  }
+  for (const name of ['strict-runtime.cjs', 'vercel-proxy.cjs']) {
+    const file = path.join(path.dirname(manifestPath), name);
+    let digest = '';
+    try {
+      const stat = fs.lstatSync(file);
+      if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 10 * 1024 * 1024) throw new Error('regular non-symlink 10 MiB 이하 파일이 아닙니다.');
+      digest = sha256(fs.readFileSync(file));
+    } catch (error) {
+      throw new Error(`Windows strict 관리 파일 ${name}을 확인하지 못했습니다: ${error.message}`);
+    }
+    if (manifest?.files?.[name] !== digest) throw new Error(`Windows strict 관리 파일 ${name}이 설치 뒤 바뀌었습니다. 훅을 다시 설치하세요.`);
+  }
+  if (manifest?.files?.['vercel.cmd'] !== record.sha256) {
+    throw new Error('Windows strict 관리 proxy manifest 해시가 일치하지 않습니다.');
+  }
+  const executable = validateWindowsVercelExecutable(record.path, record.sha256);
+  const backing = validateWindowsVercelExecutable(record.backingPath, record.backingSha256);
+  const powerShell = validateWindowsPowerShellExecutable(record.powerShellPath, record.powerShellSha256);
+  return {
+    path: executable.path,
+    sha256: executable.sha256,
+    version: record.version,
+    backingPath: backing.path,
+    backingSha256: backing.sha256,
+    powerShellPath: powerShell.path,
+    powerShellSha256: powerShell.sha256,
+    discoveredBy: record.discoveredBy || '',
+    manifestPath,
+  };
+}
+
+function resolveVercelExecutable(options = {}) {
+  if (options.vercelBackingExecutable) {
+    const executable = validateWindowsVercelExecutable(options.vercelBackingExecutable, options.vercelBackingExecutableSha256 || '');
+    const powerShell = validateWindowsPowerShellExecutable(options.powerShellExecutable, options.powerShellExecutableSha256 || '');
+    return {
+      ...executable,
+      version: options.vercelExecutableVersion || '',
+      powerShellPath: powerShell.path,
+      powerShellSha256: powerShell.sha256,
+    };
+  }
+  if (options.vercelExecutable) {
+    const executable = validateWindowsVercelExecutable(options.vercelExecutable, options.vercelExecutableSha256 || '');
+    const powerShell = validateWindowsPowerShellExecutable(options.powerShellExecutable, options.powerShellExecutableSha256 || '');
+    return {
+      ...executable,
+      version: options.vercelExecutableVersion || '',
+      powerShellPath: powerShell.path,
+      powerShellSha256: powerShell.sha256,
+    };
+  }
+  const pinned = loadPinnedWindowsVercelExecutable(options);
+  return {
+    path: pinned.backingPath,
+    sha256: pinned.backingSha256,
+    version: pinned.version,
+    powerShellPath: pinned.powerShellPath,
+    powerShellSha256: pinned.powerShellSha256,
+  };
+}
+
 function runVercelCli(args, spawnOptions = {}, options = {}) {
   const runner = options.execFileSync || execFileSync;
   const platform = options.platform || process.platform;
-  if (platform !== 'win32') return runner('vercel', args, spawnOptions);
+  const pinned = options.vercelExecutable || options.vercelBackingExecutable || platform === 'win32'
+    ? resolveVercelExecutable(options)
+    : null;
+  if (platform !== 'win32') return runner(pinned?.path || 'vercel', args, spawnOptions);
 
-  const environment = options.env || process.env;
-  const configured = String(options.comspec || environment.ComSpec || environment.COMSPEC || '').trim();
-  const systemRoot = String(environment.SystemRoot || environment.SYSTEMROOT || '').trim();
-  const fallback = systemRoot ? path.win32.join(systemRoot, 'System32', 'cmd.exe') : '';
-  const commandProcessor = configured || fallback;
-  if (!commandProcessor || !path.win32.isAbsolute(commandProcessor) || path.win32.basename(commandProcessor).toLowerCase() !== 'cmd.exe') {
-    throw new Error('Windows cmd.exe 절대 경로를 확인하지 못했습니다.');
-  }
   const safeArgs = args.map(value => String(value));
   if (safeArgs.some(value => !value || /[\s%&|<>^!"'()`]/.test(value))) {
-    throw new Error('Windows Vercel 내부 명령에 안전하게 전달할 수 없는 문자가 있습니다.');
+    throw new Error('Windows PowerShell Vercel 내부 명령에 안전하게 전달할 수 없는 문자가 있습니다.');
   }
-  return runner(commandProcessor, ['/d', '/s', '/c', ['vercel', ...safeArgs].join(' ')], spawnOptions);
+  const command = ['&', powerShellSingleQuoted(pinned.path), ...safeArgs.map(powerShellSingleQuoted)].join(' ');
+  return runner(pinned.powerShellPath, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], spawnOptions);
 }
 
 function verifyVercelCliVersion({ cwd = process.cwd() } = {}, options = {}) {
@@ -117,6 +279,7 @@ function verifyVercelCliVersion({ cwd = process.cwd() } = {}, options = {}) {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
         env: options.env || process.env,
+        timeout: 10000,
       }, options);
     }
   } catch (error) {
@@ -137,7 +300,13 @@ function verifyVercelCliVersion({ cwd = process.cwd() } = {}, options = {}) {
       reason: `strict source binding은 Vercel CLI ${SUPPORTED_VERCEL_CLI_VERSION}만 검증했습니다. npm install --global vercel@${SUPPORTED_VERCEL_CLI_VERSION}로 고정 설치하세요.`,
     };
   }
-  return { ok: true, exitCode: EXIT.PASS, version, expectedVersion: SUPPORTED_VERCEL_CLI_VERSION };
+  return {
+    ok: true,
+    exitCode: EXIT.PASS,
+    version,
+    expectedVersion: SUPPORTED_VERCEL_CLI_VERSION,
+    executable: options.vercelBackingExecutable || options.vercelExecutable || '',
+  };
 }
 
 function readVercelLinkIdentity(root) {
@@ -796,10 +965,13 @@ function verifiedCodeContext({ cwd, gitSha = '', now = new Date() }, options = {
     ['NOW_ORG_ID', project.vercel.orgId],
     ['VERCEL_TEAM_ID', project.vercel.orgId],
   ];
-  const mismatchedIdentity = identityOverrides.find(([name, expected]) => {
-    const value = String(environment[name] || '').trim();
-    return value && value !== expected;
-  });
+  const environmentEntries = Object.entries(environment || {}).map(([name, value]) => ({
+    name,
+    normalizedName: String(name).toUpperCase(),
+    value: String(value || '').trim(),
+  }));
+  const mismatchedIdentity = identityOverrides.find(([name, expected]) => environmentEntries
+    .some(entry => entry.normalizedName === name && entry.value && entry.value !== expected));
   if (mismatchedIdentity) {
     return {
       ok: false,
@@ -808,11 +980,11 @@ function verifiedCodeContext({ cwd, gitSha = '', now = new Date() }, options = {
     };
   }
   const allowedIdentityNames = new Set(identityOverrides.map(([name]) => name));
-  const forbiddenOverrides = Object.entries(environment)
-    .filter(([name, value]) => /^(?:VERCEL|NOW)(?:_|$)/.test(name)
-      && !allowedIdentityNames.has(name)
-      && String(value || '').trim())
-    .map(([name]) => name)
+  const forbiddenOverrides = environmentEntries
+    .filter(entry => /^(?:VERCEL|NOW)(?:_|$)/.test(entry.normalizedName)
+      && !allowedIdentityNames.has(entry.normalizedName)
+      && entry.value)
+    .map(entry => entry.name)
     .sort();
   if (forbiddenOverrides.length) {
     return {
@@ -1179,6 +1351,34 @@ function isLiteralDirectVercelCommand(rawCommand, parsed) {
   return String(tokens[0] || '') === 'vercel';
 }
 
+function isWindowsPowerShellContext(options = {}) {
+  return options.shellTool === 'PowerShell' || (options.platform || process.platform) === 'win32';
+}
+
+function parsePinnedPowerShellVercelCommand(rawCommand, expectedExecutable) {
+  const expected = String(expectedExecutable || '').trim();
+  if (!expected) return { ok: false, reason: 'Windows strict 훅에 고정된 vercel.cmd 절대 경로가 없습니다.' };
+  const match = /^& '((?:[^'\r\n]|'')+)'(?: ([^\r\n]+))?$/.exec(String(rawCommand || ''));
+  if (!match) {
+    return { ok: false, reason: "PowerShell Vercel 명령은 & '<고정된 절대 vercel.cmd>' <인자> 단일 literal 형식이어야 합니다." };
+  }
+  const executable = match[1].replaceAll("''", "'");
+  // The command must copy the exact spelling reported by hook status. NTFS can
+  // enable case-sensitive directories, so case-folding here could select a
+  // different file even though ordinary Windows paths are case-insensitive.
+  const expectedNormalized = path.win32.normalize(expected);
+  const actualNormalized = path.win32.normalize(executable);
+  if (actualNormalized !== expectedNormalized) {
+    return { ok: false, reason: 'PowerShell Vercel 실행 파일이 훅 설치 때 고정한 절대 vercel.cmd 경로와 다릅니다.' };
+  }
+  const rawArgs = match[2] || '';
+  const args = rawArgs ? rawArgs.split(' ') : [];
+  if (args.some(token => !token || !/^[A-Za-z0-9_:/.=+-]+$/.test(token))) {
+    return { ok: false, reason: 'PowerShell Vercel 인자는 변수, 따옴표, wildcard, 셸 연산자 없는 literal 토큰이어야 합니다.' };
+  }
+  return { ok: true, executable: expected, args };
+}
+
 function targetsProduction(args) {
   if (hasFlag(args, '--prod')) return true;
   return args.some((item, index) => item === '--target' && args[index + 1] === 'production')
@@ -1397,6 +1597,26 @@ function packageScriptCommand(tokens, currentCwd) {
 
 function evaluateVercelCommand(command, cwd, options = {}) {
   const rawCommand = String(command || '');
+  if (!options._pinnedPowerShellCanonical && isWindowsPowerShellContext(options)) {
+    const exact = parsePinnedPowerShellVercelCommand(rawCommand, options.vercelExecutable);
+    if (exact.ok) {
+      const canonical = ['vercel', ...exact.args].join(' ');
+      return evaluateVercelCommand(canonical, cwd, {
+        ...options,
+        _pinnedPowerShellCanonical: true,
+        shellTool: 'PinnedWindowsPowerShell',
+      });
+    }
+    const generic = evaluateVercelCommand(rawCommand, cwd, {
+      ...options,
+      _pinnedPowerShellCanonical: true,
+      shellTool: 'PinnedWindowsPolicyProbe',
+    });
+    if (generic.relevant) {
+      return { relevant: true, allowed: false, reason: exact.reason };
+    }
+    return generic;
+  }
   // These shell features can construct or rewrite an executable after the hook
   // has inspected the source text. The strict hook deliberately accepts a
   // smaller command language instead of claiming it can prove every shell AST.
@@ -1584,6 +1804,7 @@ module.exports = {
   RECEIPT_TTL_MS,
   GATE_SCHEMA,
   SUPPORTED_VERCEL_CLI_VERSION,
+  HOOK_MANIFEST_SCHEMA,
   RUNTIME_DIGEST,
   REQUIRED_BY_PHASE,
   stableStringify,
@@ -1591,6 +1812,9 @@ module.exports = {
   atomicWrite,
   resolveHome,
   findGitRoot,
+  validateWindowsVercelExecutable,
+  validateWindowsPowerShellExecutable,
+  loadPinnedWindowsVercelExecutable,
   runVercelCli,
   verifyVercelCliVersion,
   projectIdentity,
@@ -1601,5 +1825,6 @@ module.exports = {
   verifyCodeGate,
   verifyGate,
   tokenizeShell,
+  parsePinnedPowerShellVercelCommand,
   evaluateVercelCommand,
 };

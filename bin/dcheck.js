@@ -95,7 +95,8 @@ function help() {
   log.plain(color.dim('  command substitution·caret/backtick·runtime·package/workspace·task launcher도 보수적으로 차단합니다.'));
   log.plain(color.dim('  훅은 사용자 지정 config root와 검증된 절대 Node를 기록하지만 configured만 증명합니다.'));
   log.plain(color.dim('  현재 호스트 활성화는 unknown이므로 재시작·신뢰·안전한 차단 challenge가 필요합니다.'));
-  log.plain(color.dim('  native Windows/PowerShell Vercel 명령은 차단됩니다. WSL은 별도 설치하며 120초 host timeout도 fail-open일 수 있습니다.'));
+  log.plain(color.dim('  native Windows는 Get-Command로 고정한 CLI 뒤에 관리형 vercel.cmd proxy를 설치하고 exact PowerShell literal 명령만 허용합니다.'));
+  log.plain(color.dim('  status의 windowsVercelExecutable 경로를 사용하세요. WSL은 별도 설치하며 120초 host timeout은 fail-open일 수 있습니다.'));
   log.plain(color.dim('  전역 훅은 AI 셸 명령 경로만 관찰합니다. 대시보드·Git 자동 production·외부 CI는 별도로 막아야 합니다.'));
   honesty();
 }

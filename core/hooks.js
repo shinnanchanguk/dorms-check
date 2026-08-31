@@ -122,6 +122,8 @@ function guardFiles(base) {
     dir,
     guard: path.join(dir, 'vercel-guard.cjs'),
     runtime: path.join(dir, 'strict-runtime.cjs'),
+    proxy: path.join(dir, 'vercel-proxy.cjs'),
+    proxyCmd: path.join(dir, 'vercel.cmd'),
     manifest: path.join(dir, 'manifest.json'),
   };
 }
@@ -139,7 +141,7 @@ function assertManagedGuardTargetsSafe(base) {
       throw wrapped;
     }
   }
-  for (const file of [files.guard, files.runtime, files.manifest]) {
+  for (const file of [files.guard, files.runtime, files.proxy, files.proxyCmd, files.manifest]) {
     try {
       const stat = fs.lstatSync(file);
       if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('regular non-symlink file이 아닙니다.');
@@ -156,24 +158,54 @@ function sourceFiles() {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return {
     guard: path.resolve(here, '..', 'hooks', 'vercel-guard.cjs'),
+    proxy: path.resolve(here, '..', 'hooks', 'vercel-proxy.cjs'),
     runtime: path.resolve(here, 'strict-runtime.cjs'),
   };
 }
 
-function installGuardFiles(base, nodeExecutable) {
+function installGuardFiles(base, nodeExecutable, windowsVercelExecutable = null) {
   const destination = guardFiles(base);
   const source = sourceFiles();
   const guard = fs.readFileSync(source.guard);
+  const proxy = fs.readFileSync(source.proxy);
   const strictRuntime = fs.readFileSync(source.runtime);
   atomicWrite(destination.guard, guard, 0o700);
   atomicWrite(destination.runtime, strictRuntime, 0o600);
+  let installedWindowsVercelExecutable = null;
+  let proxyCmd = null;
+  if (windowsVercelExecutable) {
+    const node = assertHookPathSafe(nodeExecutable, 'Node 실행 파일');
+    const proxyPath = assertHookPathSafe(destination.proxy, 'Windows Vercel proxy');
+    proxyCmd = Buffer.from(`@echo off\r\n"${node}" "${proxyPath}" %*\r\n`);
+    atomicWrite(destination.proxy, proxy, 0o700);
+    atomicWrite(destination.proxyCmd, proxyCmd, 0o700);
+    installedWindowsVercelExecutable = {
+      path: destination.proxyCmd,
+      sha256: sha256Buffer(proxyCmd),
+      version: windowsVercelExecutable.version,
+      backingPath: windowsVercelExecutable.path,
+      backingSha256: windowsVercelExecutable.sha256,
+      powerShellPath: windowsVercelExecutable.powerShellPath,
+      powerShellSha256: windowsVercelExecutable.powerShellSha256,
+      discoveredBy: windowsVercelExecutable.discoveredBy,
+    };
+  } else {
+    for (const file of [destination.proxy, destination.proxyCmd]) {
+      try { fs.unlinkSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+  }
   const manifest = {
-    schemaVersion: 2,
+    schemaVersion: runtime.HOOK_MANIFEST_SCHEMA,
     tag: MANAGED_TAG,
     nodeExecutable,
+    windowsVercelExecutable: installedWindowsVercelExecutable,
     files: {
       'vercel-guard.cjs': sha256Buffer(guard),
       'strict-runtime.cjs': sha256Buffer(strictRuntime),
+      ...(installedWindowsVercelExecutable ? {
+        'vercel-proxy.cjs': sha256Buffer(proxy),
+        'vercel.cmd': sha256Buffer(proxyCmd),
+      } : {}),
     },
   };
   atomicWrite(destination.manifest, JSON.stringify(manifest, null, 2) + '\n');
@@ -202,6 +234,10 @@ function restoreGuardFiles(snapshot) {
 
 function quoteShellPath(value) {
   return `"${String(value)}"`;
+}
+
+function quotePowerShellPath(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
 }
 
 function assertHookPathSafe(value, label) {
@@ -249,8 +285,129 @@ function resolveNodeExecutable(options = {}) {
   return resolved;
 }
 
-function hookCommand(guardPath, nodeExecutable = resolveNodeExecutable()) {
-  return `${quoteShellPath(assertHookPathSafe(nodeExecutable, 'Node 실행 파일'))} ${quoteShellPath(assertHookPathSafe(guardPath, 'guard'))}`;
+function resolveWindowsPowerShellExecutable(options = {}) {
+  const environment = options.environment || process.env;
+  const candidates = [];
+  if (options.powerShellExecutable) candidates.push(String(options.powerShellExecutable));
+  const systemRoot = String(environment.SystemRoot || environment.SYSTEMROOT || '').trim();
+  if (systemRoot) candidates.push(path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      const validated = runtime.validateWindowsPowerShellExecutable(candidate);
+      if (path.win32.basename(validated.path).toLowerCase() !== 'powershell.exe') {
+        throw new Error('Codex CMD 호환 훅 런처에는 Windows PowerShell 5.1 powershell.exe가 필요합니다.');
+      }
+      return validated;
+    }
+    catch (error) { lastError = error; }
+  }
+  const error = new Error(`Windows PowerShell 절대 실행 파일을 확인하지 못했습니다${lastError ? `: ${lastError.message}` : '.'}`);
+  error.exitCode = runtime.EXIT.USAGE_CONFIG;
+  throw error;
+}
+
+function resolveWindowsVercelExecutable(options = {}) {
+  const platform = options.platform || process.platform;
+  if (platform !== 'win32') return null;
+  const runner = options.execFileSync || execFileSync;
+  const environment = options.environment || process.env;
+  const powerShell = resolveWindowsPowerShellExecutable(options);
+  let candidate = String(options.vercelExecutable || '').trim();
+  let discoveredBy = 'explicit-install-option';
+  if (!candidate) {
+    const excluded = String(options.managedProxyPath || '').trim();
+    const pathFilter = excluded
+      ? ` | Where-Object { $_.Path -ine ${quotePowerShellPath(excluded)} }`
+      : '';
+    const script = [
+      `$matches = @(Get-Command vercel -All -CommandType Application -ErrorAction Stop | Where-Object { $_.Name -ieq 'vercel.cmd' }${pathFilter})`,
+      "if ($matches.Count -lt 1) { throw 'vercel.cmd not found' }",
+      '[Console]::Out.Write($matches[0].Path)',
+    ].join('; ');
+    try {
+      candidate = String(runner(powerShell.path, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
+        cwd: options.cwd || process.cwd(),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: environment,
+        timeout: 10000,
+      })).trim();
+    } catch (error) {
+      const wrapped = new Error(`Get-Command vercel로 Windows vercel.cmd 절대 경로를 확인하지 못했습니다: ${error.message}`);
+      wrapped.exitCode = runtime.EXIT.USAGE_CONFIG;
+      throw wrapped;
+    }
+    discoveredBy = 'PowerShell Get-Command vercel -All -CommandType Application (Name=vercel.cmd)';
+  }
+  let executable;
+  try { executable = runtime.validateWindowsVercelExecutable(candidate); }
+  catch (error) {
+    const wrapped = new Error(error.message);
+    wrapped.exitCode = runtime.EXIT.USAGE_CONFIG;
+    throw wrapped;
+  }
+  if (options.managedProxyPath
+    && path.win32.normalize(executable.path).toLowerCase() === path.win32.normalize(options.managedProxyPath).toLowerCase()) {
+    const error = new Error('Windows backing Vercel CLI로 dorms-check 관리 proxy 자체를 고정할 수 없습니다. npm 전역 vercel.cmd를 확인하세요.');
+    error.exitCode = runtime.EXIT.USAGE_CONFIG;
+    throw error;
+  }
+  const version = runtime.verifyVercelCliVersion({ cwd: options.cwd || process.cwd() }, {
+    ...options,
+    platform,
+    vercelExecutable: executable.path,
+    vercelExecutableSha256: executable.sha256,
+    powerShellExecutable: powerShell.path,
+    powerShellExecutableSha256: powerShell.sha256,
+    env: environment,
+  });
+  if (!version.ok) {
+    const error = new Error(version.reason);
+    error.exitCode = version.exitCode || runtime.EXIT.USAGE_CONFIG;
+    throw error;
+  }
+  return {
+    path: executable.path,
+    sha256: executable.sha256,
+    version: version.version,
+    powerShellPath: powerShell.path,
+    powerShellSha256: powerShell.sha256,
+    discoveredBy,
+  };
+}
+
+function hookCommand(guardPath, nodeExecutable = resolveNodeExecutable(), platform = process.platform) {
+  const node = assertHookPathSafe(nodeExecutable, 'Node 실행 파일');
+  const guard = assertHookPathSafe(guardPath, 'guard');
+  return platform === 'win32'
+    ? `& ${quotePowerShellPath(node)} ${quotePowerShellPath(guard)}`
+    : `${quoteShellPath(node)} ${quoteShellPath(guard)}`;
+}
+
+function codexWindowsHookCommand(guardPath, nodeExecutable, powerShellExecutable = 'powershell.exe') {
+  const node = assertHookPathSafe(nodeExecutable, 'Node 실행 파일');
+  const guard = assertHookPathSafe(guardPath, 'guard');
+  const launcher = String(powerShellExecutable || 'powershell.exe');
+  if (!/^(?:powershell\.exe|(?:[A-Za-z]:\\|\/)[^\s\0\r\n"'`$%!&|<>^]*powershell\.exe)$/i.test(launcher)) {
+    const error = new Error(`Codex Windows 훅은 공백·셸 메타문자가 없는 절대 powershell.exe 경로가 필요합니다: ${launcher}`);
+    error.exitCode = runtime.EXIT.USAGE_CONFIG;
+    throw error;
+  }
+  const script = `& ${quotePowerShellPath(node)} ${quotePowerShellPath(guard)}`;
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  return `${launcher} -NoLogo -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
+}
+
+function hookCommands(guardPath, nodeExecutable, windowsPowerShellExecutable = '') {
+  return {
+    posix: hookCommand(guardPath, nodeExecutable, 'posix'),
+    windowsPowerShell: hookCommand(guardPath, nodeExecutable, 'win32'),
+    codexWindows: codexWindowsHookCommand(guardPath, nodeExecutable, windowsPowerShellExecutable || 'powershell.exe'),
+    windowsPowerShellExecutable: windowsPowerShellExecutable || 'powershell.exe',
+    nodeExecutable,
+    guardPath,
+  };
 }
 
 function tomlString(value) {
@@ -272,18 +429,20 @@ function removeCodexBlock(text) {
   return text.slice(0, start) + text.slice(end);
 }
 
-function codexBlock(command) {
-  return `${CODEX_START}\n[[hooks.PreToolUse]]\nmatcher = "^Bash$"\n\n[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = ${tomlString(command)}\ncommand_windows = ${tomlString(command)}\ntimeout = 120\nstatusMessage = "Checking Vercel security gate"\n${CODEX_END}\n`;
+function codexBlock(commands) {
+  return `${CODEX_START}\n[[hooks.PreToolUse]]\nmatcher = "^Bash$"\n\n[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = ${tomlString(commands.posix)}\ncommand_windows = ${tomlString(commands.codexWindows)}\ntimeout = 120\nstatusMessage = "Checking Vercel security gate"\n${CODEX_END}\n`;
 }
 
-function installCodexConfig(text, command) {
+function installCodexConfig(text, commands) {
   const clean = removeCodexBlock(text).replace(/\s+$/, '');
-  return `${clean}${clean ? '\n\n' : ''}${codexBlock(command)}`;
+  return `${clean}${clean ? '\n\n' : ''}${codexBlock(commands)}`;
 }
 
 function isManagedHandler(handler) {
-  return typeof handler?.command === 'string'
-    && /[\\/]\.dorms-check[\\/]hooks[\\/]vercel-guard\.cjs/.test(handler.command);
+  return (typeof handler?.command === 'string'
+      && /[\\/]\.dorms-check[\\/]hooks[\\/]vercel-guard\.cjs/.test(handler.command))
+    || (Array.isArray(handler?.args)
+      && handler.args.some(value => typeof value === 'string' && /[\\/]\.dorms-check[\\/]hooks[\\/]vercel-guard\.cjs/.test(value)));
 }
 
 function managedJsonHandlerPresent(handler) {
@@ -313,7 +472,7 @@ function removeJsonHooks(settings) {
   return settings;
 }
 
-function installJsonHook(settings, agent, command) {
+function installJsonHook(settings, agent, commands, platform) {
   const event = agent === 'claude' ? 'PreToolUse' : 'BeforeTool';
   const matcher = agent === 'claude' ? 'Bash|PowerShell' : '^run_shell_command$';
   removeJsonHooks(settings);
@@ -321,13 +480,20 @@ function installJsonHook(settings, agent, command) {
   settings.hooks[event] ||= [];
   settings.hooks[event].push({
     matcher,
-    hooks: [{
-      type: 'command',
-      command,
-      ...(agent === 'gemini'
-        ? { name: 'dorms-check security gate', timeout: 120000, description: 'Blocks unscanned Vercel production promotion.' }
-        : { timeout: 120 }),
-    }],
+    hooks: [agent === 'claude'
+      ? {
+          type: 'command',
+          command: commands.nodeExecutable,
+          args: [commands.guardPath],
+          timeout: 120,
+        }
+      : {
+          type: 'command',
+          command: platform === 'win32' ? commands.windowsPowerShell : commands.posix,
+          name: 'dorms-check security gate',
+          timeout: 120000,
+          description: 'Blocks unscanned Vercel production promotion.',
+        }],
   });
   return settings;
 }
@@ -371,7 +537,7 @@ function writeIfChanged(file, before, after, base, stamp) {
   return { changed: true, backup };
 }
 
-function prepareConfigChanges(selected, base, command, action, environment) {
+function prepareConfigChanges(selected, base, commands, action, environment, platform) {
   return selected.map(agent => {
     const { file } = agentConfigLocation(agent, base, environment);
     const before = readConfigText(file);
@@ -380,12 +546,12 @@ function prepareConfigChanges(selected, base, command, action, environment) {
     if (agent === 'codex') {
       validateCodexToml(before, file);
       after = action === 'install'
-        ? installCodexConfig(before, command)
+        ? installCodexConfig(before, commands)
         : removeCodexBlock(before).replace(/\n{3,}/g, '\n\n');
       validateCodexToml(after, file);
     } else if (action === 'install' || before) {
       const settings = readJson(file);
-      if (action === 'install') installJsonHook(settings, agent, command);
+      if (action === 'install') installJsonHook(settings, agent, commands, platform);
       else removeJsonHooks(settings);
       after = serializeJson(settings);
     }
@@ -419,10 +585,14 @@ function isWslHost() {
   return Boolean(process.env.WSL_DISTRO_NAME || /microsoft/i.test(`${os.release()} ${readText('/proc/version')}`));
 }
 
-function validateManagedCommand(command, expectedGuardPath, expectedNodeExecutable) {
-  const match = /^"([^"\r\n]+)" "([^"\r\n]+)"$/.exec(String(command || ''));
+function validateManagedCommand(command, expectedGuardPath, expectedNodeExecutable, platform = 'posix') {
+  const text = String(command || '');
+  const match = platform === 'win32'
+    ? /^& '((?:[^'\r\n]|'')+)' '((?:[^'\r\n]|'')+)'$/.exec(text)
+    : /^"([^"\r\n]+)" "([^"\r\n]+)"$/.exec(text);
   if (!match) return { valid: false, error: '관리 훅 명령 형식이 정확하지 않습니다.' };
-  const [, recordedNode, recordedGuard] = match;
+  const recordedNode = platform === 'win32' ? match[1].replaceAll("''", "'") : match[1];
+  const recordedGuard = platform === 'win32' ? match[2].replaceAll("''", "'") : match[2];
   if (!path.isAbsolute(recordedGuard) || path.normalize(recordedGuard) !== path.normalize(expectedGuardPath)) {
     return { valid: false, error: '관리 훅 guard 경로가 현재 설치 범위와 일치하지 않습니다.' };
   }
@@ -433,13 +603,57 @@ function validateManagedCommand(command, expectedGuardPath, expectedNodeExecutab
     if (!expectedNodeExecutable || resolvedNode !== expectedNodeExecutable) {
       return { valid: false, nodeExecutable: resolvedNode, error: '관리 훅 Node 경로가 설치 manifest와 일치하지 않습니다.' };
     }
-    return { valid: true, nodeExecutable: resolvedNode, command: hookCommand(expectedGuardPath, resolvedNode) };
+    return { valid: true, nodeExecutable: resolvedNode, command: hookCommand(expectedGuardPath, resolvedNode, platform) };
   } catch (error) {
     return { valid: false, nodeExecutable: recordedNode, error: error.message };
   }
 }
 
-function codexManagedStatus(text, parsed, expectedGuardPath, expectedNodeExecutable) {
+function validateCodexWindowsCommand(command, expectedGuardPath, expectedNodeExecutable, expectedPowerShellExecutable = '') {
+  const text = String(command || '');
+  const match = /^((?:(?:[A-Za-z]:\\|\/)[^\s\0\r\n"'`$%!&|<>^]*powershell\.exe)|powershell\.exe) -NoLogo -NoProfile -NonInteractive -EncodedCommand ([A-Za-z0-9+/]+={0,2})$/i.exec(text);
+  if (!match) return { valid: false, error: 'Codex Windows 관리 훅이 CMD 호환 PowerShell EncodedCommand 형식이 아닙니다.' };
+  const recordedPowerShell = match[1];
+  const expectedPowerShell = expectedPowerShellExecutable || 'powershell.exe';
+  const sameLauncher = expectedPowerShell === 'powershell.exe'
+    ? recordedPowerShell.toLowerCase() === 'powershell.exe'
+    : path.win32.normalize(recordedPowerShell).toLowerCase() === path.win32.normalize(expectedPowerShell).toLowerCase();
+  if (!sameLauncher) return { valid: false, error: 'Codex Windows PowerShell 런처가 설치 manifest와 일치하지 않습니다.' };
+  let script = '';
+  try {
+    script = Buffer.from(match[2], 'base64').toString('utf16le');
+  } catch {
+    return { valid: false, error: 'Codex Windows EncodedCommand를 해석할 수 없습니다.' };
+  }
+  const decoded = validateManagedCommand(script, expectedGuardPath, expectedNodeExecutable, 'win32');
+  if (!decoded.valid) return decoded;
+  return {
+    ...decoded,
+    command: codexWindowsHookCommand(expectedGuardPath, decoded.nodeExecutable, expectedPowerShell),
+    powerShellExecutable: recordedPowerShell,
+  };
+}
+
+function validateManagedExecHandler(handler, expectedGuardPath, expectedNodeExecutable) {
+  const recordedNode = String(handler?.command || '');
+  const recordedGuard = Array.isArray(handler?.args) && handler.args.length === 1 ? String(handler.args[0] || '') : '';
+  if (!recordedNode || !recordedGuard || !path.isAbsolute(recordedGuard) || path.normalize(recordedGuard) !== path.normalize(expectedGuardPath)) {
+    return { valid: false, error: 'Claude 관리 훅 exec-form 경로가 현재 설치 범위와 일치하지 않습니다.' };
+  }
+  try {
+    assertHookPathSafe(recordedNode, '기록된 Node 실행 파일');
+    assertHookPathSafe(recordedGuard, '기록된 guard');
+    const resolvedNode = validateExecutableFile(recordedNode);
+    if (!expectedNodeExecutable || resolvedNode !== expectedNodeExecutable) {
+      return { valid: false, nodeExecutable: resolvedNode, error: 'Claude 관리 훅 Node 경로가 설치 manifest와 일치하지 않습니다.' };
+    }
+    return { valid: true, nodeExecutable: resolvedNode, command: recordedNode, args: [recordedGuard] };
+  } catch (error) {
+    return { valid: false, nodeExecutable: recordedNode, error: error.message };
+  }
+}
+
+function codexManagedStatus(text, parsed, expectedGuardPath, expectedNodeExecutable, expectedPowerShellExecutable = '') {
   const groups = Array.isArray(parsed?.hooks?.PreToolUse) ? parsed.hooks.PreToolUse : [];
   const managedPresent = managedTextPresent(text)
     || groups.some(group => Array.isArray(group?.hooks) && group.hooks.some(isManagedHandler));
@@ -447,20 +661,22 @@ function codexManagedStatus(text, parsed, expectedGuardPath, expectedNodeExecuta
     if (group?.matcher !== '^Bash$' || !Array.isArray(group.hooks)) continue;
     for (const handler of group.hooks) {
       if (!isManagedHandler(handler)) continue;
-      const command = validateManagedCommand(handler.command, expectedGuardPath, expectedNodeExecutable);
-      const installed = command.valid
+      const posix = validateManagedCommand(handler.command, expectedGuardPath, expectedNodeExecutable, 'posix');
+      const windows = validateCodexWindowsCommand(handler.command_windows, expectedGuardPath, expectedNodeExecutable, expectedPowerShellExecutable);
+      const installed = posix.valid
+        && windows.valid
+        && posix.nodeExecutable === windows.nodeExecutable
         && handler.type === 'command'
-        && handler.command_windows === handler.command
         && handler.timeout === 120
         && handler.statusMessage === 'Checking Vercel security gate';
-      if (installed) return { managedPresent: true, installed: true, ...command };
-      return { managedPresent: true, installed: false, ...command, error: command.error || 'Codex 관리 훅 스키마가 정확하지 않습니다.' };
+      if (installed) return { managedPresent: true, installed: true, ...posix, commandWindows: windows.command };
+      return { managedPresent: true, installed: false, ...posix, error: posix.error || windows.error || 'Codex 관리 훅 스키마가 정확하지 않습니다.' };
     }
   }
   return { managedPresent, installed: false, valid: false, error: managedPresent ? 'Codex 관리 훅 스키마가 정확하지 않습니다.' : '' };
 }
 
-function jsonManagedStatus(settings, agent, event, matcher, expectedGuardPath, expectedNodeExecutable) {
+function jsonManagedStatus(settings, agent, event, matcher, expectedGuardPath, expectedNodeExecutable, platform) {
   const groups = Array.isArray(settings.hooks?.[event]) ? settings.hooks[event] : [];
   const managedPresent = Object.values(settings.hooks || {}).some(eventGroups => (
     Array.isArray(eventGroups)
@@ -470,11 +686,13 @@ function jsonManagedStatus(settings, agent, event, matcher, expectedGuardPath, e
     if (group?.matcher !== matcher || !Array.isArray(group.hooks)) continue;
     for (const handler of group.hooks) {
       if (!managedJsonHandlerPresent(handler)) continue;
-      const command = validateManagedCommand(handler.command, expectedGuardPath, expectedNodeExecutable);
+      const command = agent === 'claude'
+        ? validateManagedExecHandler(handler, expectedGuardPath, expectedNodeExecutable)
+        : validateManagedCommand(handler.command, expectedGuardPath, expectedNodeExecutable, platform === 'win32' ? 'win32' : 'posix');
       const installed = command.valid
         && handler.type === 'command'
         && (agent === 'claude'
-          ? handler.timeout === 120 && handler.async !== true
+          ? handler.timeout === 120 && handler.async !== true && handler.shell === undefined
           : handler.timeout === 120000
             && handler.name === 'dorms-check security gate'
             && handler.description === 'Blocks unscanned Vercel production promotion.');
@@ -485,7 +703,7 @@ function jsonManagedStatus(settings, agent, event, matcher, expectedGuardPath, e
   return { managedPresent, installed: false, valid: false, error: managedPresent ? `${agent} 관리 훅 스키마가 정확하지 않습니다.` : '' };
 }
 
-function sourceStatus(base) {
+function sourceStatus(base, options = {}) {
   const files = guardFiles(base);
   let manifest;
   let manifestError = '';
@@ -498,7 +716,13 @@ function sourceStatus(base) {
     manifest = null;
   }
   const entries = {};
-  for (const [name, file] of [['vercel-guard.cjs', files.guard], ['strict-runtime.cjs', files.runtime]]) {
+  const managedFiles = [
+    ['vercel-guard.cjs', files.guard],
+    ['strict-runtime.cjs', files.runtime],
+    ...((manifest?.files?.['vercel-proxy.cjs'] || fs.existsSync(files.proxy)) ? [['vercel-proxy.cjs', files.proxy]] : []),
+    ...((manifest?.files?.['vercel.cmd'] || fs.existsSync(files.proxyCmd)) ? [['vercel.cmd', files.proxyCmd]] : []),
+  ];
+  for (const [name, file] of managedFiles) {
     let present = false;
     let digest = '';
     let error = '';
@@ -516,14 +740,69 @@ function sourceStatus(base) {
   let nodeExecutableError = '';
   try { nodeExecutable = validateExecutableFile(String(manifest?.nodeExecutable || '')); }
   catch (error) { nodeExecutableError = error.message; }
-  const manifestValid = manifest?.schemaVersion === 2 && manifest?.tag === MANAGED_TAG && Boolean(nodeExecutable) && !nodeExecutableError;
-  return { files, valid: manifestValid && !manifestError && Object.values(entries).every(entry => entry.valid), entries, manifestError, nodeExecutable, nodeExecutableVerified: manifestValid, nodeExecutableError };
+  let windowsVercelExecutable = null;
+  let windowsVercelExecutableError = '';
+  const record = manifest?.windowsVercelExecutable;
+  if (record) {
+    try {
+      const executable = runtime.validateWindowsVercelExecutable(record.path, record.sha256);
+      const backing = runtime.validateWindowsVercelExecutable(record.backingPath, record.backingSha256);
+      const powerShell = runtime.validateWindowsPowerShellExecutable(record.powerShellPath, record.powerShellSha256);
+      if (record.version !== runtime.SUPPORTED_VERCEL_CLI_VERSION) {
+        throw new Error(`고정 Vercel CLI 버전이 ${runtime.SUPPORTED_VERCEL_CLI_VERSION}이 아닙니다.`);
+      }
+      if ((options.platform || process.platform) === 'win32') {
+        const version = runtime.verifyVercelCliVersion({}, {
+          platform: 'win32',
+          vercelBackingExecutable: backing.path,
+          vercelBackingExecutableSha256: backing.sha256,
+          vercelExecutableVersion: record.version,
+          powerShellExecutable: powerShell.path,
+          powerShellExecutableSha256: powerShell.sha256,
+        });
+        if (!version.ok) throw new Error(version.reason);
+      }
+      windowsVercelExecutable = {
+        path: executable.path,
+        sha256: executable.sha256,
+        version: record.version,
+        backingPath: backing.path,
+        backingSha256: backing.sha256,
+        powerShellPath: powerShell.path,
+        powerShellSha256: powerShell.sha256,
+        discoveredBy: record.discoveredBy || '',
+      };
+    } catch (error) {
+      windowsVercelExecutableError = error.message;
+    }
+  }
+  const platform = options.platform || process.platform;
+  const windowsRecordRequired = platform === 'win32';
+  const windowsRecordValid = !record ? !windowsRecordRequired : Boolean(windowsVercelExecutable) && !windowsVercelExecutableError;
+  const manifestValid = manifest?.schemaVersion === runtime.HOOK_MANIFEST_SCHEMA
+    && manifest?.tag === MANAGED_TAG
+    && Boolean(nodeExecutable)
+    && !nodeExecutableError
+    && windowsRecordValid;
+  return {
+    files,
+    valid: manifestValid && !manifestError && Object.values(entries).every(entry => entry.valid),
+    entries,
+    manifestError,
+    nodeExecutable,
+    nodeExecutableVerified: manifestValid,
+    nodeExecutableError,
+    windowsVercelExecutable,
+    windowsVercelExecutableVerified: Boolean(windowsVercelExecutable) && !windowsVercelExecutableError,
+    windowsVercelExecutableError,
+  };
 }
 
 export function hookStatus(options = {}) {
   const base = homeDir(options);
   const environment = configEnvironment(options);
-  const source = sourceStatus(base);
+  const platform = options.platform || process.platform;
+  const source = sourceStatus(base, { platform });
   let nodeExecutable = '';
   let nodeExecutableError = '';
   try { nodeExecutable = resolveNodeExecutable(options); }
@@ -566,7 +845,13 @@ export function hookStatus(options = {}) {
         || parsed?.allow_managed_hooks_only === true;
       const managed = parseError
         ? { managedPresent: config.present || managedTextPresent(text), installed: false, valid: false, error: parseError }
-        : codexManagedStatus(text, parsed, expectedGuardPath, source.nodeExecutable);
+        : codexManagedStatus(
+            text,
+            parsed,
+            expectedGuardPath,
+            source.nodeExecutable,
+            platform === 'win32' ? source.windowsVercelExecutable?.powerShellPath || '' : '',
+          );
       const configured = managed.installed && managed.valid && source.valid && !disabled;
       agents[agent] = {
         file,
@@ -598,7 +883,7 @@ export function hookStatus(options = {}) {
       const matcher = agent === 'claude' ? 'Bash|PowerShell' : '^run_shell_command$';
       const managed = parseError
         ? { managedPresent: config.present || managedTextPresent(text), installed: false, valid: false, error: parseError }
-        : jsonManagedStatus(settings, agent, event, matcher, expectedGuardPath, source.nodeExecutable);
+        : jsonManagedStatus(settings, agent, event, matcher, expectedGuardPath, source.nodeExecutable, platform);
       const geminiDisabledNames = Array.isArray(settings.hooksConfig?.disabled)
         ? settings.hooksConfig.disabled.map(value => String(value).toLowerCase())
         : [];
@@ -626,7 +911,7 @@ export function hookStatus(options = {}) {
     }
   }
   return {
-    hostPlatform: process.platform,
+    hostPlatform: platform,
     home: base,
     isWSL: isWslHost(),
     installationScope: 'current-host-only',
@@ -636,6 +921,16 @@ export function hookStatus(options = {}) {
     nodeExecutable,
     nodeExecutableVerified: Boolean(nodeExecutable) && !nodeExecutableError,
     nodeExecutableError,
+    windowsPowerShellSupported: platform === 'win32' && source.windowsVercelExecutableVerified,
+    windowsVercelExecutable: source.windowsVercelExecutable?.path || '',
+    windowsVercelExecutableSha256: source.windowsVercelExecutable?.sha256 || '',
+    windowsVercelVersion: source.windowsVercelExecutable?.version || '',
+    windowsVercelBackingExecutable: source.windowsVercelExecutable?.backingPath || '',
+    windowsVercelBackingExecutableSha256: source.windowsVercelExecutable?.backingSha256 || '',
+    windowsPowerShellExecutable: source.windowsVercelExecutable?.powerShellPath || '',
+    windowsPowerShellExecutableSha256: source.windowsVercelExecutable?.powerShellSha256 || '',
+    windowsVercelExecutableVerified: source.windowsVercelExecutableVerified,
+    windowsVercelExecutableError: source.windowsVercelExecutableError,
     activation: 'unknown',
     ready: false,
     securityOnly: true,
@@ -647,6 +942,9 @@ export function hookStatus(options = {}) {
       nodeExecutable: source.nodeExecutable,
       nodeExecutableVerified: source.nodeExecutableVerified,
       nodeExecutableError: source.nodeExecutableError,
+      windowsVercelExecutable: source.windowsVercelExecutable,
+      windowsVercelExecutableVerified: source.windowsVercelExecutableVerified,
+      windowsVercelExecutableError: source.windowsVercelExecutableError,
     },
     enforcementBoundary: {
       covers: ['Codex/Claude/Gemini shell-tool Vercel CLI commands'],
@@ -659,22 +957,44 @@ export function hookStatus(options = {}) {
   };
 }
 
-export function installHooks({ agents, homeDir: requestedHome, environment: requestedEnvironment, nodeExecutable: requestedNodeExecutable } = {}) {
+export function installHooks({
+  agents,
+  homeDir: requestedHome,
+  environment: requestedEnvironment,
+  nodeExecutable: requestedNodeExecutable,
+  platform: requestedPlatform,
+  vercelExecutable: requestedVercelExecutable,
+  powerShellExecutable: requestedPowerShellExecutable,
+  execFileSync: requestedExecFileSync,
+  vercelVersion: requestedVercelVersion,
+  cwd: requestedCwd,
+} = {}) {
   const selected = parseAgents(agents);
   const base = homeDir({ homeDir: requestedHome });
   const environment = requestedEnvironment || (requestedHome ? {} : process.env);
+  const platform = requestedPlatform || process.platform;
   const destination = guardFiles(base);
   const nodeExecutable = resolveNodeExecutable({ nodeExecutable: requestedNodeExecutable });
+  const windowsVercelExecutable = resolveWindowsVercelExecutable({
+    platform,
+    environment,
+    vercelExecutable: requestedVercelExecutable,
+    powerShellExecutable: requestedPowerShellExecutable,
+    execFileSync: requestedExecFileSync,
+    vercelVersion: requestedVercelVersion,
+    cwd: requestedCwd,
+    managedProxyPath: destination.proxyCmd,
+  });
   assertHookPathSafe(destination.guard, 'guard');
   assertManagedGuardTargetsSafe(base);
-  const command = hookCommand(destination.guard, nodeExecutable);
-  const prepared = prepareConfigChanges(selected, base, command, 'install', environment);
+  const commands = hookCommands(destination.guard, nodeExecutable, windowsVercelExecutable?.powerShellPath || '');
+  const prepared = prepareConfigChanges(selected, base, commands, 'install', environment, platform);
   const guardSnapshot = snapshotGuardFiles(base);
   try {
-    installGuardFiles(base, nodeExecutable);
+    installGuardFiles(base, nodeExecutable, windowsVercelExecutable);
     const stamp = timestamp();
     const changes = applyConfigChanges(prepared, base, stamp);
-    return { action: 'install', agents: selected, changes, status: hookStatus({ homeDir: base, environment }) };
+    return { action: 'install', agents: selected, changes, status: hookStatus({ homeDir: base, environment, platform }) };
   } catch (error) {
     try { restoreGuardFiles(guardSnapshot); }
     catch (restoreError) {
@@ -690,12 +1010,13 @@ export function uninstallHooks({ agents, homeDir: requestedHome, environment: re
   const base = homeDir({ homeDir: requestedHome });
   const environment = requestedEnvironment || (requestedHome ? {} : process.env);
   const stamp = timestamp();
-  const prepared = prepareConfigChanges(selected, base, hookCommand(guardFiles(base).guard, resolveNodeExecutable({ nodeExecutable: requestedNodeExecutable })), 'uninstall', environment);
+  const nodeExecutable = resolveNodeExecutable({ nodeExecutable: requestedNodeExecutable });
+  const prepared = prepareConfigChanges(selected, base, hookCommands(guardFiles(base).guard, nodeExecutable), 'uninstall', environment, process.platform);
   const changes = applyConfigChanges(prepared, base, stamp);
   const remaining = hookStatus({ homeDir: base, environment });
   if (!Object.values(remaining.agents).some(agent => agent.managedPresent)) {
     const files = guardFiles(base);
-    for (const file of [files.guard, files.runtime, files.manifest]) {
+    for (const file of [files.guard, files.runtime, files.proxy, files.proxyCmd, files.manifest]) {
       try { fs.unlinkSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
     try { fs.rmdirSync(files.dir); } catch { /* Keep a non-empty user directory. */ }

@@ -123,6 +123,28 @@ function writeReceipts(root, home, { now = new Date(), url = 'https://strict-fix
 
 const fakeVercelBins = new Map();
 
+function fakeWindowsToolchain(version = '59.10.0') {
+  const bin = tempDir(`dcheck-fake-windows-${version.replace(/\W/g, '-')}-`);
+  const vercel = path.join(bin, 'vercel.cmd');
+  const powerShell = path.join(bin, 'powershell.exe');
+  fs.writeFileSync(vercel, `#!/bin/sh\nprintf '%s\\n' 'Vercel CLI ${version}'\n`);
+  fs.writeFileSync(powerShell, `#!/bin/sh\ncase "$*" in *--version*) printf '%s\\n' 'Vercel CLI ${version}';; esac\nexit 0\n`);
+  fs.chmodSync(vercel, 0o700);
+  fs.chmodSync(powerShell, 0o700);
+  return {
+    vercel,
+    vercelSha256: runtime.sha256(fs.readFileSync(vercel)),
+    powerShell,
+    powerShellSha256: runtime.sha256(fs.readFileSync(powerShell)),
+    version,
+  };
+}
+
+function managedHandler(group) {
+  return group?.hooks?.find(handler => String(handler?.command || '').includes('vercel-guard.cjs')
+    || handler?.args?.some(value => String(value).includes('vercel-guard.cjs')));
+}
+
 function fakeVercelBin(version = '59.10.0') {
   if (fakeVercelBins.has(version)) return fakeVercelBins.get(version);
   const bin = tempDir(`dcheck-fake-vercel-${version.replace(/\W/g, '-')}-`);
@@ -306,23 +328,36 @@ async function run() {
   ok('deployment GET must match the exact inspect ID and URL', !inspectApiMismatch.ok && inspectApiMismatch.exitCode === STRICT_EXIT.BINDING_MISMATCH);
   const inspectWrongCliVersion = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, { execFileSync: inspectFixture({}, { version: '40.1.0' }) });
   ok('unreviewed Vercel CLI version fails closed before live binding', !inspectWrongCliVersion.ok && inspectWrongCliVersion.exitCode === STRICT_EXIT.USAGE_CONFIG);
+  const windowsToolchain = fakeWindowsToolchain();
   const windowsVercelCalls = [];
   const windowsVercelOutput = runtime.runVercelCli(['inspect', 'dpl_fixture123', '--format=json', '--non-interactive'], { encoding: 'utf8' }, {
     platform: 'win32',
-    comspec: 'C:\\Windows\\System32\\cmd.exe',
+    vercelExecutable: windowsToolchain.vercel,
+    vercelExecutableSha256: windowsToolchain.vercelSha256,
+    vercelExecutableVersion: windowsToolchain.version,
+    powerShellExecutable: windowsToolchain.powerShell,
+    powerShellExecutableSha256: windowsToolchain.powerShellSha256,
     execFileSync(file, args) {
       windowsVercelCalls.push({ file, args });
       return 'fixture';
     },
   });
-  ok('Windows Vercel execution uses an absolute cmd.exe with a canonical literal vercel command', windowsVercelOutput === 'fixture'
-    && windowsVercelCalls[0]?.file === 'C:\\Windows\\System32\\cmd.exe'
-    && windowsVercelCalls[0]?.args?.join('\n') === ['/d', '/s', '/c', 'vercel inspect dpl_fixture123 --format=json --non-interactive'].join('\n'));
+  ok('Windows internal Vercel execution uses the pinned PowerShell and absolute vercel.cmd', windowsVercelOutput === 'fixture'
+    && windowsVercelCalls[0]?.file === fs.realpathSync(windowsToolchain.powerShell)
+    && windowsVercelCalls[0]?.args?.slice(0, 4).join('\n') === ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command'].join('\n')
+    && windowsVercelCalls[0]?.args?.[4]?.includes(`'${fs.realpathSync(windowsToolchain.vercel)}'`));
   let windowsUnsafeArgumentBlocked = false;
   try {
-    runtime.runVercelCli(['inspect', 'unsafe target'], {}, { platform: 'win32', comspec: 'C:\\Windows\\System32\\cmd.exe', execFileSync() {} });
+    runtime.runVercelCli(['inspect', 'unsafe target'], {}, {
+      platform: 'win32',
+      vercelExecutable: windowsToolchain.vercel,
+      vercelExecutableSha256: windowsToolchain.vercelSha256,
+      powerShellExecutable: windowsToolchain.powerShell,
+      powerShellExecutableSha256: windowsToolchain.powerShellSha256,
+      execFileSync() {},
+    });
   } catch { windowsUnsafeArgumentBlocked = true; }
-  ok('Windows internal Vercel runner rejects arguments requiring cmd.exe re-parsing', windowsUnsafeArgumentBlocked);
+  ok('Windows internal Vercel runner rejects arguments requiring PowerShell re-parsing', windowsUnsafeArgumentBlocked);
   const ambientHome = tempDir('dcheck-ambient-home-');
   const ignoredHome = tempDir('dcheck-ignored-test-home-');
   const resolveHomeProbe = spawnSync(process.execPath, ['-e', `const r=require(${JSON.stringify(path.resolve('core/strict-runtime.cjs'))});process.stdout.write(r.resolveHome({}));`], {
@@ -655,8 +690,8 @@ async function run() {
     && codexText.includes('timeout = 120'));
   const claudeSettings = JSON.parse(fs.readFileSync(path.join(hookHome, '.claude', 'settings.json'), 'utf8'));
   ok('Claude covers Bash and native PowerShell with 120s timeout', claudeSettings.hooks.PreToolUse.some(group => group.matcher === 'Bash|PowerShell' && group.hooks.some(handler => handler.timeout === 120)));
-  const claudeManagedCommand = claudeSettings.hooks.PreToolUse.find(group => group.matcher === 'Bash|PowerShell').hooks.find(handler => handler.command.includes('vercel-guard.cjs')).command;
-  const poisonedPathHook = process.platform === 'win32' ? { status: 0 } : spawnSync('/bin/sh', ['-c', claudeManagedCommand], {
+  const claudeManagedHandler = managedHandler(claudeSettings.hooks.PreToolUse.find(group => group.matcher === 'Bash|PowerShell'));
+  const poisonedPathHook = spawnSync(claudeManagedHandler.command, claudeManagedHandler.args, {
     cwd: process.cwd(),
     env: { ...process.env, HOME: hookHome, USERPROFILE: hookHome, PATH: '/dcheck/path-does-not-exist' },
     input: JSON.stringify({ cwd: process.cwd(), hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git status' } }),
@@ -700,8 +735,8 @@ async function run() {
   const schemaGeminiFile = path.join(hookHome, '.gemini', 'settings.json');
   const schemaClaude = JSON.parse(fs.readFileSync(schemaClaudeFile, 'utf8'));
   const schemaGemini = JSON.parse(fs.readFileSync(schemaGeminiFile, 'utf8'));
-  const managedClaude = schemaClaude.hooks.PreToolUse.find(group => group.matcher === 'Bash|PowerShell').hooks.find(handler => handler.command.includes('vercel-guard.cjs'));
-  const managedGemini = schemaGemini.hooks.BeforeTool.find(group => group.matcher === '^run_shell_command$').hooks.find(handler => handler.command.includes('vercel-guard.cjs'));
+  const managedClaude = managedHandler(schemaClaude.hooks.PreToolUse.find(group => group.matcher === 'Bash|PowerShell'));
+  const managedGemini = managedHandler(schemaGemini.hooks.BeforeTool.find(group => group.matcher === '^run_shell_command$'));
   managedClaude.timeout = 10;
   managedClaude.async = true;
   managedGemini.timeout = 10;
@@ -730,7 +765,7 @@ async function run() {
     && fs.existsSync(path.join(switchedNodeHome, '.dorms-check', 'hooks', 'vercel-guard.cjs')));
   const switchedClaudeFile = path.join(switchedNodeHome, '.claude', 'settings.json');
   const switchedClaude = JSON.parse(fs.readFileSync(switchedClaudeFile, 'utf8'));
-  switchedClaude.hooks.PreToolUse.find(group => group.matcher === 'Bash|PowerShell').hooks.find(handler => handler.command.includes('vercel-guard.cjs')).timeout = 1;
+  managedHandler(switchedClaude.hooks.PreToolUse.find(group => group.matcher === 'Bash|PowerShell')).timeout = 1;
   fs.writeFileSync(switchedClaudeFile, JSON.stringify(switchedClaude, null, 2));
   const switchedGeminiUninstall = uninstallHooks({ agents: 'gemini', homeDir: switchedNodeHome, nodeExecutable: alternateNode });
   ok('a tampered remaining managed handler still preserves shared guard files', switchedGeminiUninstall.status.agents.claude.managedPresent === true
@@ -944,6 +979,78 @@ async function run() {
   const guardPath = installed.status.source.entries['vercel-guard.cjs'].present
     ? path.join(hookHome, '.dorms-check', 'hooks', 'vercel-guard.cjs')
     : '';
+  const windowsHookHome = tempDir('dcheck-windows-hooks-home-');
+  const windowsInstalled = installHooks({
+    homeDir: windowsHookHome,
+    platform: 'win32',
+    vercelExecutable: windowsToolchain.vercel,
+    powerShellExecutable: windowsToolchain.powerShell,
+    vercelVersion: windowsToolchain.version,
+  });
+  writeReceipts(guardRepo, windowsHookHome);
+  const windowsGuardPath = path.join(windowsHookHome, '.dorms-check', 'hooks', 'vercel-guard.cjs');
+  const pinnedWindowsVercel = windowsInstalled.status.windowsVercelExecutable;
+  const quotedPinnedWindowsVercel = `'${pinnedWindowsVercel.replaceAll("'", "''")}'`;
+  const windowsStagedCommand = `& ${quotedPinnedWindowsVercel} --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=${guardSha}`;
+  ok('Windows install pins vercel.cmd, version, hash, and PowerShell in the managed manifest', windowsInstalled.status.windowsPowerShellSupported === true
+    && windowsInstalled.status.windowsVercelVersion === '59.10.0'
+    && windowsInstalled.status.windowsVercelExecutableVerified === true
+    && path.basename(windowsInstalled.status.windowsVercelExecutable).toLowerCase() === 'vercel.cmd'
+    && windowsInstalled.status.windowsVercelBackingExecutable === fs.realpathSync(windowsToolchain.vercel)
+    && windowsInstalled.status.windowsVercelBackingExecutableSha256 === windowsToolchain.vercelSha256
+    && windowsInstalled.status.windowsPowerShellExecutableSha256 === windowsToolchain.powerShellSha256);
+  const windowsCodexText = fs.readFileSync(path.join(windowsHookHome, '.codex', 'config.toml'), 'utf8');
+  ok('Codex Windows hook uses a quote-free CMD-compatible PowerShell EncodedCommand launcher', windowsCodexText.includes('-EncodedCommand ')
+    && !windowsCodexText.includes(`command_windows = "&`));
+  const windowsClaudeSettings = JSON.parse(fs.readFileSync(path.join(windowsHookHome, '.claude', 'settings.json'), 'utf8'));
+  const windowsClaudeHandler = managedHandler(windowsClaudeSettings.hooks.PreToolUse.find(group => group.matcher === 'Bash|PowerShell'));
+  ok('Claude Windows hook uses direct absolute Node exec form', windowsClaudeHandler.command === fs.realpathSync(process.execPath)
+    && windowsClaudeHandler.args?.[0] === windowsGuardPath);
+  const windowsGeminiSettings = JSON.parse(fs.readFileSync(path.join(windowsHookHome, '.gemini', 'settings.json'), 'utf8'));
+  const windowsGeminiHandler = managedHandler(windowsGeminiSettings.hooks.BeforeTool.find(group => group.matcher === '^run_shell_command$'));
+  ok('Gemini Windows hook uses the PowerShell call operator form', windowsGeminiHandler.command.startsWith("& '")
+    && windowsGeminiHandler.command.includes('vercel-guard.cjs'));
+  const windowsProxy = path.join(windowsHookHome, '.dorms-check', 'hooks', 'vercel-proxy.cjs');
+  const runWindowsProxy = args => spawnSync(process.execPath, [windowsProxy, ...args], {
+    cwd: guardRepo,
+    env: {
+      ...process.env,
+      HOME: windowsHookHome,
+      USERPROFILE: windowsHookHome,
+      VERCEL_PROJECT_ID: '',
+      VERCEL_ORG_ID: '',
+      VERCEL_TEAM_ID: '',
+      VERCEL_TOKEN: '',
+    },
+    encoding: 'utf8',
+  });
+  const proxyStaged = runWindowsProxy([
+    '--prod', '--skip-domain', '--meta', 'githubDeployment=1', '--meta', `githubCommitSha=${guardSha}`, '--yes',
+  ]);
+  ok('managed Windows Vercel proxy permits receipt-bound staged deploy without relying on a host hook event', proxyStaged.status === 0, proxyStaged.stderr);
+  ok('managed Windows Vercel proxy blocks a fake promote even when a host hook event does not fire', runWindowsProxy([
+    'promote', 'https://dcheck-hook-challenge.invalid',
+  ]).status === 2);
+  const proxyPromote = runWindowsProxy([
+    'promote', 'https://strict-fixture.vercel.app/',
+  ]);
+  ok('managed Windows Vercel proxy permits the exact receipt-bound promote without relying on a host hook event', proxyPromote.status === 0, proxyPromote.stderr);
+  const discoveryHome = tempDir('dcheck-windows-discovery-home-');
+  let discoveryScript = '';
+  const discovered = installHooks({
+    agents: 'codex',
+    homeDir: discoveryHome,
+    platform: 'win32',
+    powerShellExecutable: windowsToolchain.powerShell,
+    vercelVersion: windowsToolchain.version,
+    execFileSync(file, args) {
+      discoveryScript = String(args?.[4] || '');
+      return windowsToolchain.vercel;
+    },
+  });
+  ok('Windows install discovers the exact vercel.cmd application through Get-Command', discoveryScript.includes('Get-Command vercel -All -CommandType Application')
+    && discoveryScript.includes("Name -ieq 'vercel.cmd'")
+    && discovered.status.windowsVercelBackingExecutable === fs.realpathSync(windowsToolchain.vercel));
   for (const [name, payload] of [
     ['missing tool_input command', { cwd: guardRepo, tool_name: 'Bash', tool_input: {} }],
     ['object command', { cwd: guardRepo, tool_name: 'Bash', tool_input: { command: { text: 'git status' } } }],
@@ -974,7 +1081,55 @@ async function run() {
   ).status === 2);
   ok('vc shorthand is blocked so the probed and executed CLI cannot diverge', runGuard(guardPath, guardRepo, hookHome, `vc deploy --prod --skip-domain --meta githubCommitSha=${guardSha} --meta githubDeployment=1`, 'gemini').status === 2);
   ok('staged --yes is the only optional non-routing flag', runGuard(guardPath, guardRepo, hookHome, `${stagedCommand} --yes`, 'claude').status === 0);
-  ok('even an exact staged command is blocked through native PowerShell resolution', runGuard(guardPath, guardRepo, hookHome, stagedCommand, 'claude', 'PowerShell').status === 2);
+  ok('native PowerShell permits the exact pinned absolute vercel.cmd staged command', runGuard(
+    windowsGuardPath,
+    guardRepo,
+    windowsHookHome,
+    windowsStagedCommand,
+    'claude',
+    'PowerShell',
+  ).status === 0);
+  ok('native PowerShell permits the exact pinned absolute vercel.cmd staged command with --yes', runGuard(
+    windowsGuardPath,
+    guardRepo,
+    windowsHookHome,
+    `${windowsStagedCommand} --yes`,
+    'claude',
+    'PowerShell',
+  ).status === 0);
+  const caseChangedWindowsVercel = pinnedWindowsVercel.replace(/vercel\.cmd$/, 'VERCEL.cmd');
+  ok('native PowerShell rejects even a case-variant of the status-pinned vercel.cmd path', runGuard(
+    windowsGuardPath,
+    guardRepo,
+    windowsHookHome,
+    `& '${caseChangedWindowsVercel.replaceAll("'", "''")}' --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=${guardSha}`,
+    'claude',
+    'PowerShell',
+  ).status === 2);
+  ok('native PowerShell rejects a bare vercel staged command even with a valid receipt', runGuard(
+    windowsGuardPath,
+    guardRepo,
+    windowsHookHome,
+    stagedCommand,
+    'claude',
+    'PowerShell',
+  ).status === 2);
+  ok('PowerShell does not block dorms-check provider arguments that merely name Vercel', runGuard(
+    windowsGuardPath,
+    guardRepo,
+    windowsHookHome,
+    'dcheck hooks status --provider vercel --json',
+    'claude',
+    'PowerShell',
+  ).status === 0);
+  ok('PowerShell does not block non-executing Git text searches for Vercel', runGuard(
+    windowsGuardPath,
+    guardRepo,
+    windowsHookHome,
+    'git log --grep vercel',
+    'claude',
+    'PowerShell',
+  ).status === 0);
   ok('duplicate staged flags are rejected', runGuard(guardPath, guardRepo, hookHome, `${stagedCommand} --yes --yes`, 'claude').status === 2
     && runGuard(guardPath, guardRepo, hookHome, `${stagedCommand} --prod`, 'codex').status === 2);
   fs.mkdirSync(path.join(guardRepo, 'deploy'), { recursive: true });
@@ -987,6 +1142,15 @@ async function run() {
     'codex',
     '',
     { VERCEL_PROJECT_ID: 'prj_foreign', VERCEL_ORG_ID: 'team_foreign' },
+  ).status === 2);
+  ok('Windows-style case-insensitive lowercase Vercel overrides also block exact staged command', runGuard(
+    guardPath,
+    guardRepo,
+    hookHome,
+    stagedCommand,
+    'codex',
+    '',
+    { vercel_project_id: 'prj_foreign', vercel_org_id: 'team_foreign' },
   ).status === 2);
   ok('foreign ambient Vercel team precedence blocks exact staged command', runGuard(
     guardPath,
@@ -1033,6 +1197,22 @@ async function run() {
   ok('npm staged package script is blocked even when recursively visible', runGuard(guardPath, guardRepo, hookHome, 'npm run prod-staged', 'claude').status === 2);
   writeReceipts(guardRepo, hookHome, { deploymentId: 'dpl_fixture123' });
   ok('exact live receipt permits direct literal URL promote', runGuard(guardPath, guardRepo, hookHome, 'vercel promote "https://strict-fixture.vercel.app/"', 'claude').status === 0);
+  ok('native PowerShell exact pinned vercel.cmd permits receipt-bound promote', runGuard(
+    windowsGuardPath,
+    guardRepo,
+    windowsHookHome,
+    `& ${quotedPinnedWindowsVercel} promote https://strict-fixture.vercel.app/`,
+    'claude',
+    'PowerShell',
+  ).status === 0);
+  ok('native PowerShell blocks promote through a different absolute vercel.cmd', runGuard(
+    windowsGuardPath,
+    guardRepo,
+    windowsHookHome,
+    `& 'C:\\foreign\\vercel.cmd' promote https://strict-fixture.vercel.app/`,
+    'claude',
+    'PowerShell',
+  ).status === 2);
   ok('verified deployment ID receipt permits exact ID promote', runGuard(guardPath, guardRepo, hookHome, 'vercel promote dpl_fixture123', 'codex').status === 0);
   ok('shell-variable promote target is blocked before expansion', runGuard(guardPath, guardRepo, hookHome, 'vercel promote "$DEPLOYMENT_URL"', 'codex').status === 2);
   ok('promote project/config override flags are blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel promote dpl_fixture123 --scope foreign', 'codex').status === 2);
@@ -1208,35 +1388,61 @@ async function run() {
   ok('renamed rolling-release alias wrapper is blocked', runGuard(guardPath, guardRepo, hookHome, 'myvercel rr start --dpl dpl_fixture123', 'gemini').status === 2);
   ok('backslash-escaped executable is not treated as a literal Vercel command', runGuard(guardPath, guardRepo, hookHome, 'v\\e\\r\\c\\e\\l promote dpl_fixture123', 'codex').status === 2);
   ok('backslash-escaped mutator is not treated as a literal Vercel command', runGuard(guardPath, guardRepo, hookHome, 'vercel pro\\mote dpl_fixture123', 'claude').status === 2);
-  ok('Windows caret-obfuscated Vercel executable and flag are blocked', runGuard(guardPath, guardRepo, hookHome, 'v^e^r^c^e^l --^prod', 'claude', 'PowerShell').status === 2);
-  ok('cmd wrapper with caret-obfuscated Vercel is blocked', runGuard(guardPath, guardRepo, hookHome, 'cmd /c v^e^r^c^e^l --^prod', 'claude', 'PowerShell').status === 2);
-  ok('Windows caret-obfuscated rollback is blocked', runGuard(guardPath, guardRepo, hookHome, 'v^e^r^c^e^l r^o^l^l^b^a^c^k dpl_fixture123', 'claude', 'PowerShell').status === 2);
+  ok('Windows caret-obfuscated Vercel executable and flag are blocked', runGuard(windowsGuardPath, guardRepo, windowsHookHome, 'v^e^r^c^e^l --^prod', 'claude', 'PowerShell').status === 2);
+  ok('cmd wrapper with caret-obfuscated Vercel is blocked', runGuard(windowsGuardPath, guardRepo, windowsHookHome, 'cmd /c v^e^r^c^e^l --^prod', 'claude', 'PowerShell').status === 2);
+  ok('Windows caret-obfuscated rollback is blocked', runGuard(windowsGuardPath, guardRepo, windowsHookHome, 'v^e^r^c^e^l r^o^l^l^b^a^c^k dpl_fixture123', 'claude', 'PowerShell').status === 2);
   ok('Windows cmd percent-variable call is blocked', runGuard(
-    guardPath,
+    windowsGuardPath,
     guardRepo,
-    hookHome,
+    windowsHookHome,
     'call %A% %B% https://evil.example',
     'claude',
     'PowerShell',
     { A: 'vercel', B: 'promote' },
   ).status === 2);
   ok('Windows cmd delayed-variable call is blocked', runGuard(
-    guardPath,
+    windowsGuardPath,
     guardRepo,
-    hookHome,
+    windowsHookHome,
     'call !A! !B! https://evil.example',
     'claude',
     'PowerShell',
     { A: 'vercel', B: 'promote' },
   ).status === 2);
-  ok('PowerShell backtick-obfuscated Vercel is blocked', runGuard(guardPath, guardRepo, hookHome, 'v`ercel --prod', 'claude', 'PowerShell').status === 2);
-  ok('PowerShell call-operator string-built promote is blocked', runGuard(guardPath, guardRepo, hookHome, "& ('ver'+'cel') ('pro'+'mote') 'https://evil.example'", 'claude', 'PowerShell').status === 2);
-  ok('PowerShell iex string-built promote is blocked', runGuard(guardPath, guardRepo, hookHome, "iex ('ver'+'cel pro'+'mote https://evil.example')", 'claude', 'PowerShell').status === 2);
-  ok('PowerShell Invoke-Expression string-built promote is blocked', runGuard(guardPath, guardRepo, hookHome, "Invoke-Expression ('ver'+'cel pro'+'mote https://evil.example')", 'claude', 'PowerShell').status === 2);
-  ok('PowerShell Start-Process string-built promote is blocked', runGuard(guardPath, guardRepo, hookHome, "Start-Process ('ver'+'cel') -ArgumentList ('pro'+'mote'), 'https://evil.example'", 'claude', 'PowerShell').status === 2);
-  ok('PowerShell type Concat dynamic executable is blocked', runGuard(guardPath, guardRepo, hookHome, "& ([string]::Concat('ver','cel')) --prod", 'claude', 'PowerShell').status === 2);
+  ok('PowerShell backtick-obfuscated Vercel is blocked', runGuard(windowsGuardPath, guardRepo, windowsHookHome, 'v`ercel --prod', 'claude', 'PowerShell').status === 2);
+  ok('PowerShell call-operator string-built promote is blocked', runGuard(windowsGuardPath, guardRepo, windowsHookHome, "& ('ver'+'cel') ('pro'+'mote') 'https://evil.example'", 'claude', 'PowerShell').status === 2);
+  ok('PowerShell iex string-built promote is blocked', runGuard(windowsGuardPath, guardRepo, windowsHookHome, "iex ('ver'+'cel pro'+'mote https://evil.example')", 'claude', 'PowerShell').status === 2);
+  ok('PowerShell Invoke-Expression string-built promote is blocked', runGuard(windowsGuardPath, guardRepo, windowsHookHome, "Invoke-Expression ('ver'+'cel pro'+'mote https://evil.example')", 'claude', 'PowerShell').status === 2);
+  ok('PowerShell Start-Process string-built promote is blocked', runGuard(windowsGuardPath, guardRepo, windowsHookHome, "Start-Process ('ver'+'cel') -ArgumentList ('pro'+'mote'), 'https://evil.example'", 'claude', 'PowerShell').status === 2);
+  ok('PowerShell type Concat dynamic executable is blocked', runGuard(windowsGuardPath, guardRepo, windowsHookHome, "& ([string]::Concat('ver','cel')) --prod", 'claude', 'PowerShell').status === 2);
+  ok('PowerShell argument splatting is blocked', runGuard(windowsGuardPath, guardRepo, windowsHookHome, `& ${quotedPinnedWindowsVercel} @deployArgs`, 'claude', 'PowerShell').status === 2);
+  ok('PowerShell stop-parsing token is blocked', runGuard(windowsGuardPath, guardRepo, windowsHookHome, `& ${quotedPinnedWindowsVercel} --% --prod`, 'claude', 'PowerShell').status === 2);
+  ok('PowerShell compound command is blocked', runGuard(windowsGuardPath, guardRepo, windowsHookHome, `${windowsStagedCommand}; Write-Output done`, 'claude', 'PowerShell').status === 2);
+  const pinnedVercelBytes = fs.readFileSync(windowsToolchain.vercel);
+  fs.appendFileSync(windowsToolchain.vercel, '\nrem tampered\n');
+  ok('changed pinned vercel.cmd hash blocks the actual PowerShell hook', runGuard(windowsGuardPath, guardRepo, windowsHookHome, windowsStagedCommand, 'claude', 'PowerShell').status === 2);
+  fs.writeFileSync(windowsToolchain.vercel, pinnedVercelBytes);
+  const installedProxyBytes = fs.readFileSync(windowsProxy);
+  fs.appendFileSync(windowsProxy, '\n// tampered\n');
+  ok('changed managed Windows proxy source blocks its own fallback execution', runWindowsProxy([
+    'promote', 'https://strict-fixture.vercel.app/',
+  ]).status === 2);
+  fs.writeFileSync(windowsProxy, installedProxyBytes);
+  const missingWindowsToolchain = fakeWindowsToolchain();
+  const missingWindowsHome = tempDir('dcheck-windows-missing-cli-home-');
+  installHooks({
+    homeDir: missingWindowsHome,
+    platform: 'win32',
+    vercelExecutable: missingWindowsToolchain.vercel,
+    powerShellExecutable: missingWindowsToolchain.powerShell,
+    vercelVersion: missingWindowsToolchain.version,
+  });
+  fs.unlinkSync(missingWindowsToolchain.vercel);
+  const missingWindowsUninstall = uninstallHooks({ homeDir: missingWindowsHome });
+  ok('Windows uninstall remains available after the pinned Vercel CLI disappears', Object.values(missingWindowsUninstall.status.agents).every(agent => !agent.managedPresent)
+    && !fs.existsSync(path.join(missingWindowsHome, '.dorms-check', 'hooks', 'manifest.json')));
   ok('command substitution is rejected at the conservative shell boundary', runGuard(guardPath, guardRepo, hookHome, 'echo $(date)', 'codex').status === 2);
-  ok('Claude PowerShell-shaped production command is gated', runGuard(guardPath, guardRepo, hookHome, 'vercel.cmd --prod', 'claude', 'PowerShell').status === 2);
+  ok('Claude PowerShell-shaped production command is gated', runGuard(windowsGuardPath, guardRepo, windowsHookHome, 'vercel.cmd --prod', 'claude', 'PowerShell').status === 2);
   ok('explicit vercel.cmd token is blocked so Windows also uses canonical vercel resolution', runGuard(guardPath, guardRepo, hookHome, `vercel.cmd --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=${guardSha}`, 'codex').status === 2);
 
   fs.writeFileSync(path.join(guardRepo, 'app.js'), 'export const app = false;\n');
@@ -1354,8 +1560,8 @@ async function run() {
   const cliGeminiFile = path.join(cliHookHome, '.gemini', 'settings.json');
   const cliClaudeSettings = JSON.parse(fs.readFileSync(cliClaudeFile, 'utf8'));
   const cliGeminiSettings = JSON.parse(fs.readFileSync(cliGeminiFile, 'utf8'));
-  cliClaudeSettings.hooks.PreToolUse.find(group => group.matcher === 'Bash|PowerShell').hooks.find(handler => handler.command.includes('vercel-guard.cjs')).timeout = 1;
-  cliGeminiSettings.hooks.BeforeTool.find(group => group.matcher === '^run_shell_command$').hooks.find(handler => handler.command.includes('vercel-guard.cjs')).timeout = 1;
+  managedHandler(cliClaudeSettings.hooks.PreToolUse.find(group => group.matcher === 'Bash|PowerShell')).timeout = 1;
+  managedHandler(cliGeminiSettings.hooks.BeforeTool.find(group => group.matcher === '^run_shell_command$')).timeout = 1;
   fs.writeFileSync(cliClaudeFile, JSON.stringify(cliClaudeSettings, null, 2));
   fs.writeFileSync(cliGeminiFile, JSON.stringify(cliGeminiSettings, null, 2));
   const cliTamperedHookStatus = runCli(cliRepo, cliHookHome, ['hooks', 'status', '--agents', 'claude,gemini', '--json']);
@@ -1418,6 +1624,7 @@ async function run() {
   const pack = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: packageRoot, encoding: 'utf8' }));
   const packedFiles = new Set((pack[0]?.files || []).map(item => item.path));
   ok('npm package includes hooks/vercel-guard.cjs', packedFiles.has('hooks/vercel-guard.cjs'));
+  ok('npm package includes hooks/vercel-proxy.cjs', packedFiles.has('hooks/vercel-proxy.cjs'));
   ok('npm package includes core/strict-runtime.cjs', packedFiles.has('core/strict-runtime.cjs'));
   ok('npm package includes exact manifest-bound static reader', packedFiles.has('checks/static/exact-file.js'));
   ok('npm package includes strict security gate documentation', packedFiles.has('docs/STRICT-SECURITY-GATE.ko.md'));
