@@ -28,6 +28,26 @@
 
 이게 전부입니다. 붙여넣고 AI가 안내하는 대로 따라가면 됩니다.
 
+## Vercel 배포 전 보안 검사만 강제하기
+
+아래 프롬프트는 일반 세 축 완주가 아니라 `security`만 검사하고, 검사하지 않은 production 배포를 세 AI CLI에서 막을 때 씁니다. 교육 자료에 적힌 **검토 완료 dorms-check 커밋 SHA로 고정된 실행 명령**을 함께 붙여넣으세요. 기본 브랜치 최신판으로 바꾸지 마세요.
+
+---
+
+현재 앱 폴더에서 dorms-check strict 보안 게이트를 설치하고, staged production을 검사한 뒤 같은 배포만 Vercel production에 연결해줘. 먼저 운영체제, 현재 셸, Git 루트, Node, Git, Vercel CLI 로그인과 프로젝트 연결 상태를 스스로 확인해. 사용자인 나에게 터미널 명령을 입력시키지 말고 네가 직접 실행해. 내가 직접 해야 하는 일은 웹 또는 CLI 로그인, Codex `/hooks`의 훅 신뢰, 네가 소유자를 판단할 수 없는 기존 변경 확인뿐이야.
+
+교육 자료가 준 정확한 dorms-check 커밋 SHA를 끝까지 고정해서 사용하고 임의로 최신판으로 바꾸지 마. `detect`와 `init --name "내 앱" --track security --confirm-ownership`을 실행해. 배포할 코드와 설정을 확인하고 작업트리를 깨끗한 커밋으로 만든 뒤 현재 HEAD를 직접 읽어 `scan --track security --strict --json --code-only --git-sha <현재 HEAD>`를 실행해. 모르는 기존 변경은 임의로 커밋하지 말고 그때만 나에게 물어봐.
+
+그다음 `hooks install --global --agents codex,claude,gemini --provider vercel --security-only`와 `hooks status --agents codex,claude,gemini --json`을 실행해. Codex `~/.codex/config.toml`, Claude `~/.claude/settings.json`, Gemini `~/.gemini/settings.json`의 기존 설정을 보존해야 해. 현재 세션에서 새 훅을 불러오기 위해 재시작이나 신뢰 확인이 필요하면 그 한 동작만 쉬운 말로 알려줘.
+
+code strict가 PASS이고 영수증이 유효할 때만 `vercel --prod --skip-domain`을 실행해. stdout의 정확한 Deployment URL을 네가 캡처해. 그 URL 하나를 `--url`과 `--vercel-deployment`에 똑같이 넣어 `scan --track security --strict --json --url <정확한 URL> --git-sha <같은 HEAD> --vercel-deployment <정확한 URL>`을 실행해. 이어서 `gate verify --git-sha <같은 HEAD> --vercel-deployment <정확한 URL> --url <정확한 URL> --json`을 실행해. 모두 PASS일 때만 `vercel promote <정확한 URL>`을 실행해.
+
+종료 코드 0만 PASS야. 1은 확인된 보안 결함, 2는 사용법 또는 설정 오류, 3은 필수 검사 미완료, 4는 Git/URL/배포 바인딩 불일치, 5는 영수증 없음/만료/무결성 오류야. 1부터 5까지 어떤 결과도 설명이나 `judge`로 통과 처리하지 마. 문제를 고치면 새 커밋에서 code strict부터 다시 시작해. 영수증이 15분을 넘겼으면 다시 검사해.
+
+직접 production 배포, `vercel alias set`, 다른 URL 또는 ID promote, Git push 기반 자동 production 배포로 우회하지 마. 마지막에는 Git SHA, code/live 상태, 검사한 정확한 Vercel URL과 ID, 영수증 만료 시각, 훅 상태를 표로 보여줘. dorms-check는 인증서가 아니고 도름스가 별도로 재검증한다는 한계도 한 줄로 알려줘.
+
+---
+
 ## 학운위 마크가 "방침 필수 항목이 확인되지 않는다"고 나올 때
 
 도름스는 앱 주소를 바깥에서 열어 개인정보처리방침 글자를 읽습니다. 그런데 방침을 **별도 주소 없이 앱 안 팝업으로만** 띄우는 앱(리액트·Vite 같은 한 장짜리 앱)은 바깥에서 받는 화면이 빈 껍데기라, 방침이 멀쩡히 있어도 글자가 안 보일 수 있어요. 이 도구로는 "이상 없음"인데 도름스에서만 막히는 경우가 이것입니다. 둘 중 하나로 풀면 됩니다.

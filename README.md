@@ -2,7 +2,7 @@
 
 English | [한국어](./README.ko.md)
 
-**A coach that helps teachers check the apps they built with vibe coding, and fix them alongside their own AI until they're actually safe.**
+**A coach that helps teachers inspect apps built with vibe coding and reduce verified risks alongside their own AI.**
 
 > Made by teacher Hong Changuk of Team DoRm. DoRms members may use it freely in their own projects.
 
@@ -34,6 +34,17 @@ npx -y github:shinnanchanguk/dorms-check edzip council --approved-url "https://e
 npx -y github:shinnanchanguk/dorms-check status     # remaining items + how to fix each
 npx -y github:shinnanchanguk/dorms-check submit      # once everything passes: evidence pack + how to apply
 ```
+
+### Strict Vercel deployment gate
+
+For a production-blocking gate, pin an exact reviewed Git commit instead of running the moving default branch. Strict mode issues signed 15-minute receipts bound to a clean Git SHA/tree and the exact Vercel deployment URL/ID. Global Codex, Claude Code, and Gemini CLI hooks block direct production deployment and promotion without matching receipts.
+
+```bash
+dcheck hooks install --global --agents codex,claude,gemini --provider vercel --security-only
+dcheck hooks status --agents codex,claude,gemini --json
+```
+
+See the command sequence, exit contract, hook locations, and limitations in [`docs/STRICT-SECURITY-GATE.ko.md`](./docs/STRICT-SECURITY-GATE.ko.md).
 
 ## Choosing which axes to check
 The three tracks are independent. You can check only the ones you want, and only the chosen tracks are inspected and judged (the rest do not run at all).

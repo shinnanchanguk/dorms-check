@@ -34,7 +34,7 @@ export async function firebaseProbe(rawUrl, opts = {}) {
   const joined = await fetchBundle(url, req);
   const dbUrls = [...new Set((joined.match(FIREBASE_DB_RE) || []).map((u) => u.replace(/\/$/, '')))].slice(0, 4);
   if (!dbUrls.length) {
-    return [{ id: 'code.firebase.public-read', status: 'na', observed: 'Firebase 실시간 DB 주소를 앱에서 찾지 못함(비-Firebase 앱이거나 미사용) — 프로브 생략', evidence: {} }];
+    return [{ id: 'code.firebase.public-read', status: 'na', observed: 'Firebase provider not found: 배포된 앱에서 Realtime Database 주소를 찾지 못함', evidence: { providerDetected: false } }];
   }
 
   const publicDbs = [];

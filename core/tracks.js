@@ -68,14 +68,30 @@ export function scoreSecurity(results, bonus = []) {
   let score = 100;
   const failing = [];
   const failingBySeverity = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-  for (const r of results) {
+  const byId = new Map((results || []).filter(result => result?.id).map(result => [result.id, result]));
+  for (const r of byId.values()) {
     const cat = catalogItem(r.id);
     if (!cat || cat.track !== 'security') continue;
-    if (r.status === 'fail') {
+    const permittedNa = r.status === 'na'
+      && ['code.rls.anon-read', 'code.firebase.public-read'].includes(r.id)
+      && r.evidence?.providerDetected === false;
+    const unresolvedBlocking = cat.gate
+      && SEVERITY_RANK[cat.severity] >= SEVERITY_RANK.high
+      && r.status !== 'pass'
+      && !permittedNa;
+    if (r.status === 'fail' || unresolvedBlocking) {
       score -= cat.weight || 0;
       failingBySeverity[cat.severity] = (failingBySeverity[cat.severity] || 0) + 1;
-      if (cat.gate) failing.push({ id: r.id, severity: cat.severity, title: cat.title });
+      if (cat.gate) failing.push({ id: r.id, severity: cat.severity, title: cat.title, missing: false });
     }
+  }
+  // An absent required server result is not evidence of safety. This prevents an
+  // empty or truncated scan from receiving 100/A+ and eligible=true.
+  for (const cat of SECURITY_ITEMS) {
+    if (!cat.gate || !cat.serverVerifiable || SEVERITY_RANK[cat.severity] < SEVERITY_RANK.high || byId.has(cat.id)) continue;
+    score -= cat.weight || 0;
+    failingBySeverity[cat.severity] = (failingBySeverity[cat.severity] || 0) + 1;
+    failing.push({ id: cat.id, severity: cat.severity, title: cat.title, missing: true });
   }
   for (const b of bonus) score += b.points || 0;
   score = Math.max(0, Math.min(100, score));

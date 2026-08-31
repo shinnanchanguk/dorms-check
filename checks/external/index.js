@@ -31,7 +31,7 @@ export async function runExternalScan(rawUrl, opts = {}) {
   const hdr = checkHeaders(mainRes);
   items.push(...hdr.results);
   items.push(...checkFingerprint(mainRes));
-  items.push(...(await checkTls(mainRes, url)));
+  items.push(...(await checkTls(mainRes, url, { requestImpl: req })));
   items.push(...(await checkExposure(mainRes, url, req)));
   items.push(...(await checkCors(url, req)));
   items.push(...checkSeoPerf(mainRes));

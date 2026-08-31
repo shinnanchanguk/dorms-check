@@ -7,9 +7,9 @@ import { endpointAuthProbe } from './endpoint-auth.js';
 export async function runRuntimeProbe(rawUrl, opts = {}) {
   const items = [];
   try { items.push(...await rlsProbe(rawUrl, opts)); }
-  catch (e) { items.push({ id: 'code.rls.anon-read', status: 'na', observed: `RLS 프로브 실패: ${e.message}`, evidence: {} }); }
+  catch (e) { items.push({ id: 'code.rls.anon-read', status: 'na', observed: `RLS 프로브 실패: ${e.message}`, evidence: { probeError: true } }); }
   try { items.push(...await firebaseProbe(rawUrl, opts)); }
-  catch (e) { items.push({ id: 'code.firebase.public-read', status: 'na', observed: `Firebase 프로브 실패: ${e.message}`, evidence: {} }); }
+  catch (e) { items.push({ id: 'code.firebase.public-read', status: 'na', observed: `Firebase 프로브 실패: ${e.message}`, evidence: { probeError: true } }); }
   try { items.push(...await endpointAuthProbe(rawUrl, opts)); }
   catch (e) { items.push({ id: 'code.endpoint.unauth', status: 'na', observed: `엔드포인트 프로브 실패: ${e.message}`, evidence: {} }); }
   return { items };

@@ -2,7 +2,7 @@
 
 [English](./README.md) | 한국어
 
-**교사가 바이브코딩으로 만든 앱을 스스로 점검하고, 완전히 안전해질 때까지 자기 AI와 함께 고치는 점검 코치.**
+**교사가 바이브코딩으로 만든 앱을 스스로 점검하고, 확인된 위험을 자기 AI와 함께 줄이는 점검 코치.**
 
 > Team DoRm · 교사 홍창욱 제작 · DoRms 회원은 자기 프로젝트에 자유롭게 사용할 수 있습니다.
 
@@ -34,6 +34,17 @@ npx -y github:shinnanchanguk/dorms-check edzip council --approved-url "https://e
 npx -y github:shinnanchanguk/dorms-check status     # 남은 항목 + 고치는 법
 npx -y github:shinnanchanguk/dorms-check submit      # 다 통과하면 증빙팩 + 신청 안내
 ```
+
+### Vercel 배포를 실제로 막는 strict 모드
+
+배포 직전 강제 게이트가 필요하면 기본 브랜치 최신판이 아니라 **검토를 마친 정확한 커밋 SHA**를 고정해 실행하세요. strict 모드는 clean Git SHA/tree에 묶인 15분짜리 서명 영수증을 만들고, 세 에이전트의 전역 훅이 영수증 없는 직접 production 배포와 다른 배포의 promote를 차단합니다.
+
+```bash
+dcheck hooks install --global --agents codex,claude,gemini --provider vercel --security-only
+dcheck hooks status --agents codex,claude,gemini --json
+```
+
+전체 순서, code/live 명령, 종료 코드, 훅 설정 위치와 한계는 [`docs/STRICT-SECURITY-GATE.ko.md`](./docs/STRICT-SECURITY-GATE.ko.md)에 있습니다. 일반 점검용 `github:` 최신판 예시와 strict 배포 게이트용 고정 SHA를 혼동하지 마세요.
 
 ## 어떤 축을 점검할지 고르기
 세 축은 서로 독립입니다. 원하는 축만 골라 점검할 수 있고, 고른 축만 검사·판정합니다(나머지 축은 아예 돌지 않습니다).

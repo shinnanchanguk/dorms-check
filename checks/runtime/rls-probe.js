@@ -97,11 +97,14 @@ export async function rlsProbe(rawUrl, opts = {}) {
 
   const creds = await extractSupabase(url, req);
   if (!creds.supabaseUrl || !creds.anonKey) {
+    const providerDetected = Boolean(creds.supabaseUrl || creds.anonKey);
     return [{
       id: 'code.rls.anon-read',
-      status: 'na',
-      observed: 'Supabase 공개 자격을 앱에서 찾지 못함(비-Supabase 앱이거나 자격 비노출) — RLS 실측 생략',
-      evidence: { supabaseUrl: creds.supabaseUrl, foundJwts: creds.foundJwts },
+      status: providerDetected ? 'pending' : 'na',
+      observed: providerDetected
+        ? 'Supabase 흔적은 찾았지만 공개 URL과 anon 키를 모두 확인하지 못해 RLS 실측을 완료할 수 없음'
+        : 'Supabase provider not found: 배포된 앱에서 Supabase URL과 anon 키를 찾지 못함',
+      evidence: { providerDetected, supabaseUrl: creds.supabaseUrl, foundJwts: creds.foundJwts },
     }];
   }
 

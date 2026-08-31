@@ -21,6 +21,18 @@ import { runProtectSteps, runProtectVerify, resolveBuildDir, saveProtectState, l
 import { restoreBackup, latestBackup } from '../core/util.js';
 import { verifyBuild } from '../protect/verify-static.js';
 import { applyEdzipPlan, buildEdzipPlan, prepareCouncilDocuments, writeEdzipPlan } from '../core/edzip-autopilot.js';
+import {
+  STRICT_EXIT,
+  createReceipt,
+  evaluateStrictSecurity,
+  invalidateReceipt,
+  inspectVercelDeployment,
+  normalizeDeploymentUrl,
+  projectIdentity,
+  storeReceipt,
+  verifyGate,
+} from '../core/strict.js';
+import { ALL_AGENTS, hookStatus, installHooks, uninstallHooks } from '../core/hooks.js';
 
 const root = process.cwd();
 const [, , cmd, ...args] = process.argv;
@@ -49,6 +61,11 @@ function help() {
   ${color.bold('dcheck init')}  ${color.dim('--name --url --track security,edzip,protection --stack')}   설정 생성
   ${color.dim('  터미널에서 --track 없이 실행하면 세 축 중 원하는 것만 골라 물어봐요(보안 마크만 원하면 보안만).')}
   ${color.bold('dcheck scan')}  ${color.dim('--url <URL> [--code-only]')}   결정적 스캔(외부 표면+RLS 실측+정적+보호 상태) + 리포트
+  ${color.bold('dcheck scan')}  ${color.dim('--track security --strict --json --code-only --git-sha <SHA>')}   배포 전 코드 보안 게이트
+  ${color.bold('dcheck scan')}  ${color.dim('--track security --strict --json --url <격리 URL> --git-sha <SHA> --vercel-deployment <같은 URL>')}   격리 배포 실측 게이트
+  ${color.bold('dcheck gate verify')} ${color.dim('--git-sha <SHA> --vercel-deployment <URL> [--json]')}   현재 소스·배포와 strict 영수증 일치 확인
+  ${color.bold('dcheck hooks install')} ${color.dim('--global --agents codex,claude,gemini --provider vercel --security-only')}   전역 배포 차단 훅 설치
+  ${color.bold('dcheck hooks status|uninstall')} ${color.dim('[--agents ...] [--json]')}   훅 상태 확인·안전 제거
   ${color.bold('dcheck judge --in <answers.json>')}   교사 AI가 판단한 ai-review 항목 병합(증거 필수)
   ${color.bold('dcheck interview')} ${color.dim('[--answers <file>]')}   권리·허용범위 설문 문항 출력 / 답으로 권리 프로필 생성
   ${color.bold('dcheck protect plan')}           보호 계획 생성(무엇을 바꿀지 + 계획 해시. 파일 안 바꿈)
@@ -65,6 +82,7 @@ function help() {
 `);
   log.plain(color.dim('  security 스캔은 검사만 합니다. edzip prepare와 protection apply는 각각'));
   log.plain(color.dim('  사용자가 승인한 계획 해시와 --confirm-apply 플래그가 있을 때만입니다. 자동 배포는 하지 않습니다.'));
+  log.plain(color.dim('  전역 훅은 AI 셸의 Vercel CLI만 다룹니다. 대시보드·Git 자동 production·외부 CI는 별도로 막아야 합니다.'));
   honesty();
 }
 
@@ -79,46 +97,132 @@ function printDetect() {
 }
 
 async function runScan() {
+  const strict = flag('strict');
+  const json = flag('json');
   const cfg = loadConfig(root);
-  if (cfg._parseError) { log.err('dorms-check.config.json 파싱 실패. 고치거나 삭제 후 다시.'); process.exitCode = 1; return; }
+  const fail = (exitCode, reason, extra = {}) => {
+    process.exitCode = exitCode;
+    if (json) console.log(JSON.stringify({ ok: false, exitCode, reason, ...extra }, null, 2));
+    else log.err(reason);
+  };
+  if (cfg._parseError) {
+    fail(strict ? STRICT_EXIT.USAGE_CONFIG : 1, 'dorms-check.config.json 파싱 실패. 고치거나 삭제 후 다시.');
+    return;
+  }
   const url = opt('url', cfg.app?.url || '');
   const codeOnly = flag('code-only') || !url;
   const stack = cfg.app?.stack || detectStack(root).framework;
-  const tracks = cfg.tracks && cfg.tracks.length ? cfg.tracks : ['security'];
+  const trackArg = opt('track', '');
+  const tracks = trackArg ? trackArg.split(',').map(item => item.trim()).filter(Boolean) : (cfg.tracks && cfg.tracks.length ? cfg.tracks : ['security']);
+  const phase = codeOnly ? 'code' : 'live';
+  let project = null;
+  let deploymentId = '';
+
+  if (strict) {
+    if (tracks.length !== 1 || tracks[0] !== 'security') {
+      fail(STRICT_EXIT.USAGE_CONFIG, 'strict 모드는 --track security 단일 트랙만 허용합니다.');
+      return;
+    }
+    if (!cfg.ownershipConfirmed) {
+      fail(STRICT_EXIT.USAGE_CONFIG, 'strict 검사 전 init --confirm-ownership으로 본인이 운영하는 앱임을 확인해야 합니다.');
+      return;
+    }
+    const requestedSha = opt('git-sha', '');
+    if (!requestedSha) {
+      fail(STRICT_EXIT.USAGE_CONFIG, 'strict 검사에는 --git-sha <현재 HEAD>가 필요합니다.');
+      return;
+    }
+    project = projectIdentity(root);
+    if (!project.ok) { fail(project.exitCode || STRICT_EXIT.BINDING_MISMATCH, project.reason); return; }
+    if (!project.clean) {
+      fail(STRICT_EXIT.BINDING_MISMATCH, 'strict 검사는 커밋되지 않은 변경이 없는 Git 작업트리에서만 영수증을 만듭니다.', { dirty: project.dirty });
+      return;
+    }
+    if (requestedSha !== project.gitSha) {
+      fail(STRICT_EXIT.BINDING_MISMATCH, `--git-sha ${requestedSha}와 현재 HEAD ${project.gitSha}가 다릅니다.`);
+      return;
+    }
+    // A failed or interrupted re-scan must not leave an older PASS receipt
+    // usable for the same source/deployment.
+    invalidateReceipt(phase, project, root);
+    if (phase === 'live') {
+      deploymentId = opt('vercel-deployment', '');
+      if (!deploymentId) {
+        fail(STRICT_EXIT.USAGE_CONFIG, 'live strict 검사에는 --vercel-deployment <격리 배포 URL 또는 ID>가 필요합니다.');
+        return;
+      }
+      let normalizedUrl;
+      try { normalizedUrl = normalizeDeploymentUrl(url); }
+      catch (error) { fail(STRICT_EXIT.USAGE_CONFIG, error.message); return; }
+      if (/^https?:\/\//i.test(deploymentId)) {
+        let normalizedDeployment;
+        try { normalizedDeployment = normalizeDeploymentUrl(deploymentId); }
+        catch (error) { fail(STRICT_EXIT.USAGE_CONFIG, error.message); return; }
+        if (normalizedUrl !== normalizedDeployment) {
+          fail(STRICT_EXIT.BINDING_MISMATCH, '--url과 --vercel-deployment URL이 다릅니다. 실제 격리 배포 URL 하나를 똑같이 넣으세요.');
+          return;
+        }
+        deploymentId = normalizedDeployment;
+      }
+      const deploymentBinding = inspectVercelDeployment({ cwd: root, deployment: deploymentId, url: normalizedUrl });
+      if (!deploymentBinding.ok) {
+        fail(deploymentBinding.exitCode, deploymentBinding.reason);
+        return;
+      }
+      deploymentId = deploymentBinding.id;
+    }
+  }
 
   if (!cfg.ownershipConfirmed) {
-    log.warn('본인이 만들고 운영하는 앱만 스캔하세요. init 에서 ownershipConfirmed:true 로 동의가 필요합니다.');
+    if (!json) log.warn('본인이 만들고 운영하는 앱만 스캔하세요. init 에서 ownershipConfirmed:true 로 동의가 필요합니다.');
   }
 
   const results = [];
   let raw = {};
+  let bonus = [];
   if (!codeOnly) {
-    log.step(`외부 표면 스캔: ${url}`);
-    const ext = await runExternalScan(url);
+    if (!json) log.step(`외부 표면 스캔: ${url}`);
+    let ext;
+    try { ext = await runExternalScan(url); }
+    catch (error) {
+      fail(strict ? STRICT_EXIT.INCOMPLETE : 1, `외부 표면 스캔을 시작하지 못했습니다: ${error.message}`);
+      return;
+    }
     results.push(...ext.items);
     raw = ext.raw;
+    bonus = ext.bonus || [];
     if (ext.reachable) {
-      log.step('능동 런타임 프로브(RLS 실측·엔드포인트) …');
-      const rt = await runRuntimeProbe(url);
+      if (!json) log.step('능동 런타임 프로브(RLS 실측·엔드포인트) …');
+      let rt;
+      try { rt = await runRuntimeProbe(url); }
+      catch (error) {
+        fail(strict ? STRICT_EXIT.INCOMPLETE : 1, `능동 런타임 프로브를 완료하지 못했습니다: ${error.message}`);
+        return;
+      }
       results.push(...rt.items);
     } else {
-      log.warn(`URL 접속 실패 — 코드 검사만 진행(${ext.error || ''})`);
+      if (!json) log.warn(`URL 접속 실패, 코드 검사만 진행(${ext.error || ''})`);
     }
-    var bonus = ext.bonus || [];
   } else {
-    log.step('URL 없음 — 로컬 코드 검사만(--code-only)');
-    var bonus = [];
+    if (!json) log.step('URL 없음, 로컬 코드 검사만(--code-only)');
   }
 
-  log.step('로컬 코드 정적 검사 …');
+  if (!json) log.step('로컬 코드 정적 검사 …');
   results.push(...runStaticScan(root).items);
 
   // ai-review 판단(review.json) 병합
-  const review = readJsonSafe(REVIEW) || {};
+  const review = strict ? {} : (readJsonSafe(REVIEW) || {});
   for (const [id, v] of Object.entries(review)) {
     const existing = results.find(r => r.id === id);
-    if (existing) { existing.status = v.status; existing.observed = v.evidence || existing.observed; existing.evidence = { ...existing.evidence, aiJudgment: v }; }
-    else results.push({ id, status: v.status, observed: v.evidence || '(AI 판단)', evidence: { aiJudgment: v } });
+    const cat = catalogItem(id);
+    const reviewable = ['ai', 'hybrid', 'declared'].includes(cat?.method);
+    if (existing && reviewable) {
+      existing.status = v.status;
+      existing.observed = v.evidence || existing.observed;
+      existing.evidence = { ...existing.evidence, aiJudgment: v };
+    } else if (!existing) {
+      results.push({ id, status: v.status, observed: v.evidence || '(AI 판단)', evidence: { aiJudgment: v } });
+    }
   }
   // 트랙별 항목 보충(레지스트리 경유): edzip pending seed·protection 결정적 검사 등
   for (const t of TRACKS) {
@@ -141,7 +245,40 @@ async function runScan() {
   const md = renderReportMd({ config: { ...cfg, app: { ...cfg.app, stack } }, results, trackResults, bonus });
   ensureDir(STATE_DIR);
   writeText(path.join(STATE_DIR, 'REPORT.md'), md);
-  writeText(path.join(STATE_DIR, 'scan.json'), JSON.stringify({ at: new Date().toISOString(), url, results, raw }, null, 2));
+  writeText(path.join(STATE_DIR, 'scan.json'), JSON.stringify({ at: new Date().toISOString(), url, results, bonus, raw }, null, 2));
+
+  if (strict) {
+    const strictResult = evaluateStrictSecurity(results, phase);
+    let stored = null;
+    if (strictResult.status === 'PASS') {
+      const receipt = createReceipt({
+        phase,
+        project,
+        deploymentUrl: phase === 'live' ? url : '',
+        deploymentId,
+        strict: strictResult,
+        results,
+        tool: { version: PKG.version, commit: PKG.gitHead || '' },
+      });
+      stored = storeReceipt(receipt, root);
+    }
+    process.exitCode = strictResult.exitCode;
+    const output = {
+      ok: strictResult.status === 'PASS',
+      exitCode: strictResult.exitCode,
+      phase,
+      status: strictResult.status,
+      project: { gitSha: project.gitSha, treeSha: project.treeSha, clean: project.clean },
+      deployment: phase === 'live' ? { url: normalizeDeploymentUrl(url), id: deploymentId } : null,
+      strict: strictResult,
+      results,
+      receipt: stored ? { trustedFile: stored.trustedFile, projectFile: stored.projectFile, expiresAt: stored.receipt.expiresAt } : null,
+    };
+    if (json) console.log(JSON.stringify(output, null, 2));
+    else if (strictResult.status === 'PASS') log.ok(`${phase} strict 보안 게이트 PASS`);
+    else log.err(`${phase} strict 보안 게이트 ${strictResult.status}: ${[...strictResult.blockers, ...strictResult.incomplete].join(', ')}`);
+    return;
+  }
 
   printSummary({ trackResults, results, config: { ...cfg, app: { ...cfg.app, stack } } });
 
@@ -161,9 +298,11 @@ async function runScan() {
       log.plain(`  - ${r.id}: ${cat ? cat.title : ''} — 코드/방침을 확인하고 pass|fail|na 를 증거와 함께 judge 로 기록`);
     }
   }
-  log.plain('');
-  log.plain(color.dim('  리포트: .dorms-check/REPORT.md'));
-  honesty();
+  if (!json) {
+    log.plain('');
+    log.plain(color.dim('  리포트: .dorms-check/REPORT.md'));
+    honesty();
+  }
 }
 
 // 사람이 터미널에서 직접 실행할 때(TTY) 세 축 중 원하는 것만 고르게 물어본다.
@@ -242,6 +381,11 @@ function runJudge() {
   // answers: { "<id>": { status:"pass|fail|na", evidence:"파일:라인 or 실측요약" } }
   for (const [id, v] of Object.entries(answers)) {
     if (!v || !['pass', 'fail', 'na'].includes(v.status)) { rejected++; continue; }
+    const cat = catalogItem(id);
+    if (cat && (cat.method === 'deterministic' || (cat.track === 'security' && cat.method !== 'ai'))) {
+      log.warn(`거부: ${id}, 결정적 검사 결과는 judge로 덮어쓸 수 없습니다.`);
+      rejected++; continue;
+    }
     // 증거 없는 pass 는 거부(할루시네이션 방지: 서술만으로 통과 못 함)
     if (v.status === 'pass' && (!v.evidence || String(v.evidence).trim().length < 4)) {
       log.warn(`거부: ${id} — pass 에는 증거(파일:라인 또는 실측 요약)가 필요합니다.`);
@@ -284,7 +428,7 @@ function runSubmit() {
   const scan = readJsonSafe(scanFile);
   const stack = cfg.app?.stack || '';
   const results = scan.results || [];
-  const bonus = [];
+  const bonus = Array.isArray(scan.bonus) ? scan.bonus : [];
   const trackResults = {};
   for (const t of TRACKS) {
     if (!cfg.tracks?.includes(t.id)) continue;
@@ -539,6 +683,74 @@ async function runEdzipCmd() {
   log.plain('  에듀집 제출은 하지 않았습니다. 확인 완료 뒤 edzip council에 공식 주소를 넣으면 내부 기안문과 학운위 안건 초안을 만듭니다.');
 }
 
+function outputMachineResult(result, { json = false, success = '' } = {}) {
+  process.exitCode = result.exitCode ?? (result.ok ? STRICT_EXIT.PASS : STRICT_EXIT.USAGE_CONFIG);
+  if (json) console.log(JSON.stringify(result, null, 2));
+  else if (result.ok) log.ok(success || 'PASS');
+  else log.err(result.reason || '요청을 완료하지 못했습니다.');
+}
+
+function runGateCmd() {
+  const sub = args[0];
+  const json = flag('json');
+  if (sub !== 'verify') {
+    outputMachineResult({ ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: '사용법: dcheck gate verify --git-sha <SHA> --vercel-deployment <URL 또는 ID> [--url <URL>] [--json]' }, { json });
+    return;
+  }
+  const gitSha = opt('git-sha', '');
+  const deployment = opt('vercel-deployment', '');
+  if (!gitSha || !deployment) {
+    outputMachineResult({ ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: 'gate verify에는 --git-sha와 --vercel-deployment가 모두 필요합니다.' }, { json });
+    return;
+  }
+  const result = verifyGate({ cwd: root, gitSha, deployment, url: opt('url', '') });
+  outputMachineResult(result, { json, success: 'strict code/live 영수증이 현재 Git과 Vercel 배포에 일치합니다.' });
+}
+
+function validateHookMode(sub, json) {
+  if (!['install', 'status', 'uninstall'].includes(sub)) {
+    outputMachineResult({ ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: '사용법: dcheck hooks install|status|uninstall [--agents codex,claude,gemini] [--json]' }, { json });
+    return false;
+  }
+  if (sub === 'install' && (!flag('global') || !flag('security-only') || opt('provider', '') !== 'vercel')) {
+    outputMachineResult({ ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: '설치는 --global --provider vercel --security-only를 모두 명시해야 합니다.' }, { json });
+    return false;
+  }
+  return true;
+}
+
+function runHooksCmd() {
+  const sub = args[0];
+  const json = flag('json');
+  if (!validateHookMode(sub, json)) return;
+  try {
+    const selected = opt('agents', 'codex,claude,gemini');
+    const requestedAgents = [...new Set(selected.split(',').map(item => item.trim().toLowerCase()).filter(Boolean))];
+    const unknownAgents = requestedAgents.filter(agent => !ALL_AGENTS.includes(agent));
+    if (!requestedAgents.length || unknownAgents.length) {
+      const error = new Error(`--agents는 ${ALL_AGENTS.join(',')} 중에서 골라야 합니다${unknownAgents.length ? `: ${unknownAgents.join(',')}` : ''}.`);
+      error.exitCode = STRICT_EXIT.USAGE_CONFIG;
+      throw error;
+    }
+    if (sub === 'status') {
+      const status = hookStatus();
+      const allEffective = requestedAgents.every(agent => status.agents[agent]?.effective);
+      outputMachineResult({ ok: allEffective, exitCode: allEffective ? STRICT_EXIT.PASS : STRICT_EXIT.INCOMPLETE, ...status }, { json, success: '선택한 전역 배포 차단 훅이 모두 유효합니다.' });
+      return;
+    }
+    const result = sub === 'install' ? installHooks({ agents: selected }) : uninstallHooks({ agents: selected });
+    const ok = sub === 'install'
+      ? result.agents.every(agent => result.status.agents[agent]?.effective)
+      : result.agents.every(agent => !result.status.agents[agent]?.installed);
+    outputMachineResult({ ok, exitCode: ok ? STRICT_EXIT.PASS : STRICT_EXIT.INCOMPLETE, ...result }, {
+      json,
+      success: sub === 'install' ? '전역 Vercel 보안 게이트 훅을 설치했습니다.' : 'dorms-check 전역 훅을 제거했습니다.',
+    });
+  } catch (error) {
+    outputMachineResult({ ok: false, exitCode: error.exitCode || STRICT_EXIT.USAGE_CONFIG, reason: error.message }, { json });
+  }
+}
+
 async function main() {
   switch (cmd) {
     case 'detect': printDetect(); break;
@@ -548,6 +760,8 @@ async function main() {
     case 'interview': runInterview(); break;
     case 'protect': await runProtectCmd(); break;
     case 'edzip': await runEdzipCmd(); break;
+    case 'gate': runGateCmd(); break;
+    case 'hooks': runHooksCmd(); break;
     case 'verify': runVerify(); break;
     case 'status': runStatus(); break;
     case 'report': runReport(); break;
@@ -556,4 +770,11 @@ async function main() {
     default: log.err(`알 수 없는 명령: ${cmd}`); help(); process.exitCode = 1;
   }
 }
-main().catch(e => { log.err(String(e && e.stack ? e.stack : e)); process.exitCode = 1; });
+main().catch(e => {
+  const strictFailure = cmd === 'scan' && flag('strict');
+  const exitCode = strictFailure ? STRICT_EXIT.INCOMPLETE : 1;
+  const reason = String(e?.message || e);
+  if (strictFailure && flag('json')) console.log(JSON.stringify({ ok: false, exitCode, status: 'INCOMPLETE', reason }, null, 2));
+  else log.err(String(e?.stack || e));
+  process.exitCode = exitCode;
+});

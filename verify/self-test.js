@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { checkHeaders } from '../checks/external/headers.js';
+import { checkTls } from '../checks/external/tls.js';
 import { checkExposure } from '../checks/external/exposure.js';
 import { checkCors } from '../checks/external/cors.js';
 import { rlsProbe } from '../checks/runtime/rls-probe.js';
@@ -15,6 +16,7 @@ import { canonicalStringify, planSha256, checkPlanApproval } from '../core/prote
 import { redactPayload } from '../core/redact.js';
 import { buildPayload } from '../core/payload.js';
 import { PROTECTION_ITEMS } from '../catalog/protection.js';
+import { SECURITY_ITEMS } from '../catalog/security.js';
 import { trackMenu, parseTrackSelection } from '../core/config.js';
 import { parseEdzipApprovalUrl, safeEdzipApproval } from '../core/edzip-autopilot.js';
 
@@ -41,12 +43,54 @@ function mockFetch(routes) {
 }
 
 async function run() {
-  console.log('\n[1] 보안 헤더 — 전부 없으면 fail, 있으면 pass');
+  console.log('\n[1] 보안 헤더, 누락·무효·약한 값은 fail, 실제 방어 값만 pass');
   const noHdr = checkHeaders({ headers: {} });
   ok('헤더 없음 → csp fail', noHdr.results.find(r => r.id === 'sec.header.csp').status === 'fail');
-  const withHdr = checkHeaders({ headers: { 'content-security-policy': "default-src 'self'; script-src 'nonce-abc'", 'strict-transport-security': 'max-age=63072000' } });
-  ok('CSP 있음 → pass', withHdr.results.find(r => r.id === 'sec.header.csp').status === 'pass');
+  const withHdr = checkHeaders({ headers: {
+    'content-security-policy': "default-src 'self'; script-src 'self' 'nonce-abc'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    'strict-transport-security': 'max-age=63072000',
+    'x-frame-options': 'DENY',
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'strict-origin-when-cross-origin',
+    'permissions-policy': 'camera=(), microphone=()',
+  } });
+  ok('강한 CSP → pass', withHdr.results.find(r => r.id === 'sec.header.csp').status === 'pass');
   ok('CSP nonce → 가점', withHdr.bonus.some(b => b.id === 'sec.header.csp.nonce'));
+  const garbage = checkHeaders({ headers: {
+    'content-security-policy': 'garbage',
+    'strict-transport-security': 'garbage',
+    'x-frame-options': 'ALLOWALL',
+    'x-content-type-options': 'garbage',
+    'referrer-policy': 'garbage',
+    'permissions-policy': 'not a policy',
+  } });
+  ok('문법 없는 헤더 문자열 → 전부 fail', garbage.results.every(r => r.status === 'fail'));
+  const weakCsp = checkHeaders({ headers: {
+    'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; object-src 'none'; base-uri 'self'; form-action 'self'",
+  } });
+  ok('unsafe-inline·unsafe-eval CSP → fail', weakCsp.results.find(r => r.id === 'sec.header.csp').status === 'fail');
+  const shortHsts = checkHeaders({ headers: { 'strict-transport-security': 'max-age=1' } });
+  ok('너무 짧은 HSTS → fail', shortHsts.results.find(r => r.id === 'sec.header.hsts').status === 'fail');
+
+  console.log('\n[1-1] TLS, HTTPS 주소 문자열이 아니라 실제 인증서 승인 결과로 판정');
+  const tlsBad = await checkTls(
+    { finalUrl: 'https://app.example', headers: {} },
+    'https://app.example',
+    {
+      requestImpl: async () => ({ status: 308, headers: { location: 'https://app.example' }, finalUrl: 'http://app.example' }),
+      negotiateImpl: async () => ({ protocol: 'TLSv1.3', authorized: false, authError: 'CERT_HAS_EXPIRED' }),
+    },
+  );
+  ok('HTTPS여도 인증서 승인 실패 → ssl fail', tlsBad.find(r => r.id === 'sec.transport.ssl-valid').status === 'fail');
+  const tlsGood = await checkTls(
+    { finalUrl: 'https://app.example', headers: {} },
+    'https://app.example',
+    {
+      requestImpl: async () => ({ status: 308, headers: { location: 'https://app.example' }, finalUrl: 'http://app.example' }),
+      negotiateImpl: async () => ({ protocol: 'TLSv1.3', authorized: true, validTo: 'future' }),
+    },
+  );
+  ok('TLS 1.3 + 승인된 인증서 → ssl pass', tlsGood.find(r => r.id === 'sec.transport.ssl-valid').status === 'pass');
 
   console.log('\n[2] .env 오탐 방지 — 진짜 env 는 fail, SPA fallback(HTML) 은 pass');
   const envReal = mockFetch([
@@ -118,8 +162,20 @@ async function run() {
   ok('RLS fail → 마크 미충족', gateFail.eligible === false);
   const gateFbFail = scoreSecurity([{ id: 'code.firebase.public-read', status: 'fail', evidence: {} }]);
   ok('Firebase 공개 → 마크 미충족', gateFbFail.eligible === false);
-  const gatePass = scoreSecurity([{ id: 'code.rls.anon-read', status: 'pass', evidence: {} }, { id: 'code.firebase.public-read', status: 'na', evidence: {} }, { id: 'sec.header.referrer', status: 'fail', evidence: {} }]);
-  ok('low 항목만 fail + Firebase na → 마크 충족', gatePass.eligible === true);
+  const requiredPass = SECURITY_ITEMS
+    .filter(item => item.gate && item.serverVerifiable && ['critical', 'high'].includes(item.severity))
+    .map(item => ({ id: item.id, status: 'pass', evidence: {} }));
+  const gatePass = scoreSecurity([...requiredPass, { id: 'sec.header.referrer', status: 'fail', evidence: {} }]);
+  ok('low 항목만 fail → 마크 충족', gatePass.eligible === true);
+  const providerAbsent = requiredPass.map(item => ['code.rls.anon-read', 'code.firebase.public-read'].includes(item.id)
+    ? { ...item, status: 'na', evidence: { providerDetected: false } }
+    : item);
+  ok('실측으로 provider 없음이 확인된 RLS/Firebase na → 마크 충족', scoreSecurity(providerAbsent).eligible === true);
+  const probeFailedNa = providerAbsent.map(item => item.id === 'code.rls.anon-read' ? { ...item, evidence: { probeError: true } } : item);
+  ok('프로브 실패를 na로 둔 RLS → 마크 미충족', scoreSecurity(probeFailedNa).eligible === false);
+  const invalidNa = requiredPass.map(item => item.id === 'sec.transport.ssl-valid' ? { ...item, status: 'na' } : item);
+  ok('SSL critical na는 통과로 계산하지 않음', scoreSecurity(invalidNa).eligible === false);
+  ok('검사 결과가 비어 있으면 마크 미충족', scoreSecurity([]).eligible === false);
 
   console.log('\n[8] protection 결정적 검사 — 새는 빌드는 잡고(양성), 깨끗한 빌드는 통과(음성)');
   {

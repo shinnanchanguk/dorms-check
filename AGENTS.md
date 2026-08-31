@@ -35,4 +35,10 @@ dorms-check 는 Node CLI이며 Claude·Codex·Gemini·Cursor 등 어떤 AI 코�
 - 파일 변경은 edzip·protection의 명시적 적용 단계뿐이며, 승인한 계획 해시 + `--confirm-apply` 없이는 절대 하지 않습니다. 자동 제출·배포 금지.
 - 사용자 노출 설명은 비개발자가 이해하는 쉬운 말로.
 
+## 사용자가 Vercel strict 배포 게이트를 명시적으로 요청한 경우
+
+`docs/STRICT-SECURITY-GATE.ko.md`를 끝까지 읽고 그 순서만 따르세요. 움직이는 기본 브랜치 대신 검토 완료 커밋 SHA를 고정합니다. 운영체제와 셸을 스스로 감지하고, Git SHA와 Vercel stdout URL을 직접 캡처하며, 사용자에게 터미널 명령을 옮겨 적게 하지 마세요. 사람이 해야 하는 동작은 Vercel 로그인, Codex 훅 신뢰, 모르는 dirty 파일 확인처럼 계정 또는 신뢰 경계를 넘는 것뿐입니다.
+
+`judge`로 결정적 보안 결과를 덮지 마세요. 종료 코드 1은 확인된 결함, 2부터 5는 설정 오류, 미완료, 바인딩 불일치, 영수증 오류입니다. 어느 것도 임의로 PASS로 바꾸지 않습니다. `--skip-domain` 없는 production 배포, code 영수증 없는 staged production, live 영수증과 다른 promote는 실행하지 않습니다.
+
 자세한 내용: `README.ko.md` · `DISCLAIMER.md`
