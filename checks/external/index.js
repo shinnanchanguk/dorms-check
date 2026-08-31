@@ -9,6 +9,18 @@ import { checkSeoPerf } from './seo-perf.js';
 import { checkLegalPages } from './legal-pages.js';
 import { checkFingerprint } from './fingerprint.js';
 
+export function validateFinalOrigin(expectedUrl, finalUrl) {
+  try {
+    const expectedOrigin = new URL(normalizeUrl(expectedUrl)).origin;
+    const finalOrigin = new URL(normalizeUrl(finalUrl)).origin;
+    return expectedOrigin === finalOrigin
+      ? { ok: true, expectedOrigin, finalOrigin }
+      : { ok: false, expectedOrigin, finalOrigin, reason: `최종 응답 origin(${finalOrigin})이 검사한 Vercel 배포 origin(${expectedOrigin})과 다릅니다.` };
+  } catch {
+    return { ok: false, expectedOrigin: '', finalOrigin: '', reason: '최종 응답 URL의 origin을 확인하지 못했습니다.' };
+  }
+}
+
 // url 을 스캔해 { items, bonus, raw } 반환.
 // opts.fetchImpl: 서버가 SSRF 방어 fetch 를 주입(기본 전역 fetch).
 export async function runExternalScan(rawUrl, opts = {}) {
@@ -27,6 +39,20 @@ export async function runExternalScan(rawUrl, opts = {}) {
     };
   }
 
+  const binding = opts.expectedOrigin
+    ? validateFinalOrigin(opts.expectedOrigin, mainRes.finalUrl || url)
+    : null;
+  if (binding && !binding.ok) {
+    return {
+      reachable: false,
+      binding,
+      error: binding.reason,
+      items: [],
+      bonus: [],
+      raw: { url, finalUrl: mainRes.finalUrl, mainStatus: mainRes.status, binding },
+    };
+  }
+
   const items = [];
   const hdr = checkHeaders(mainRes);
   items.push(...hdr.results);
@@ -39,6 +65,7 @@ export async function runExternalScan(rawUrl, opts = {}) {
 
   return {
     reachable: true,
+    binding,
     items,
     bonus: hdr.bonus,
     raw: {

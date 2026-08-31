@@ -72,8 +72,8 @@ export function validateCsp(value) {
   }
 
   const form = directives.get('form-action');
-  if (!form || form.length === 0 || form.includes('*') || form.includes('http:') || form.includes('https:')) {
-    return result(false, 'form-action is not restricted');
+  if (!form || form.length !== 1 || !["'self'", "'none'"].includes(form[0])) {
+    return result(false, "form-action must be exactly 'self' or 'none'");
   }
   return result(true);
 }
@@ -87,11 +87,8 @@ export function validateFrameProtection(xFrameOptions, cspValue) {
   if (!ancestors || ancestors.length === 0) {
     return result(false, xFrameOptions ? 'X-Frame-Options is not DENY or SAMEORIGIN' : 'frame protection is missing');
   }
-  if (ancestors.includes('*') || ancestors.includes('http:') || ancestors.includes('https:')) {
-    return result(false, 'frame-ancestors is too broad');
-  }
-  if (ancestors.includes("'none'") && ancestors.length !== 1) {
-    return result(false, "frame-ancestors mixes 'none' with another source");
+  if (ancestors.length !== 1 || !["'self'", "'none'"].includes(ancestors[0])) {
+    return result(false, "frame-ancestors must be exactly 'self' or 'none'");
   }
   return result(true, 'CSP frame-ancestors');
 }

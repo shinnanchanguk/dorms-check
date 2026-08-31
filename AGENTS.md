@@ -39,6 +39,6 @@ dorms-check 는 Node CLI이며 Claude·Codex·Gemini·Cursor 등 어떤 AI 코�
 
 `docs/STRICT-SECURITY-GATE.ko.md`를 끝까지 읽고 그 순서만 따르세요. 움직이는 기본 브랜치 대신 검토 완료 커밋 SHA를 고정합니다. 운영체제와 셸을 스스로 감지하고, Git SHA와 Vercel stdout URL을 직접 캡처하며, 사용자에게 터미널 명령을 옮겨 적게 하지 마세요. 사람이 해야 하는 동작은 Vercel 로그인, Codex 훅 신뢰, 모르는 dirty 파일 확인처럼 계정 또는 신뢰 경계를 넘는 것뿐입니다.
 
-`judge`로 결정적 보안 결과를 덮지 마세요. 종료 코드 1은 확인된 결함, 2부터 5는 설정 오류, 미완료, 바인딩 불일치, 영수증 오류입니다. 어느 것도 임의로 PASS로 바꾸지 않습니다. `--skip-domain` 없는 production 배포, code 영수증 없는 staged production, live 영수증과 다른 promote는 실행하지 않습니다.
+`judge`로 결정적 보안 결과를 덮지 마세요. 종료 코드 1은 확인된 결함, 2부터 5는 설정 오류, 미완료, 바인딩 불일치, 영수증 오류입니다. 어느 것도 임의로 PASS로 바꾸지 않습니다. staged production은 현재 Git 루트에서 literal `vercel|vc [deploy] --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=<full HEAD>` 단일 명령만 씁니다. promote도 exact URL/ID를 직접 넣은 단일 명령만 씁니다. wrapper, 변수, 스크립트, 복합 명령, override 옵션을 쓰지 않습니다. rollback·redeploy·rolling release·alias/API 쓰기는 자동 실행하지 않고 status/list 조회만 허용합니다.
 
 자세한 내용: `README.ko.md` · `DISCLAIMER.md`

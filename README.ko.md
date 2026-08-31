@@ -37,7 +37,7 @@ npx -y github:shinnanchanguk/dorms-check submit      # 다 통과하면 증빙�
 
 ### Vercel 배포를 실제로 막는 strict 모드
 
-배포 직전 강제 게이트가 필요하면 기본 브랜치 최신판이 아니라 **검토를 마친 정확한 커밋 SHA**를 고정해 실행하세요. strict 모드는 clean Git SHA/tree에 묶인 15분짜리 서명 영수증을 만들고, 세 에이전트의 전역 훅이 영수증 없는 직접 production 배포와 다른 배포의 promote를 차단합니다.
+배포 직전 강제 게이트가 필요하면 기본 브랜치 최신판이 아니라 **검토를 마친 정확한 커밋 SHA**를 고정해 실행하세요. strict 모드는 clean Git SHA/tree, exact Vercel URL/ID·project/org·source SHA, 현재 gate runtime에 묶인 15분짜리 서명 영수증을 만듭니다. production 변경은 단일 literal `vercel`/`vc` 명령만 허용하며, staged에는 `githubDeployment=1`과 full `githubCommitSha` metadata가 모두 필요합니다. rollback·redeploy·rolling release·alias/API 쓰기는 자동 실행을 전부 차단하고 명시적 status/list 조회만 허용합니다.
 
 ```bash
 dcheck hooks install --global --agents codex,claude,gemini --provider vercel --security-only

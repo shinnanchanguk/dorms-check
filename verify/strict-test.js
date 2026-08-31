@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hookStatus, installHooks, uninstallHooks } from '../core/hooks.js';
+import { validateFinalOrigin } from '../checks/external/index.js';
 import {
   STRICT_EXIT,
   createReceipt,
@@ -13,6 +14,7 @@ import {
   projectIdentity,
   storeReceipt,
   strictRequiredIds,
+  evaluateVercelCommand,
   verifyCodeGate,
   verifyGate,
 } from '../core/strict.js';
@@ -72,6 +74,9 @@ function writeReceipts(root, home, { now = new Date(), url = 'https://strict-fix
     project,
     deploymentUrl: url,
     deploymentId,
+    deploymentGitSha: project.gitSha,
+    vercelProjectId: 'prj_fixture123',
+    vercelOrgId: 'team_fixture123',
     strict: strictPass('live'),
     results: liveResults,
     tool: { version: 'test' },
@@ -81,8 +86,8 @@ function writeReceipts(root, home, { now = new Date(), url = 'https://strict-fix
   return { project, storedCode, storedLive, url };
 }
 
-function runGuard(guard, cwd, home, command, agent = 'codex') {
-  const toolName = agent === 'gemini' ? 'run_shell_command' : 'Bash';
+function runGuard(guard, cwd, home, command, agent = 'codex', toolNameOverride = '') {
+  const toolName = toolNameOverride || (agent === 'gemini' ? 'run_shell_command' : 'Bash');
   return spawnSync(process.execPath, [guard], {
     cwd,
     env: { ...process.env, NODE_ENV: 'test', DCHECK_TEST_HOME: home },
@@ -115,18 +120,40 @@ async function run() {
   const probeError = liveNa.map(item => item.id === 'code.rls.anon-read' ? { ...item, observed: 'RLS probe failed: timeout', evidence: { probeError: true } } : item);
   ok('probe failure disguised as na -> incomplete', evaluateStrictSecurity(probeError, 'live').status === 'INCOMPLETE');
 
+  const inspectRoot = tempDir('dcheck-inspect-project-');
+  fs.mkdirSync(path.join(inspectRoot, '.vercel'), { recursive: true });
+  fs.writeFileSync(path.join(inspectRoot, '.vercel', 'project.json'), JSON.stringify({
+    projectId: 'prj_fixture123',
+    orgId: 'team_fixture123',
+    projectName: 'strict-fixture',
+  }));
+  const inspectSha = 'a'.repeat(40);
   const inspectFixture = (fields = {}) => () => JSON.stringify({
     id: 'dpl_fixture123',
     url: 'strict-fixture.vercel.app',
     readyState: 'READY',
     target: 'production',
+    meta: { githubCommitSha: inspectSha },
+    project: { id: 'prj_fixture123', name: 'strict-fixture' },
+    teamId: 'team_fixture123',
     ...fields,
   });
-  ok('Vercel inspect binds exact READY production URL and ID', inspectVercelDeployment({ cwd: process.cwd(), deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/' }, { execFileSync: inspectFixture() }).ok);
-  const inspectMismatch = inspectVercelDeployment({ cwd: process.cwd(), deployment: 'dpl_fixture123', url: 'https://other.vercel.app/' }, { execFileSync: inspectFixture() });
+  ok('Vercel inspect binds READY URL, ID, Git SHA, project and team', inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, { execFileSync: inspectFixture() }).ok);
+  ok('real-shaped gitSource.sha also binds the exact Git artifact', inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, { execFileSync: inspectFixture({ meta: undefined, gitSource: { type: 'github', sha: inspectSha } }) }).ok);
+  const inspectMismatch = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://other.vercel.app/', gitSha: inspectSha }, { execFileSync: inspectFixture() });
   ok('Vercel inspect URL mismatch -> exit 4', !inspectMismatch.ok && inspectMismatch.exitCode === STRICT_EXIT.BINDING_MISMATCH);
-  const inspectPreview = inspectVercelDeployment({ cwd: process.cwd(), deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/' }, { execFileSync: inspectFixture({ target: 'preview' }) });
+  const inspectPreview = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, { execFileSync: inspectFixture({ target: 'preview' }) });
   ok('Vercel preview is not accepted as staged production', !inspectPreview.ok && inspectPreview.exitCode === STRICT_EXIT.BINDING_MISMATCH);
+  const inspectMissingSha = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, { execFileSync: inspectFixture({ meta: undefined }) });
+  ok('Vercel deployment without source SHA -> exit 3', !inspectMissingSha.ok && inspectMissingSha.exitCode === STRICT_EXIT.INCOMPLETE);
+  const inspectWrongSha = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, { execFileSync: inspectFixture({ meta: { githubCommitSha: 'b'.repeat(40) } }) });
+  ok('Vercel deployment from another Git SHA -> exit 4', !inspectWrongSha.ok && inspectWrongSha.exitCode === STRICT_EXIT.BINDING_MISMATCH);
+  const inspectForeignProject = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, { execFileSync: inspectFixture({ project: { id: 'prj_foreign', name: 'foreign' } }) });
+  ok('foreign Vercel project -> exit 4', !inspectForeignProject.ok && inspectForeignProject.exitCode === STRICT_EXIT.BINDING_MISMATCH);
+  const inspectMissingProject = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, { execFileSync: inspectFixture({ project: undefined, teamId: undefined }) });
+  ok('Vercel response without project/team identity -> exit 3', !inspectMissingProject.ok && inspectMissingProject.exitCode === STRICT_EXIT.INCOMPLETE);
+  const redirectBinding = validateFinalOrigin('https://strict-fixture.vercel.app/', 'https://evil.example/login');
+  ok('cross-origin live redirect is rejected before strict scanning', !redirectBinding.ok && redirectBinding.finalOrigin === 'https://evil.example');
 
   console.log('\n[2] signed receipts, Git/deployment binding, expiry and tamper detection');
   const repo = initRepo();
@@ -158,6 +185,19 @@ async function run() {
   storeReceipt(weakReceipt, repo, { homeDir: weakHome });
   const weak = verifyCodeGate({ cwd: repo, gitSha: sha }, { homeDir: weakHome });
   ok('signed but incomplete required list -> exit 5', !weak.ok && weak.exitCode === STRICT_EXIT.RECEIPT_INVALID);
+
+  const staleRuntimeHome = tempDir('dcheck-stale-runtime-home-');
+  const staleRuntimeReceipt = createReceipt({
+    phase: 'code',
+    project: projectIdentity(repo),
+    strict: strictPass('code'),
+    results: resultsFor('code'),
+    tool: { version: 'stale-test' },
+  });
+  staleRuntimeReceipt.gate.runtimeSha256 = '0'.repeat(64);
+  storeReceipt(staleRuntimeReceipt, repo, { homeDir: staleRuntimeHome });
+  const staleRuntime = verifyCodeGate({ cwd: repo, gitSha: sha }, { homeDir: staleRuntimeHome });
+  ok('signed receipt from a different strict runtime -> exit 5', !staleRuntime.ok && staleRuntime.exitCode === STRICT_EXIT.RECEIPT_INVALID);
 
   const revokedHome = tempDir('dcheck-revoked-home-');
   writeReceipts(repo, revokedHome);
@@ -191,13 +231,15 @@ async function run() {
   const installed = installHooks({ homeDir: hookHome });
   ok('all three hook configs effective', Object.values(installed.status.agents).every(agent => agent.effective));
   ok('status names dashboard/Git/CI enforcement exclusions', installed.status.enforcementBoundary.excludes.length === 3 && installed.status.enforcementBoundary.hostActivationNotObservable === true);
+  ok('status reports current-host-only Windows/WSL boundary', installed.status.installationScope === 'current-host-only' && typeof installed.status.hostPlatform === 'string' && typeof installed.status.isWSL === 'boolean');
+  ok('status reports 120-second host timeout may fail open', installed.status.timeoutSeconds === 120 && installed.status.hostTimeoutMayFailOpen === true);
   const codexText = fs.readFileSync(path.join(hookHome, '.codex', 'config.toml'), 'utf8');
-  ok('Codex uses inline PreToolUse Bash hook', codexText.includes('[[hooks.PreToolUse]]') && codexText.includes('matcher = "^Bash$"'));
+  ok('Codex uses inline PreToolUse Bash hook with Windows command and 120s timeout', codexText.includes('[[hooks.PreToolUse]]') && codexText.includes('matcher = "^Bash$"') && codexText.includes('command_windows') && codexText.includes('timeout = 120'));
   const claudeSettings = JSON.parse(fs.readFileSync(path.join(hookHome, '.claude', 'settings.json'), 'utf8'));
-  ok('Claude uses PreToolUse Bash hook', claudeSettings.hooks.PreToolUse.some(group => group.matcher === 'Bash'));
+  ok('Claude covers Bash and native PowerShell with 120s timeout', claudeSettings.hooks.PreToolUse.some(group => group.matcher === 'Bash|PowerShell' && group.hooks.some(handler => handler.timeout === 120)));
   ok('pre-existing Claude hook is preserved', claudeSettings.hooks.Stop[0].hooks[0].command === 'echo keep');
   const geminiSettings = JSON.parse(fs.readFileSync(path.join(hookHome, '.gemini', 'settings.json'), 'utf8'));
-  ok('Gemini uses BeforeTool run_shell_command hook', geminiSettings.hooks.BeforeTool.some(group => group.matcher === '^run_shell_command$'));
+  ok('Gemini uses BeforeTool run_shell_command hook with 120s timeout', geminiSettings.hooks.BeforeTool.some(group => group.matcher === '^run_shell_command$' && group.hooks.some(handler => handler.timeout === 120000)));
   const installedAgain = installHooks({ homeDir: hookHome });
   ok('second install is idempotent', Object.values(installedAgain.changes).every(change => change.changed === false));
   ok('config backups were created outside agent config dirs', fs.existsSync(path.join(hookHome, '.dorms-check', 'backups')));
@@ -211,14 +253,43 @@ async function run() {
   installHooks({ agents: 'codex', homeDir: hookHome });
   ok('reinstall repairs exact Codex hook configuration', hookStatus({ homeDir: hookHome }).agents.codex.effective === true);
 
+  const atomicInstallHome = tempDir('dcheck-hooks-atomic-install-');
+  fs.mkdirSync(path.join(atomicInstallHome, '.codex'), { recursive: true });
+  fs.mkdirSync(path.join(atomicInstallHome, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(atomicInstallHome, '.codex', 'config.toml'), 'model = "unchanged"\n');
+  fs.writeFileSync(path.join(atomicInstallHome, '.claude', 'settings.json'), '{ malformed');
+  let malformedInstallBlocked = false;
+  try { installHooks({ homeDir: atomicInstallHome }); } catch { malformedInstallBlocked = true; }
+  ok('malformed later config aborts install before earlier config writes', malformedInstallBlocked && fs.readFileSync(path.join(atomicInstallHome, '.codex', 'config.toml'), 'utf8') === 'model = "unchanged"\n');
+
+  const atomicUninstallHome = tempDir('dcheck-hooks-atomic-uninstall-');
+  fs.mkdirSync(path.join(atomicUninstallHome, '.codex'), { recursive: true });
+  fs.mkdirSync(path.join(atomicUninstallHome, '.claude'), { recursive: true });
+  fs.mkdirSync(path.join(atomicUninstallHome, '.gemini'), { recursive: true });
+  installHooks({ homeDir: atomicUninstallHome });
+  const atomicCodexBefore = fs.readFileSync(path.join(atomicUninstallHome, '.codex', 'config.toml'), 'utf8');
+  fs.writeFileSync(path.join(atomicUninstallHome, '.gemini', 'settings.json'), '{ malformed');
+  let malformedUninstallBlocked = false;
+  try { uninstallHooks({ homeDir: atomicUninstallHome }); } catch { malformedUninstallBlocked = true; }
+  ok('malformed later config aborts uninstall before earlier config writes', malformedUninstallBlocked && fs.readFileSync(path.join(atomicUninstallHome, '.codex', 'config.toml'), 'utf8') === atomicCodexBefore);
+
   console.log('\n[4] common guard positive and negative Vercel command cases');
   const guardRepo = initRepo('dcheck-hook-repo-');
   fs.writeFileSync(path.join(guardRepo, 'package.json'), JSON.stringify({ scripts: {
     'prod-direct': 'vercel --prod',
     'prod-staged': 'vercel --prod --skip-domain',
+    'rollback-direct': 'vercel rollback dpl_ABCDEFGHIJ',
   } }, null, 2));
-  git(guardRepo, ['add', 'package.json']);
-  git(guardRepo, ['commit', '-qm', 'package scripts fixture']);
+  for (const manager of ['npm-child', 'pnpm-child', 'yarn-child']) {
+    fs.mkdirSync(path.join(guardRepo, manager), { recursive: true });
+    fs.writeFileSync(path.join(guardRepo, manager, 'package.json'), JSON.stringify({ scripts: { deploy: 'vercel --prod' } }, null, 2));
+  }
+  fs.writeFileSync(path.join(guardRepo, 'deploy-production.sh'), 'vercel --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=0000000000000000000000000000000000000000\n');
+  fs.writeFileSync(path.join(guardRepo, 'deploy.js'), 'require("node:child_process").execSync("vercel --prod")\n');
+  git(guardRepo, ['add', '.']);
+  git(guardRepo, ['commit', '-qm', 'script and package fixtures']);
+  const guardSha = git(guardRepo, ['rev-parse', 'HEAD']);
+  const stagedCommand = `vercel --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=${guardSha}`;
   writeReceipts(guardRepo, hookHome);
   const guardPath = installed.status.source.entries['vercel-guard.cjs'].present
     ? path.join(hookHome, '.dorms-check', 'hooks', 'vercel-guard.cjs')
@@ -233,25 +304,96 @@ async function run() {
   ok('command-substitution production form fails closed', runGuard(guardPath, guardRepo, hookHome, 'echo $(vercel --prod)', 'claude').status === 2);
   ok('--skip-domain=false does not bypass direct production block', runGuard(guardPath, guardRepo, hookHome, 'vercel --prod --skip-domain=false', 'codex').status === 2);
   ok('npm script that hides direct production is blocked', runGuard(guardPath, guardRepo, hookHome, 'npm run prod-direct', 'codex').status === 2);
-  ok('code receipt permits isolated staged production', runGuard(guardPath, guardRepo, hookHome, 'vercel --prod --skip-domain', 'codex').status === 0);
-  ok('npm script that stages production requires and accepts code receipt', runGuard(guardPath, guardRepo, hookHome, 'npm run prod-staged', 'claude').status === 0);
-  ok('pnpm wrapper permits isolated staged production', runGuard(guardPath, guardRepo, hookHome, 'pnpm dlx vercel --prod --skip-domain', 'gemini').status === 0);
-  ok('exact live receipt permits promote', runGuard(guardPath, guardRepo, hookHome, 'bunx vercel promote https://strict-fixture.vercel.app/', 'claude').status === 0);
+  ok('exact code receipt and two literal Git metadata values permit staged production', runGuard(guardPath, guardRepo, hookHome, stagedCommand, 'codex').status === 0);
+  ok('direct vc deploy form with exact metadata is permitted', runGuard(guardPath, guardRepo, hookHome, `vc deploy --prod --skip-domain --meta githubCommitSha=${guardSha} --meta githubDeployment=1`, 'gemini').status === 0);
+  ok('staged --yes is the only optional non-routing flag', runGuard(guardPath, guardRepo, hookHome, `${stagedCommand} --yes`, 'claude').status === 0);
+  ok('missing Git metadata blocks staged production', runGuard(guardPath, guardRepo, hookHome, 'vercel --prod --skip-domain', 'codex').status === 2);
+  ok('fake Git SHA metadata blocks staged production', runGuard(guardPath, guardRepo, hookHome, 'vercel --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=0000000000000000000000000000000000000000', 'codex').status === 2);
+  ok('missing githubDeployment metadata blocks staged production', runGuard(guardPath, guardRepo, hookHome, `vercel --prod --skip-domain --meta githubCommitSha=${guardSha}`, 'codex').status === 2);
+  ok('extra metadata blocks staged production', runGuard(guardPath, guardRepo, hookHome, `${stagedCommand} --meta extra=value`, 'codex').status === 2);
+  for (const [name, command] of [
+    ['prebuilt', `${stagedCommand} --prebuilt`],
+    ['archive', `${stagedCommand} --archive=tgz`],
+    ['local-config', `${stagedCommand} --local-config /tmp/evil-vercel.json`],
+    ['cwd', `${stagedCommand} --cwd .`],
+    ['project', `${stagedCommand} --project foreign`],
+    ['scope', `${stagedCommand} --scope foreign`],
+    ['runtime env', `${stagedCommand} --env SECRET=x`],
+    ['build env', `${stagedCommand} --build-env SECRET=x`],
+  ]) {
+    ok(`${name} source/artifact override is blocked`, runGuard(guardPath, guardRepo, hookHome, command, 'codex').status === 2);
+  }
+  ok('npx staged wrapper is blocked', runGuard(guardPath, guardRepo, hookHome, `npx -y vercel@latest --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=${guardSha}`, 'codex').status === 2);
+  ok('pnpm staged wrapper is blocked', runGuard(guardPath, guardRepo, hookHome, `pnpm dlx vercel --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=${guardSha}`, 'gemini').status === 2);
+  ok('bunx promote wrapper is blocked', runGuard(guardPath, guardRepo, hookHome, 'bunx vercel promote https://strict-fixture.vercel.app/', 'claude').status === 2);
+  ok('npm staged package script is blocked even when recursively visible', runGuard(guardPath, guardRepo, hookHome, 'npm run prod-staged', 'claude').status === 2);
   writeReceipts(guardRepo, hookHome, { deploymentId: 'dpl_fixture123' });
+  ok('exact live receipt permits direct literal URL promote', runGuard(guardPath, guardRepo, hookHome, 'vercel promote "https://strict-fixture.vercel.app/"', 'claude').status === 0);
   ok('verified deployment ID receipt permits exact ID promote', runGuard(guardPath, guardRepo, hookHome, 'vercel promote dpl_fixture123', 'codex').status === 0);
+  ok('shell-variable promote target is blocked before expansion', runGuard(guardPath, guardRepo, hookHome, 'vercel promote "$DEPLOYMENT_URL"', 'codex').status === 2);
+  ok('promote project/config override flags are blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel promote dpl_fixture123 --scope foreign', 'codex').status === 2);
   ok('different promote target is blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel promote https://other.vercel.app/', 'codex').status === 2);
   ok('a later mismatched promote in one compound command is blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel promote dpl_fixture123 && vercel promote https://other.vercel.app/', 'codex').status === 2);
   ok('alias-set bypass is blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel alias set https://strict-fixture.vercel.app production.example', 'gemini').status === 2);
+  ok('legacy alias mutation is blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel alias https://strict-fixture.vercel.app production.example', 'codex').status === 2);
+  ok('alias remove mutation is blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel alias remove production.example', 'claude').status === 2);
+  ok('alias list remains read-only', runGuard(guardPath, guardRepo, hookHome, 'npx vercel alias list', 'gemini').status === 0);
+  const rollbackRegression = evaluateVercelCommand('vercel rollback dpl_ABCDEFGHIJ', guardRepo, { homeDir: hookHome });
+  ok('direct evaluator blocks every non-readonly rollback', rollbackRegression.relevant && !rollbackRegression.allowed);
+  ok('bare rollback that auto-selects a previous deployment is blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel rollback', 'codex').status === 2);
+  ok('direct rollback to an unverified deployment is blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel rollback dpl_ABCDEFGHIJ', 'codex').status === 2);
+  ok('npx rollback wrapper is blocked', runGuard(guardPath, guardRepo, hookHome, 'npx -y vercel@latest rollback dpl_ABCDEFGHIJ', 'claude').status === 2);
+  ok('nested-shell rollback is blocked', runGuard(guardPath, guardRepo, hookHome, 'bash -c "vercel rollback dpl_ABCDEFGHIJ"', 'gemini').status === 2);
+  ok('package script rollback is blocked', runGuard(guardPath, guardRepo, hookHome, 'npm run rollback-direct', 'codex').status === 2);
+  ok('compound rollback is blocked', runGuard(guardPath, guardRepo, hookHome, 'echo ready && /usr/local/bin/vercel rollback dpl_ABCDEFGHIJ', 'claude').status === 2);
+  ok('even an exact receipt cannot auto-authorize rollback', runGuard(guardPath, guardRepo, hookHome, 'vercel rollback https://strict-fixture.vercel.app/', 'codex').status === 2);
+  ok('wrapped exact-ID rollback is blocked', runGuard(guardPath, guardRepo, hookHome, 'pnpm exec vercel rollback dpl_fixture123', 'gemini').status === 2);
+  ok('rollback status remains read-only and permitted', runGuard(guardPath, guardRepo, hookHome, 'vercel rollback status', 'claude').status === 0);
+  ok('a later mismatched rollback in one compound command is blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel rollback dpl_fixture123 && vercel rollback dpl_ABCDEFGHIJ', 'codex').status === 2);
+  ok('redeploy is blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel redeploy dpl_fixture123', 'codex').status === 2);
+  ok('rolling release is blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel rolling-release start --dpl dpl_fixture123', 'claude').status === 2);
+  ok('arbitrary Vercel API is blocked', runGuard(guardPath, guardRepo, hookHome, 'vercel api /v2/aliases -X POST', 'gemini').status === 2);
+  ok('variable-assigned Vercel staged command is blocked', runGuard(guardPath, guardRepo, hookHome, `V=vercel; $V --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=${guardSha}`, 'codex').status === 2);
+  ok('braced variable promote is blocked', runGuard(guardPath, guardRepo, hookHome, 'V=vercel; ${V} promote dpl_fixture123', 'claude').status === 2);
+  ok('env variable rollback is blocked', runGuard(guardPath, guardRepo, hookHome, 'env V=vercel $V rollback dpl_ABCDEFGHIJ', 'gemini').status === 2);
+  ok('command-generated Vercel rollback is blocked', runGuard(guardPath, guardRepo, hookHome, '$(printf vercel) rollback dpl_ABCDEFGHIJ', 'codex').status === 2);
+  ok('nested variable command string is blocked', runGuard(guardPath, guardRepo, hookHome, "export C=vercel; CMD='$C rollback dpl_ABCDEFGHIJ'; sh -c \"$CMD\"", 'claude').status === 2);
+  for (const [name, body] of [
+    ['rollback', '$C rollback dpl_ABCDEFGHIJ'],
+    ['redeploy', '$C redeploy dpl_fixture123'],
+    ['legacy alias', '$C alias dpl_fixture123 production.example'],
+    ['api', '$C api /v2/aliases -X POST'],
+    ['staged', `$C --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=${guardSha}`],
+  ]) {
+    const generated = `export C=vercel; printf '%s\\n' '${body}' > /tmp/dcheck-generated.sh && bash /tmp/dcheck-generated.sh`;
+    ok(`generated-script ${name} is blocked`, runGuard(guardPath, guardRepo, hookHome, generated, 'codex').status === 2);
+  }
+  ok('bash script wrapper is blocked', runGuard(guardPath, guardRepo, hookHome, 'bash ./deploy-production.sh', 'codex').status === 2);
+  ok('source script wrapper is blocked', runGuard(guardPath, guardRepo, hookHome, '. ./deploy-production.sh', 'claude').status === 2);
+  ok('node runtime script wrapper is blocked', runGuard(guardPath, guardRepo, hookHome, 'node ./deploy.js', 'gemini').status === 2);
+  ok('npm --prefix deploy script is resolved and blocked', runGuard(guardPath, guardRepo, hookHome, 'npm --prefix npm-child run deploy', 'codex').status === 2);
+  ok('pnpm --dir deploy script is resolved and blocked', runGuard(guardPath, guardRepo, hookHome, 'pnpm --dir pnpm-child run deploy', 'claude').status === 2);
+  ok('yarn --cwd deploy script is resolved and blocked', runGuard(guardPath, guardRepo, hookHome, 'yarn --cwd yarn-child deploy', 'gemini').status === 2);
+  ok('renamed extensionless deploy wrapper is blocked', runGuard(guardPath, guardRepo, hookHome, `./deploy --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=${guardSha}`, 'codex').status === 2);
+  ok('unknown absolute promote wrapper is blocked', runGuard(guardPath, guardRepo, hookHome, '/tmp/ship promote dpl_fixture123', 'claude').status === 2);
+  ok('renamed rollback wrapper is blocked', runGuard(guardPath, guardRepo, hookHome, 'myvercel rollback dpl_fixture123', 'gemini').status === 2);
+  ok('backslash-escaped executable is not treated as a literal Vercel command', runGuard(guardPath, guardRepo, hookHome, 'v\\e\\r\\c\\e\\l promote dpl_fixture123', 'codex').status === 2);
+  ok('backslash-escaped mutator is not treated as a literal Vercel command', runGuard(guardPath, guardRepo, hookHome, 'vercel pro\\mote dpl_fixture123', 'claude').status === 2);
+  ok('Claude PowerShell-shaped production command is gated', runGuard(guardPath, guardRepo, hookHome, 'vercel.cmd --prod', 'claude', 'PowerShell').status === 2);
+  ok('Codex Windows executable shape permits exact staged command', runGuard(guardPath, guardRepo, hookHome, `vercel.cmd --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=${guardSha}`, 'codex').status === 0);
 
   fs.writeFileSync(path.join(guardRepo, 'app.js'), 'export const app = false;\n');
-  ok('dirty source blocks staged production', runGuard(guardPath, guardRepo, hookHome, 'vercel --prod --skip-domain', 'codex').status === 2);
+  ok('dirty source blocks staged production', runGuard(guardPath, guardRepo, hookHome, stagedCommand, 'codex').status === 2);
   fs.writeFileSync(path.join(guardRepo, 'app.js'), 'export const app = true;\n');
   const noReceiptRepo = initRepo('dcheck-no-receipt-repo-');
-  ok('missing code receipt blocks staged production', runGuard(guardPath, noReceiptRepo, hookHome, 'vercel --prod --skip-domain', 'codex').status === 2);
-  ok('compound cd uses target project receipt instead of caller receipt', runGuard(guardPath, guardRepo, hookHome, `cd ${noReceiptRepo} && vercel --prod --skip-domain`, 'claude').status === 2);
+  const noReceiptSha = git(noReceiptRepo, ['rev-parse', 'HEAD']);
+  const noReceiptStage = `vercel --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=${noReceiptSha}`;
+  ok('missing code receipt blocks staged production', runGuard(guardPath, noReceiptRepo, hookHome, noReceiptStage, 'codex').status === 2);
+  ok('rollback remains blocked independently of receipts', runGuard(guardPath, noReceiptRepo, hookHome, 'vercel rollback https://strict-fixture.vercel.app/', 'gemini').status === 2);
+  ok('compound cd staged production is denied by the literal-only policy', runGuard(guardPath, guardRepo, hookHome, `cd ${noReceiptRepo} && ${noReceiptStage}`, 'claude').status === 2);
   writeReceipts(noReceiptRepo, hookHome);
-  ok('compound cd permits target project with its own receipt', runGuard(guardPath, guardRepo, hookHome, `cd ${noReceiptRepo} && vercel --prod --skip-domain`, 'claude').status === 0);
-  ok('Vercel --cwd permits target project with its own receipt', runGuard(guardPath, guardRepo, hookHome, `vercel --cwd ${noReceiptRepo} --prod --skip-domain`, 'gemini').status === 0);
+  ok('compound cd stays blocked even when target has a receipt', runGuard(guardPath, guardRepo, hookHome, `cd ${noReceiptRepo} && ${noReceiptStage}`, 'claude').status === 2);
+  ok('Vercel --cwd stays blocked even when target has a receipt', runGuard(guardPath, noReceiptRepo, hookHome, `vercel --cwd . --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=${noReceiptSha}`, 'gemini').status === 2);
 
   const uninstalled = uninstallHooks({ homeDir: hookHome });
   ok('all managed config entries are removed', Object.values(uninstalled.status.agents).every(agent => !agent.installed));
@@ -281,6 +423,7 @@ async function run() {
   let cliPassJson = null;
   try { cliPassJson = JSON.parse(cliPass.stdout); } catch { /* asserted below */ }
   ok('CLI code-only strict emits JSON and exit 0', cliPass.status === 0 && cliPassJson?.status === 'PASS', cliPass.stderr || cliPass.stdout);
+  ok('CLI strict JSON reports gate runtime digest', /^[a-f0-9]{64}$/.test(cliPassJson?.gate?.runtimeSha256 || ''));
   const cliUsage = runCli(cliRepo, cliHome, ['scan', '--track', 'security', '--strict', '--json', '--code-only']);
   ok('CLI missing git-sha -> exit 2', cliUsage.status === STRICT_EXIT.USAGE_CONFIG);
   const cliMismatch = runCli(cliRepo, cliHome, ['scan', '--track', 'security', '--strict', '--json', '--code-only', '--git-sha', '0000000000000000000000000000000000000000']);
@@ -307,6 +450,9 @@ async function run() {
   ok('CLI installs all hooks only in temp HOME', cliHookInstall.status === STRICT_EXIT.PASS, cliHookInstall.stderr || cliHookInstall.stdout);
   const cliHookStatus = runCli(cliRepo, cliHookHome, ['hooks', 'status', '--agents', 'codex,claude,gemini', '--json']);
   ok('CLI reports all temp HOME hooks effective', cliHookStatus.status === STRICT_EXIT.PASS, cliHookStatus.stderr || cliHookStatus.stdout);
+  let cliHookStatusJson = null;
+  try { cliHookStatusJson = JSON.parse(cliHookStatus.stdout); } catch { /* asserted below */ }
+  ok('CLI hook status exposes current-host and timeout boundaries', cliHookStatusJson?.installationScope === 'current-host-only' && cliHookStatusJson?.timeoutSeconds === 120 && cliHookStatusJson?.hostTimeoutMayFailOpen === true);
   const cliUnknownAgent = runCli(cliRepo, cliHookHome, ['hooks', 'status', '--agents', 'unknown', '--json']);
   ok('CLI unknown hook agent -> exit 2', cliUnknownAgent.status === STRICT_EXIT.USAGE_CONFIG);
   const cliHookUninstall = runCli(cliRepo, cliHookHome, ['hooks', 'uninstall', '--agents', 'codex,claude,gemini', '--json']);

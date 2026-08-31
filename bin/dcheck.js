@@ -23,6 +23,8 @@ import { verifyBuild } from '../protect/verify-static.js';
 import { applyEdzipPlan, buildEdzipPlan, prepareCouncilDocuments, writeEdzipPlan } from '../core/edzip-autopilot.js';
 import {
   STRICT_EXIT,
+  STRICT_GATE_SCHEMA,
+  STRICT_RUNTIME_DIGEST,
   createReceipt,
   evaluateStrictSecurity,
   invalidateReceipt,
@@ -82,6 +84,10 @@ function help() {
 `);
   log.plain(color.dim('  security 스캔은 검사만 합니다. edzip prepare와 protection apply는 각각'));
   log.plain(color.dim('  사용자가 승인한 계획 해시와 --confirm-apply 플래그가 있을 때만입니다. 자동 배포는 하지 않습니다.'));
+  log.plain(color.dim('  staged는 literal vercel/vc 단일 명령과 githubDeployment=1 + full githubCommitSha metadata를 요구합니다.'));
+  log.plain(color.dim('  promote도 exact literal URL/ID 단일 명령만 허용하며 wrapper·변수·스크립트·override 옵션은 차단합니다.'));
+  log.plain(color.dim('  rollback·redeploy·rolling release·alias/API 쓰기는 차단하고 명시적 status/list 조회만 허용합니다.'));
+  log.plain(color.dim('  훅 설치는 현재 호스트 홈만 덮으며 Windows·WSL은 각각 확인해야 합니다. 120초 host timeout도 fail-open일 수 있습니다.'));
   log.plain(color.dim('  전역 훅은 AI 셸의 Vercel CLI만 다룹니다. 대시보드·Git 자동 production·외부 CI는 별도로 막아야 합니다.'));
   honesty();
 }
@@ -117,6 +123,9 @@ async function runScan() {
   const phase = codeOnly ? 'code' : 'live';
   let project = null;
   let deploymentId = '';
+  let deploymentGitSha = '';
+  let vercelProjectId = '';
+  let vercelOrgId = '';
 
   if (strict) {
     if (tracks.length !== 1 || tracks[0] !== 'security') {
@@ -164,12 +173,15 @@ async function runScan() {
         }
         deploymentId = normalizedDeployment;
       }
-      const deploymentBinding = inspectVercelDeployment({ cwd: root, deployment: deploymentId, url: normalizedUrl });
+      const deploymentBinding = inspectVercelDeployment({ cwd: root, deployment: deploymentId, url: normalizedUrl, gitSha: project.gitSha });
       if (!deploymentBinding.ok) {
         fail(deploymentBinding.exitCode, deploymentBinding.reason);
         return;
       }
       deploymentId = deploymentBinding.id;
+      deploymentGitSha = deploymentBinding.gitSha;
+      vercelProjectId = deploymentBinding.projectId;
+      vercelOrgId = deploymentBinding.orgId;
     }
   }
 
@@ -183,9 +195,13 @@ async function runScan() {
   if (!codeOnly) {
     if (!json) log.step(`외부 표면 스캔: ${url}`);
     let ext;
-    try { ext = await runExternalScan(url); }
+    try { ext = await runExternalScan(url, strict && phase === 'live' ? { expectedOrigin: url } : {}); }
     catch (error) {
       fail(strict ? STRICT_EXIT.INCOMPLETE : 1, `외부 표면 스캔을 시작하지 못했습니다: ${error.message}`);
+      return;
+    }
+    if (strict && phase === 'live' && ext.binding && !ext.binding.ok) {
+      fail(STRICT_EXIT.BINDING_MISMATCH, ext.binding.reason, { binding: ext.binding });
       return;
     }
     results.push(...ext.items);
@@ -256,6 +272,9 @@ async function runScan() {
         project,
         deploymentUrl: phase === 'live' ? url : '',
         deploymentId,
+        deploymentGitSha,
+        vercelProjectId,
+        vercelOrgId,
         strict: strictResult,
         results,
         tool: { version: PKG.version, commit: PKG.gitHead || '' },
@@ -268,8 +287,15 @@ async function runScan() {
       exitCode: strictResult.exitCode,
       phase,
       status: strictResult.status,
+      gate: { schema: STRICT_GATE_SCHEMA, runtimeSha256: STRICT_RUNTIME_DIGEST },
       project: { gitSha: project.gitSha, treeSha: project.treeSha, clean: project.clean },
-      deployment: phase === 'live' ? { url: normalizeDeploymentUrl(url), id: deploymentId } : null,
+      deployment: phase === 'live' ? {
+        url: normalizeDeploymentUrl(url),
+        id: deploymentId,
+        sourceGitSha: deploymentGitSha,
+        projectId: vercelProjectId,
+        orgId: vercelOrgId,
+      } : null,
       strict: strictResult,
       results,
       receipt: stored ? { trustedFile: stored.trustedFile, projectFile: stored.projectFile, expiresAt: stored.receipt.expiresAt } : null,

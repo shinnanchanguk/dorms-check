@@ -38,13 +38,13 @@
 
 교육 자료가 준 정확한 dorms-check 커밋 SHA를 끝까지 고정해서 사용하고 임의로 최신판으로 바꾸지 마. `detect`와 `init --name "내 앱" --track security --confirm-ownership`을 실행해. 배포할 코드와 설정을 확인하고 작업트리를 깨끗한 커밋으로 만든 뒤 현재 HEAD를 직접 읽어 `scan --track security --strict --json --code-only --git-sha <현재 HEAD>`를 실행해. 모르는 기존 변경은 임의로 커밋하지 말고 그때만 나에게 물어봐.
 
-그다음 `hooks install --global --agents codex,claude,gemini --provider vercel --security-only`와 `hooks status --agents codex,claude,gemini --json`을 실행해. Codex `~/.codex/config.toml`, Claude `~/.claude/settings.json`, Gemini `~/.gemini/settings.json`의 기존 설정을 보존해야 해. 현재 세션에서 새 훅을 불러오기 위해 재시작이나 신뢰 확인이 필요하면 그 한 동작만 쉬운 말로 알려줘.
+그다음 `hooks install --global --agents codex,claude,gemini --provider vercel --security-only`와 `hooks status --agents codex,claude,gemini --json`을 실행해. Codex `~/.codex/config.toml`, Claude `~/.claude/settings.json`, Gemini `~/.gemini/settings.json`의 기존 설정을 보존해야 해. status의 `hostPlatform`, `home`, `isWSL`, `installationScope`, `timeoutSeconds`, `hostTimeoutMayFailOpen`을 확인해. 설치는 현재 호스트만 덮으므로 Windows와 WSL 중 실제 배포에 쓸 호스트가 다르면 그쪽에도 별도로 설치하고, 덮이지 않은 호스트를 READY로 보고하지 마. 현재 세션에서 새 훅을 불러오기 위해 재시작이나 신뢰 확인이 필요하면 그 한 동작만 쉬운 말로 알려줘.
 
-code strict가 PASS이고 영수증이 유효할 때만 `vercel --prod --skip-domain`을 실행해. stdout의 정확한 Deployment URL을 네가 캡처해. 그 URL 하나를 `--url`과 `--vercel-deployment`에 똑같이 넣어 `scan --track security --strict --json --url <정확한 URL> --git-sha <같은 HEAD> --vercel-deployment <정확한 URL>`을 실행해. 이어서 `gate verify --git-sha <같은 HEAD> --vercel-deployment <정확한 URL> --url <정확한 URL> --json`을 실행해. 모두 PASS일 때만 `vercel promote <정확한 URL>`을 실행해.
+code strict가 PASS이고 영수증이 유효할 때 현재 HEAD 40자리를 다시 읽어. 그 실제 값을 셸 변수나 명령 치환 없이 명령 문자열에 직접 넣고, 독립된 한 명령 `vercel --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=<실제 HEAD 40자리>`을 실행해. `npx`·`pnpm`·`bunx`, package script, 셸·Node 스크립트, 복합 명령, pipe, redirect, `--cwd`, `--local-config`, `--project`, `--scope`, `--env`, `--build-env`, `--prebuilt`, `--archive`를 쓰지 마. stdout의 정확한 Deployment URL을 네가 캡처해. 그 URL 하나를 `--url`과 `--vercel-deployment`에 똑같이 넣어 `scan --track security --strict --json --url <정확한 URL> --git-sha <같은 HEAD> --vercel-deployment <정확한 URL>`을 실행해. Vercel source SHA, project/org, 최종 origin까지 모두 일치해야 해. 이어서 `gate verify --git-sha <같은 HEAD> --vercel-deployment <정확한 URL> --url <정확한 URL> --json`을 실행해. 모두 PASS일 때 실제 URL 문자열을 셸 변수 없이 직접 넣은 독립된 한 명령 `vercel promote <정확한 literal URL>`만 실행해.
 
 종료 코드 0만 PASS야. 1은 확인된 보안 결함, 2는 사용법 또는 설정 오류, 3은 필수 검사 미완료, 4는 Git/URL/배포 바인딩 불일치, 5는 영수증 없음/만료/무결성 오류야. 1부터 5까지 어떤 결과도 설명이나 `judge`로 통과 처리하지 마. 문제를 고치면 새 커밋에서 code strict부터 다시 시작해. 영수증이 15분을 넘겼으면 다시 검사해.
 
-직접 production 배포, `vercel alias set`, 다른 URL 또는 ID promote, Git push 기반 자동 production 배포로 우회하지 마. 마지막에는 Git SHA, code/live 상태, 검사한 정확한 Vercel URL과 ID, 영수증 만료 시각, 훅 상태를 표로 보여줘. dorms-check는 인증서가 아니고 도름스가 별도로 재검증한다는 한계도 한 줄로 알려줘.
+직접 production 배포, Vercel alias 변경, 다른 URL 또는 ID promote, Git push 기반 자동 production 배포로 우회하지 마. rollback, redeploy, rolling release, alias/API 쓰기는 영수증이 있어도 자동 실행하지 말고 복구 절차만 제시해. `rollback status`, `promote status`, `alias list` 같은 명시적 조회만 허용돼. 마지막에는 Git SHA, code/live 상태, 검사한 정확한 Vercel URL·ID·project/org·source SHA, gate runtime digest, 영수증 만료 시각, 현재 호스트의 훅 상태를 표로 보여줘. 대시보드·Git 자동 production·외부 CI, 다른 호스트, 호스트 timeout, 같은 사용자 권한의 악의적 변경은 훅 밖이며 dorms-check는 인증서가 아니고 도름스가 별도로 재검증한다는 한계도 알려줘.
 
 ---
 

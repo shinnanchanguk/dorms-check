@@ -1,9 +1,13 @@
 import runtime from './strict-runtime.cjs';
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { SECURITY_ITEMS } from '../catalog/security.js';
 import { SEVERITY_RANK } from './tracks.js';
 
 export const STRICT_EXIT = runtime.EXIT;
+export const STRICT_GATE_SCHEMA = runtime.GATE_SCHEMA;
+export const STRICT_RUNTIME_DIGEST = runtime.RUNTIME_DIGEST;
 export const {
   projectIdentity,
   normalizeDeploymentUrl,
@@ -78,7 +82,42 @@ function parseInspectJson(stdout) {
   }
 }
 
-export function inspectVercelDeployment({ cwd, deployment, url }, options = {}) {
+function readLinkedVercelProject(cwd) {
+  const file = path.join(cwd, '.vercel', 'project.json');
+  let linked;
+  try { linked = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch {
+    return { ok: false, exitCode: STRICT_EXIT.INCOMPLETE, reason: '.vercel/project.json을 읽지 못했습니다. 이 앱 폴더에서 vercel link를 완료하세요.' };
+  }
+  const projectId = String(linked?.projectId || '').trim();
+  const orgId = String(linked?.orgId || '').trim();
+  const projectName = String(linked?.projectName || '').trim();
+  if (!projectId || !orgId) {
+    return { ok: false, exitCode: STRICT_EXIT.INCOMPLETE, reason: '.vercel/project.json에 projectId와 orgId가 모두 있어야 합니다.' };
+  }
+  return { ok: true, projectId, orgId, projectName };
+}
+
+function uniqueStrings(values) {
+  return [...new Set(values.filter(value => typeof value === 'string').map(value => value.trim()).filter(Boolean))];
+}
+
+function inspectedDeploymentBinding(inspected) {
+  const shapes = [inspected, inspected?.deployment].filter(value => value && typeof value === 'object');
+  return {
+    gitShas: uniqueStrings(shapes.flatMap(value => [
+      value.meta?.githubCommitSha,
+      value.meta?.dcheckGitSha,
+      value.gitSource?.sha,
+      value.gitMetadata?.commitSha,
+    ])),
+    projectIds: uniqueStrings(shapes.flatMap(value => [value.projectId, value.project?.id])),
+    orgIds: uniqueStrings(shapes.flatMap(value => [value.orgId, value.teamId, value.ownerId, value.team?.id])),
+    projectNames: uniqueStrings(shapes.flatMap(value => [value.projectName, value.project?.name])),
+  };
+}
+
+export function inspectVercelDeployment({ cwd, deployment, url, gitSha }, options = {}) {
   const reference = String(deployment || '').trim();
   if (!reference) {
     return { ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: 'Vercel 배포 URL 또는 ID가 필요합니다.' };
@@ -86,6 +125,12 @@ export function inspectVercelDeployment({ cwd, deployment, url }, options = {}) 
   if (!/^https?:\/\//i.test(reference) && !/^dpl_[A-Za-z0-9]+$/.test(reference)) {
     return { ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: 'Vercel 배포 ID는 dpl_로 시작해야 합니다. 가능하면 배포 URL을 그대로 쓰세요.' };
   }
+  if (!/^[a-f0-9]{40}$/i.test(String(gitSha || ''))) {
+    return { ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: 'Vercel 배포 아티팩트를 확인할 현재 Git SHA 40자리가 필요합니다.' };
+  }
+
+  const linked = readLinkedVercelProject(cwd);
+  if (!linked.ok) return linked;
 
   let requestedUrl;
   try { requestedUrl = normalizeDeploymentUrl(url); }
@@ -127,5 +172,32 @@ export function inspectVercelDeployment({ cwd, deployment, url }, options = {}) 
   if (String(inspected.target || '').toLowerCase() !== 'production') {
     return { ok: false, exitCode: STRICT_EXIT.BINDING_MISMATCH, reason: '검사 대상은 vercel --prod --skip-domain으로 만든 staged production 배포여야 합니다.' };
   }
-  return { ok: true, exitCode: STRICT_EXIT.PASS, id: inspected.id, url: inspectedUrl, target: 'production', readyState: 'READY' };
+  const binding = inspectedDeploymentBinding(inspected);
+  if (!binding.gitShas.length) {
+    return { ok: false, exitCode: STRICT_EXIT.INCOMPLETE, reason: 'Vercel 배포 정보에 Git source SHA가 없습니다. staged 배포에 --meta githubDeployment=1과 --meta githubCommitSha=<현재 HEAD>를 모두 넣으세요.' };
+  }
+  if (binding.gitShas.some(value => value !== gitSha)) {
+    return { ok: false, exitCode: STRICT_EXIT.BINDING_MISMATCH, reason: 'Vercel 배포의 Git source SHA가 현재 HEAD와 다릅니다.' };
+  }
+  if (!binding.projectIds.length || !binding.orgIds.length) {
+    return { ok: false, exitCode: STRICT_EXIT.INCOMPLETE, reason: 'Vercel 배포 정보에서 projectId와 orgId/teamId를 확인하지 못했습니다.' };
+  }
+  if (binding.projectIds.some(value => value !== linked.projectId) || binding.orgIds.some(value => value !== linked.orgId)) {
+    return { ok: false, exitCode: STRICT_EXIT.BINDING_MISMATCH, reason: '검사한 배포가 현재 폴더에 연결된 Vercel 프로젝트 또는 팀과 다릅니다.' };
+  }
+  if (linked.projectName && binding.projectNames.length && binding.projectNames.some(value => value !== linked.projectName)) {
+    return { ok: false, exitCode: STRICT_EXIT.BINDING_MISMATCH, reason: '검사한 배포의 Vercel 프로젝트 이름이 현재 링크와 다릅니다.' };
+  }
+  return {
+    ok: true,
+    exitCode: STRICT_EXIT.PASS,
+    id: inspected.id,
+    url: inspectedUrl,
+    gitSha,
+    projectId: linked.projectId,
+    orgId: linked.orgId,
+    projectName: linked.projectName || binding.projectNames[0] || '',
+    target: 'production',
+    readyState: 'READY',
+  };
 }

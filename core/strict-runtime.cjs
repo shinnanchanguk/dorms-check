@@ -16,6 +16,7 @@ const EXIT = Object.freeze({
 });
 const RECEIPT_KIND = 'dorms-check.strict-security-receipt';
 const RECEIPT_TTL_MS = 15 * 60 * 1000;
+const GATE_SCHEMA = 2;
 const REQUIRED_BY_PHASE = Object.freeze({
   code: Object.freeze([
     'code.hardcoded-secret',
@@ -44,6 +45,8 @@ function stableStringify(value) {
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
+
+const RUNTIME_DIGEST = sha256(fs.readFileSync(__filename));
 
 function atomicWrite(file, text, mode = 0o600) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -164,6 +167,9 @@ function createReceipt({
   project,
   deploymentUrl = '',
   deploymentId = '',
+  deploymentGitSha = '',
+  vercelProjectId = '',
+  vercelOrgId = '',
   strict,
   results,
   tool = {},
@@ -178,12 +184,23 @@ function createReceipt({
         provider: 'vercel',
         url: normalizeDeploymentUrl(deploymentUrl),
         id: String(deploymentId || ''),
+        sourceGitSha: String(deploymentGitSha || ''),
+        projectId: String(vercelProjectId || ''),
+        orgId: String(vercelOrgId || ''),
         target: 'production',
         readyState: 'READY',
       }
     : null;
   if (phase === 'live' && !/^dpl_[A-Za-z0-9]+$/.test(deployment.id)) {
     throw new Error('live receipt requires a verified Vercel deployment ID');
+  }
+  if (phase === 'live' && (
+    deployment.sourceGitSha !== project.gitSha
+    || !/^[a-f0-9]{40}$/i.test(deployment.sourceGitSha)
+    || !deployment.projectId
+    || !deployment.orgId
+  )) {
+    throw new Error('live receipt requires exact Git artifact and Vercel project bindings');
   }
   return {
     schemaVersion: 1,
@@ -192,6 +209,7 @@ function createReceipt({
     checkedAt,
     expiresAt,
     tool: { version: String(tool.version || 'unknown'), commit: String(tool.commit || '') },
+    gate: { schema: GATE_SCHEMA, runtimeSha256: RUNTIME_DIGEST },
     project: {
       rootHash: project.rootHash,
       gitSha: project.gitSha,
@@ -245,6 +263,9 @@ function readAndVerifyReceipt(file, key, expectedPhase, now) {
   if (receipt.kind !== RECEIPT_KIND || receipt.schemaVersion !== 1 || receipt.phase !== expectedPhase) {
     return { ok: false, exitCode: EXIT.RECEIPT_INVALID, reason: `${expectedPhase} strict 영수증 형식이 맞지 않습니다.` };
   }
+  if (receipt.gate?.schema !== GATE_SCHEMA || receipt.gate?.runtimeSha256 !== RUNTIME_DIGEST) {
+    return { ok: false, exitCode: EXIT.RECEIPT_INVALID, reason: `${expectedPhase} strict 영수증이 현재 보안 게이트 런타임과 다릅니다. 현재 고정 버전으로 다시 검사하세요.` };
+  }
   const expectedDigest = signReceipt(receipt, key);
   if (receipt.integrity?.algorithm !== 'hmac-sha256' || !safeEqualHex(receipt.integrity?.digest, expectedDigest)) {
     return { ok: false, exitCode: EXIT.RECEIPT_INVALID, reason: `${expectedPhase} strict 영수증 무결성 검증에 실패했습니다.` };
@@ -265,6 +286,12 @@ function readAndVerifyReceipt(file, key, expectedPhase, now) {
   if (expectedPhase === 'live' && (
     receipt.deployment?.provider !== 'vercel'
     || !/^dpl_[A-Za-z0-9]+$/.test(String(receipt.deployment?.id || ''))
+    || !/^[a-f0-9]{40}$/i.test(String(receipt.deployment?.sourceGitSha || ''))
+    || receipt.deployment?.sourceGitSha !== receipt.project?.gitSha
+    || typeof receipt.deployment?.projectId !== 'string'
+    || !receipt.deployment.projectId
+    || typeof receipt.deployment?.orgId !== 'string'
+    || !receipt.deployment.orgId
     || receipt.deployment?.target !== 'production'
     || receipt.deployment?.readyState !== 'READY'
   )) {
@@ -310,6 +337,7 @@ function verifyCodeGate({ cwd, gitSha = '', now = new Date() }, options = {}) {
     ok: true,
     exitCode: EXIT.PASS,
     status: 'PASS',
+    gate: { schema: GATE_SCHEMA, runtimeSha256: RUNTIME_DIGEST },
     project: { gitSha: context.project.gitSha, treeSha: context.project.treeSha },
     checkedAt: context.code.checkedAt,
     expiresAt: context.code.expiresAt,
@@ -332,7 +360,7 @@ function verifyGate({ cwd, gitSha = '', deployment = '', url = '', now = new Dat
   ].filter(Boolean));
   if (!expectedTargets.size) return { ok: false, exitCode: EXIT.RECEIPT_INVALID, reason: 'live strict 영수증에 배포 식별자가 없습니다.' };
   if (deployment && !expectedTargets.has(comparableTarget(deployment))) {
-    return { ok: false, exitCode: EXIT.BINDING_MISMATCH, reason: 'promote 대상이 strict 검사한 Vercel 배포와 다릅니다.' };
+    return { ok: false, exitCode: EXIT.BINDING_MISMATCH, reason: '프로덕션 전환 대상이 strict 검사한 Vercel 배포와 다릅니다.' };
   }
   if (url && comparableTarget(url) !== comparableTarget(live.receipt.deployment.url)) {
     return { ok: false, exitCode: EXIT.BINDING_MISMATCH, reason: '요청한 URL이 strict 검사한 Vercel 배포 URL과 다릅니다.' };
@@ -341,6 +369,7 @@ function verifyGate({ cwd, gitSha = '', deployment = '', url = '', now = new Dat
     ok: true,
     exitCode: EXIT.PASS,
     status: 'PASS',
+    gate: { schema: GATE_SCHEMA, runtimeSha256: RUNTIME_DIGEST },
     project: { gitSha: project.gitSha, treeSha: project.treeSha },
     deployment: live.receipt.deployment,
     checkedAt: live.receipt.checkedAt,
@@ -400,6 +429,9 @@ function isVercelToken(token) {
   return /^(?:vercel|vc)(?:\.exe|\.cmd)?(?:@[^/]+)?$/i.test(base);
 }
 
+const PRODUCTION_MUTATOR_RE = /--prod(?:\b|=)|--target(?:=|\s+)production\b|\bpromote\b|\brollback\b|\bredeploy\b|\brolling-release\b|\balias\b|\bapi\b/i;
+const PRODUCTION_SCRIPT_HINT_RE = /(?:^|[._/-])(?:deploy|deployment|prod|production|promote|rollback|redeploy|release|vercel|alias)(?:$|[._/-])/i;
+
 function skipPrefix(tokens, start = 0) {
   let index = start;
   while (index < tokens.length && isAssignment(tokens[index])) index++;
@@ -452,8 +484,114 @@ function nestedShellCommand(tokens) {
   return commandFlag >= 0 ? tokens[commandFlag + 1] || '' : '';
 }
 
+function assignedVercelVariables(segments) {
+  const names = new Set();
+  for (const tokens of segments) {
+    for (const token of tokens) {
+      const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.+)$/.exec(token);
+      if (match && isVercelToken(match[2])) names.add(match[1]);
+    }
+  }
+  return names;
+}
+
+function dynamicExecutableName(token) {
+  const match = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/.exec(String(token || ''))
+    || /^%([A-Za-z_][A-Za-z0-9_]*)%$/.exec(String(token || ''));
+  return match ? (match[1] || match[2] || '') : '';
+}
+
+function hasDynamicExecutable(segments) {
+  return segments.some(tokens => dynamicExecutableName(tokens[skipPrefix(tokens)]));
+}
+
 function hasFlag(args, name) {
   return args.some(item => item === name || item === `${name}=true` || item === `${name}=1`);
+}
+
+function hasOption(args, name) {
+  return args.some(item => item === name || item.startsWith(`${name}=`));
+}
+
+function optionValues(args, names) {
+  const wanted = new Set(names);
+  const values = [];
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index];
+    if (wanted.has(token)) {
+      values.push(args[index + 1] || '');
+      index++;
+      continue;
+    }
+    for (const name of wanted) {
+      if (token.startsWith(`${name}=`)) values.push(token.slice(name.length + 1));
+    }
+  }
+  return values;
+}
+
+function stagedGitSha(args) {
+  const values = optionValues(args, ['--meta', '-m'])
+    .filter(value => value.startsWith('githubCommitSha='))
+    .map(value => value.slice('githubCommitSha='.length));
+  return values.length === 1 ? values[0] : '';
+}
+
+function validateStagedInvocation(args, cwd, expectedSha) {
+  let gitRoot;
+  try {
+    gitRoot = findGitRoot(cwd);
+    if (!gitRoot || fs.realpathSync(cwd) !== fs.realpathSync(gitRoot)) {
+      return { ok: false, reason: 'strict staged production은 현재 clean Git 저장소 루트에서 직접 실행해야 합니다.' };
+    }
+  } catch {
+    return { ok: false, reason: 'strict staged production의 Git 저장소 루트를 확인하지 못했습니다.' };
+  }
+
+  const allowedFlags = new Set([
+    'deploy', '--prod', '--skip-domain', '--yes',
+  ]);
+  const allowedOptions = new Set(['--meta', '-m']);
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index];
+    if (allowedFlags.has(token)) continue;
+    if (allowedOptions.has(token)) {
+      if (!args[index + 1]) return { ok: false, reason: `${token} 값이 없어 staged 명령을 안전하게 확인할 수 없습니다.` };
+      index++;
+      continue;
+    }
+    if ([...allowedOptions].some(option => token.startsWith(`${option}=`))) continue;
+    return { ok: false, reason: `strict staged production에서 허용하지 않는 인자 형식입니다: ${token.startsWith('-') ? token.split('=')[0] : 'source path'}` };
+  }
+  const metadata = optionValues(args, ['--meta', '-m']);
+  const expectedMetadata = [`githubCommitSha=${expectedSha}`, 'githubDeployment=1'].sort();
+  if (metadata.length !== 2 || metadata.slice().sort().join('\n') !== expectedMetadata.join('\n') || stagedGitSha(args) !== expectedSha) {
+    return { ok: false, reason: `staged production에는 --meta githubDeployment=1과 --meta githubCommitSha=${expectedSha}를 각각 정확히 한 번 넣어야 합니다.` };
+  }
+  return { ok: true };
+}
+
+function isReadOnlyRoutingInvocation(invocation) {
+  if (!invocation) return false;
+  const args = invocation.args;
+  if (targetsProduction(args) || args.includes('redeploy') || args.includes('rolling-release') || args.includes('api')) return false;
+  for (const name of ['promote', 'rollback']) {
+    const index = args.indexOf(name);
+    if (index >= 0) return deploymentTarget(args, index).toLowerCase() === 'status';
+  }
+  const aliasIndex = args.indexOf('alias');
+  if (aliasIndex >= 0) {
+    const action = deploymentTarget(args, aliasIndex).toLowerCase();
+    return !action || ['ls', 'list'].includes(action);
+  }
+  return false;
+}
+
+function isLiteralDirectVercelCommand(rawCommand, parsed) {
+  if (parsed.unterminatedQuote || parsed.segments.length !== 1) return false;
+  if (/[;&|<>`$\\\r\n]/.test(rawCommand)) return false;
+  const tokens = parsed.segments[0];
+  return /^(?:vercel|vc)(?:\.cmd|\.exe)?$/i.test(String(tokens[0] || ''));
 }
 
 function targetsProduction(args) {
@@ -462,9 +600,9 @@ function targetsProduction(args) {
     || args.some(item => item === '--target=production');
 }
 
-function promoteTarget(args, promoteIndex) {
+function deploymentTarget(args, commandIndex) {
   const optionsWithValue = new Set(['--scope', '--token', '--timeout', '--cwd', '--local-config', '--global-config']);
-  for (let index = promoteIndex + 1; index < args.length; index++) {
+  for (let index = commandIndex + 1; index < args.length; index++) {
     const token = args[index];
     if (optionsWithValue.has(token)) { index++; continue; }
     if (token.startsWith('-')) continue;
@@ -525,22 +663,105 @@ function vercelWorkingDirectory(args, currentCwd) {
   return { ok: true, cwd: currentCwd };
 }
 
+function runtimeScriptCommand(tokens, currentCwd) {
+  const index = skipPrefix(tokens);
+  const executable = basename(tokens[index]).replace(/\.(?:cmd|exe)$/, '');
+  let scriptToken = '';
+
+  if (['.', 'source'].includes(executable)) {
+    scriptToken = tokens[index + 1] || '';
+  } else if (['sh', 'bash', 'zsh', 'dash'].includes(executable)) {
+    for (let itemIndex = index + 1; itemIndex < tokens.length; itemIndex++) {
+      const token = tokens[itemIndex];
+      if (['-c', '--command'].includes(token)) return null;
+      if (token === '--') { scriptToken = tokens[itemIndex + 1] || ''; break; }
+      if (token.startsWith('-')) continue;
+      scriptToken = token;
+      break;
+    }
+  } else if (['node', 'nodejs', 'deno'].includes(executable)) {
+    for (let itemIndex = index + 1; itemIndex < tokens.length; itemIndex++) {
+      const token = tokens[itemIndex];
+      if (['-e', '--eval', '-p', '--print'].includes(token)) {
+        return { command: tokens[itemIndex + 1] || '', cwd: currentCwd, inline: true };
+      }
+      if (token === '--') { scriptToken = tokens[itemIndex + 1] || ''; break; }
+      if (token.startsWith('-')) continue;
+      scriptToken = token;
+      break;
+    }
+  } else if (['powershell', 'pwsh'].includes(executable)) {
+    const fileIndex = tokens.findIndex((token, itemIndex) => itemIndex > index && ['-file', '-f'].includes(token.toLowerCase()));
+    if (fileIndex >= 0) scriptToken = tokens[fileIndex + 1] || '';
+  } else if (/^(?:\.\.?[\\/]|[A-Za-z]:[\\/])/.test(tokens[index] || '') && /\.(?:sh|bash|zsh|js|cjs|mjs|ps1|cmd|bat)$/i.test(tokens[index])) {
+    scriptToken = tokens[index];
+  }
+
+  if (!scriptToken) return null;
+  const hinted = PRODUCTION_SCRIPT_HINT_RE.test(scriptToken);
+  if (/\$|%[^%]+%/.test(scriptToken)) {
+    return hinted ? { unresolved: true, script: scriptToken, reason: '동적 스크립트 경로를 결정할 수 없습니다.' } : null;
+  }
+  const file = path.resolve(currentCwd, scriptToken);
+  let stat;
+  try { stat = fs.statSync(file); }
+  catch {
+    return hinted ? { unresolved: true, script: scriptToken, reason: `스크립트 ${scriptToken}을 읽지 못했습니다.` } : null;
+  }
+  if (!stat.isFile() || stat.size > 1024 * 1024) {
+    return hinted ? { unresolved: true, script: scriptToken, reason: `스크립트 ${scriptToken}을 안전하게 분석할 수 없습니다.` } : null;
+  }
+  try { return { command: fs.readFileSync(file, 'utf8'), cwd: currentCwd, script: scriptToken }; }
+  catch { return hinted ? { unresolved: true, script: scriptToken, reason: `스크립트 ${scriptToken}을 읽지 못했습니다.` } : null; }
+}
+
 function packageScriptCommand(tokens, currentCwd) {
   const index = skipPrefix(tokens);
   const executable = basename(tokens[index]).replace(/\.(?:cmd|exe)$/, '');
   if (!['npm', 'pnpm', 'yarn', 'bun'].includes(executable)) return null;
+  const cwdOptions = executable === 'npm'
+    ? ['--prefix']
+    : executable === 'pnpm'
+      ? ['--dir', '--prefix', '-C']
+      : executable === 'yarn'
+        ? ['--cwd']
+        : ['--cwd'];
+  let scriptCwd = currentCwd;
+  for (let itemIndex = index + 1; itemIndex < tokens.length; itemIndex++) {
+    const token = tokens[itemIndex];
+    const exact = cwdOptions.find(option => token === option);
+    const equal = cwdOptions.find(option => token.startsWith(`${option}=`));
+    if (!exact && !equal) continue;
+    const value = exact ? tokens[itemIndex + 1] : token.slice(equal.length + 1);
+    if (!value || /\$|%[^%]+%/.test(value)) {
+      return { unresolved: true, script: tokens.find(item => /deploy|prod|promote|rollback|release/i.test(item)) || 'deploy', reason: 'package manager 작업 폴더를 결정할 수 없습니다.' };
+    }
+    scriptCwd = path.resolve(currentCwd, value);
+    if (exact) itemIndex++;
+  }
   let scriptIndex = -1;
-  if (['run', 'run-script'].includes(tokens[index + 1])) scriptIndex = index + 2;
-  else if (executable === 'yarn' && tokens[index + 1] && !tokens[index + 1].startsWith('-')) scriptIndex = index + 1;
+  const runIndex = tokens.findIndex((token, itemIndex) => itemIndex > index && ['run', 'run-script'].includes(token));
+  if (runIndex >= 0) scriptIndex = runIndex + 1;
+  else if (executable === 'yarn') {
+    let itemIndex = index + 1;
+    while (itemIndex < tokens.length) {
+      const token = tokens[itemIndex];
+      const exact = cwdOptions.includes(token);
+      if (exact) { itemIndex += 2; continue; }
+      if (cwdOptions.some(option => token.startsWith(`${option}=`)) || token.startsWith('-')) { itemIndex++; continue; }
+      scriptIndex = itemIndex;
+      break;
+    }
+  }
   if (scriptIndex < 0 || !tokens[scriptIndex]) return null;
   let manifest;
-  try { manifest = JSON.parse(fs.readFileSync(path.join(currentCwd, 'package.json'), 'utf8')); }
-  catch { return { unresolved: true, script: tokens[scriptIndex] }; }
+  try { manifest = JSON.parse(fs.readFileSync(path.join(scriptCwd, 'package.json'), 'utf8')); }
+  catch { return { unresolved: true, script: tokens[scriptIndex], reason: `package.json을 ${scriptCwd}에서 읽지 못했습니다.` }; }
   const script = manifest?.scripts?.[tokens[scriptIndex]];
   if (typeof script !== 'string' || !script.trim()) return null;
   const separator = tokens.indexOf('--', scriptIndex + 1);
   const extra = separator >= 0 ? tokens.slice(separator + 1) : [];
-  return { command: `${script}${extra.length ? ` ${extra.join(' ')}` : ''}`, script: tokens[scriptIndex] };
+  return { command: `${script}${extra.length ? ` ${extra.join(' ')}` : ''}`, script: tokens[scriptIndex], cwd: scriptCwd };
 }
 
 function evaluateVercelCommand(command, cwd, options = {}) {
@@ -553,10 +774,30 @@ function evaluateVercelCommand(command, cwd, options = {}) {
   // Fail closed only when such a construct also contains a production-changing
   // Vercel command. Ordinary substitutions and read-only Vercel commands pass.
   const concealedExecution = /\$\(|`|\beval\b/i.test(rawCommand);
+  const dynamicExecution = concealedExecution
+    || /\$(?:\{|[A-Za-z_])|%[A-Za-z_][A-Za-z0-9_]*%/.test(rawCommand)
+    || /\b(?:sh|bash|zsh|dash|cmd|powershell|pwsh)(?:\.exe)?\b[^\r\n;&|]*(?:-c|\/c|-command)\b/i.test(rawCommand);
   const namesVercel = /(?:^|[\\/\s"'`($;&|])(?:vercel|vc)(?:\.exe|\.cmd)?(?:@[^\s"'`);&|]+)?(?=$|[\s"'`);&|])/i.test(rawCommand);
-  const productionChange = /--prod(?:\b|=)|--target(?:=|\s+)production\b|\bpromote\b|\balias\s+set\b/i.test(rawCommand);
-  if (concealedExecution && namesVercel && productionChange) {
+  const referencesVercel = namesVercel || /\b(?:vercel|vc)(?:\.exe|\.cmd)?\b/i.test(rawCommand);
+  const parsedCommandText = parsed.segments.map(segment => segment.join(' ')).join(' ; ');
+  const productionChange = PRODUCTION_MUTATOR_RE.test(rawCommand) || PRODUCTION_MUTATOR_RE.test(parsedCommandText);
+  const singleInvocation = parsed.segments.length === 1 ? unwrapVercel(parsed.segments[0]) : null;
+  if (productionChange && !isReadOnlyRoutingInvocation(singleInvocation) && Number(options._wrapperDepth || 0) > 0) {
+    return { relevant: true, allowed: false, reason: 'package script, 셸·런타임 스크립트, 중첩 명령을 통한 프로덕션 조작은 허용하지 않습니다.' };
+  }
+  if (productionChange && !isReadOnlyRoutingInvocation(singleInvocation) && !isLiteralDirectVercelCommand(rawCommand, parsed)) {
+    return { relevant: true, allowed: false, reason: '프로덕션 조작은 셸 래퍼·복합 명령 없이 단일 literal vercel 또는 vc 명령으로만 실행할 수 있습니다.' };
+  }
+  if (dynamicExecution && productionChange) {
+    return { relevant: true, allowed: false, reason: '동적 실행이 포함된 프로덕션 조작은 실제 명령을 결정할 수 없어 차단했습니다.' };
+  }
+  if (concealedExecution && referencesVercel && productionChange) {
     return { relevant: true, allowed: false, reason: '명령 치환 또는 eval 안의 Vercel 프로덕션 조작은 안전하게 검증할 수 없어 차단했습니다.' };
+  }
+  const assignedVariables = assignedVercelVariables(parsed.segments);
+  if (productionChange && hasDynamicExecutable(parsed.segments)) {
+    const detail = assignedVariables.size ? 'Vercel 실행 파일을 변수로 간접 호출했습니다.' : '실행 파일 변수를 결정할 수 없습니다.';
+    return { relevant: true, allowed: false, reason: `${detail} 동적 프로덕션 조작은 안전하게 차단했습니다.` };
   }
   let sawRelevant = false;
   let lastGate = null;
@@ -570,21 +811,32 @@ function evaluateVercelCommand(command, cwd, options = {}) {
       continue;
     }
     const packageScript = packageScriptCommand(segment, effectiveCwd);
-    if (packageScript?.unresolved && /deploy|prod|promote|release/i.test(packageScript.script)) {
-      return { relevant: true, allowed: false, reason: `package.json에서 ${packageScript.script} 스크립트를 확인할 수 없어 안전하게 차단했습니다.` };
+    if (packageScript?.unresolved && /deploy|prod|promote|rollback|redeploy|release|vercel|alias/i.test(packageScript.script)) {
+      return { relevant: true, allowed: false, reason: packageScript.reason || `package.json에서 ${packageScript.script} 스크립트를 확인할 수 없어 안전하게 차단했습니다.` };
     }
     if (packageScript?.command) {
       const depth = Number(options._scriptDepth || 0);
       if (depth >= 5) return { relevant: true, allowed: false, reason: '중첩된 package script를 끝까지 확인할 수 없어 안전하게 차단했습니다.' };
-      const scriptResult = evaluateVercelCommand(packageScript.command, effectiveCwd, { ...options, _scriptDepth: depth + 1 });
+      const scriptResult = evaluateVercelCommand(packageScript.command, packageScript.cwd || effectiveCwd, { ...options, _scriptDepth: depth + 1, _wrapperDepth: Number(options._wrapperDepth || 0) + 1 });
       if (scriptResult.relevant && !scriptResult.allowed) return scriptResult;
       if (scriptResult.relevant) { sawRelevant = true; lastGate = scriptResult.gate || lastGate; continue; }
     }
     const nested = nestedShellCommand(segment);
     if (nested) {
-      const nestedResult = evaluateVercelCommand(nested, effectiveCwd, options);
+      const nestedResult = evaluateVercelCommand(nested, effectiveCwd, { ...options, _wrapperDepth: Number(options._wrapperDepth || 0) + 1 });
       if (nestedResult.relevant && !nestedResult.allowed) return nestedResult;
       if (nestedResult.relevant) { sawRelevant = true; lastGate = nestedResult.gate || lastGate; continue; }
+    }
+    const runtimeScript = runtimeScriptCommand(segment, effectiveCwd);
+    if (runtimeScript?.unresolved) {
+      return { relevant: true, allowed: false, reason: runtimeScript.reason || '프로덕션 관련 스크립트를 안전하게 분석할 수 없어 차단했습니다.' };
+    }
+    if (runtimeScript?.command) {
+      const depth = Number(options._scriptDepth || 0);
+      if (depth >= 5) return { relevant: true, allowed: false, reason: '중첩된 실행 스크립트를 끝까지 확인할 수 없어 안전하게 차단했습니다.' };
+      const scriptResult = evaluateVercelCommand(runtimeScript.command, runtimeScript.cwd || effectiveCwd, { ...options, _scriptDepth: depth + 1, _wrapperDepth: Number(options._wrapperDepth || 0) + 1 });
+      if (scriptResult.relevant && !scriptResult.allowed) return scriptResult;
+      if (scriptResult.relevant) { sawRelevant = true; lastGate = scriptResult.gate || lastGate; continue; }
     }
     const invocation = unwrapVercel(segment);
     if (!invocation) continue;
@@ -594,17 +846,40 @@ function evaluateVercelCommand(command, cwd, options = {}) {
     const workingDirectory = vercelWorkingDirectory(args, effectiveCwd);
     if (!workingDirectory.ok) return { relevant: true, allowed: false, reason: workingDirectory.reason };
     const invocationCwd = workingDirectory.cwd;
-    if (args.includes('alias') && args.includes('set')) {
-      return { relevant: true, allowed: false, reason: 'vercel alias set은 strict promote 게이트를 우회할 수 있어 차단했습니다.' };
+    if (args.includes('api')) {
+      return { relevant: true, allowed: false, reason: 'vercel api는 임의의 쓰기 API를 호출할 수 있어 strict 훅에서 차단했습니다.' };
+    }
+    if (args.includes('redeploy')) {
+      return { relevant: true, allowed: false, reason: 'vercel redeploy는 새 배포를 만들어 기존 영수증과 같은 아티팩트임을 보장할 수 없어 차단했습니다.' };
+    }
+    if (args.includes('rolling-release')) {
+      return { relevant: true, allowed: false, reason: 'vercel rolling-release는 프로덕션 트래픽을 바꾸므로 strict 훅에서 차단했습니다.' };
+    }
+    const aliasIndex = args.indexOf('alias');
+    if (aliasIndex >= 0) {
+      const aliasAction = deploymentTarget(args, aliasIndex).toLowerCase();
+      if (aliasAction && !['ls', 'list'].includes(aliasAction)) {
+        return { relevant: true, allowed: false, reason: 'Vercel alias 변경은 strict promote 게이트를 우회할 수 있어 차단했습니다.' };
+      }
     }
     const promoteIndex = args.indexOf('promote');
     if (promoteIndex >= 0) {
-      const target = promoteTarget(args, promoteIndex);
+      const target = deploymentTarget(args, promoteIndex);
       if (!target) return { relevant: true, allowed: false, reason: 'vercel promote 대상 URL 또는 ID가 없습니다.' };
+      if (target.toLowerCase() === 'status') continue;
+      if (promoteIndex !== 0 || args.length !== 2) {
+        return { relevant: true, allowed: false, reason: 'strict promote는 vercel promote <literal URL 또는 ID> 단일 형식만 허용합니다.' };
+      }
       const gate = verifyGate({ cwd: invocationCwd, deployment: target, url: /^https?:\/\//i.test(target) ? target : '' }, options);
       if (!gate.ok) return { relevant: true, allowed: false, reason: gate.reason, gate };
       lastGate = gate;
       continue;
+    }
+    const rollbackIndex = args.indexOf('rollback');
+    if (rollbackIndex >= 0) {
+      const target = deploymentTarget(args, rollbackIndex);
+      if (target.toLowerCase() === 'status') continue;
+      return { relevant: true, allowed: false, reason: 'vercel rollback은 프로덕션 트래픽을 바꾸므로 strict 훅에서 자동 실행을 차단했습니다. 복구 절차만 제시하세요.' };
     }
     if (targetsProduction(args) && !hasFlag(args, '--skip-domain')) {
       return { relevant: true, allowed: false, reason: '프로덕션 배포는 먼저 vercel --prod --skip-domain으로 격리해야 합니다.' };
@@ -612,6 +887,8 @@ function evaluateVercelCommand(command, cwd, options = {}) {
     if (targetsProduction(args) && hasFlag(args, '--skip-domain')) {
       const gate = verifyCodeGate({ cwd: invocationCwd }, options);
       if (!gate.ok) return { relevant: true, allowed: false, reason: gate.reason, gate };
+      const staged = validateStagedInvocation(args, invocationCwd, gate.project.gitSha);
+      if (!staged.ok) return { relevant: true, allowed: false, reason: staged.reason, gate };
       lastGate = gate;
     }
   }
@@ -625,6 +902,8 @@ module.exports = {
   EXIT,
   RECEIPT_KIND,
   RECEIPT_TTL_MS,
+  GATE_SCHEMA,
+  RUNTIME_DIGEST,
   REQUIRED_BY_PHASE,
   stableStringify,
   sha256,

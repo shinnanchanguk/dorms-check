@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import runtime from './strict-runtime.cjs';
@@ -109,7 +110,7 @@ function removeCodexBlock(text) {
 }
 
 function codexBlock(command) {
-  return `${CODEX_START}\n[[hooks.PreToolUse]]\nmatcher = "^Bash$"\n\n[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = ${tomlString(command)}\ncommand_windows = ${tomlString(command)}\ntimeout = 10\nstatusMessage = "Checking Vercel security gate"\n${CODEX_END}\n`;
+  return `${CODEX_START}\n[[hooks.PreToolUse]]\nmatcher = "^Bash$"\n\n[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = ${tomlString(command)}\ncommand_windows = ${tomlString(command)}\ntimeout = 120\nstatusMessage = "Checking Vercel security gate"\n${CODEX_END}\n`;
 }
 
 function installCodexConfig(text, command) {
@@ -135,7 +136,7 @@ function removeJsonHook(settings, event) {
 
 function installJsonHook(settings, agent, command) {
   const event = agent === 'claude' ? 'PreToolUse' : 'BeforeTool';
-  const matcher = agent === 'claude' ? 'Bash' : '^run_shell_command$';
+  const matcher = agent === 'claude' ? 'Bash|PowerShell' : '^run_shell_command$';
   removeJsonHook(settings, event);
   settings.hooks ||= {};
   settings.hooks[event] ||= [];
@@ -145,8 +146,8 @@ function installJsonHook(settings, agent, command) {
       type: 'command',
       command,
       ...(agent === 'gemini'
-        ? { name: 'dorms-check security gate', timeout: 10000, description: 'Blocks unscanned Vercel production promotion.' }
-        : { timeout: 10 }),
+        ? { name: 'dorms-check security gate', timeout: 120000, description: 'Blocks unscanned Vercel production promotion.' }
+        : { timeout: 120 }),
     }],
   });
   return settings;
@@ -186,6 +187,52 @@ function writeIfChanged(file, before, after, base, stamp) {
   const backup = backupConfig(file, base, stamp);
   atomicWrite(file, after);
   return { changed: true, backup };
+}
+
+function prepareConfigChanges(selected, base, command, action) {
+  return selected.map(agent => {
+    const file = agentConfigFile(agent, base);
+    const existed = fs.existsSync(file);
+    const before = readText(file);
+    let after = before;
+    if (agent === 'codex') {
+      after = action === 'install'
+        ? installCodexConfig(before, command)
+        : removeCodexBlock(before).replace(/\n{3,}/g, '\n\n');
+    } else if (action === 'install' || before) {
+      const settings = readJson(file);
+      if (action === 'install') installJsonHook(settings, agent, command);
+      else removeJsonHook(settings, agent === 'claude' ? 'PreToolUse' : 'BeforeTool');
+      after = serializeJson(settings);
+    }
+    return { agent, file, existed, before, after };
+  });
+}
+
+function applyConfigChanges(prepared, base, stamp) {
+  const changes = {};
+  const touched = [];
+  try {
+    for (const item of prepared) {
+      changes[item.agent] = { file: item.file, ...writeIfChanged(item.file, item.before, item.after, base, stamp) };
+      if (changes[item.agent].changed) touched.push(item);
+    }
+    return changes;
+  } catch (error) {
+    for (const item of touched.reverse()) {
+      try {
+        if (item.existed) atomicWrite(item.file, item.before);
+        else fs.unlinkSync(item.file);
+      } catch { /* Preserve the original error. */ }
+    }
+    error.partial = touched.length > 0;
+    throw error;
+  }
+}
+
+function isWslHost() {
+  if (process.platform !== 'linux') return false;
+  return Boolean(process.env.WSL_DISTRO_NAME || /microsoft/i.test(`${os.release()} ${readText('/proc/version')}`));
 }
 
 function codexInstalled(text, command) {
@@ -229,14 +276,20 @@ export function hookStatus(options = {}) {
       let parseError = '';
       try { settings = readJson(file); } catch (error) { parseError = error.message; }
       const event = agent === 'claude' ? 'PreToolUse' : 'BeforeTool';
-      const matcher = agent === 'claude' ? 'Bash' : '^run_shell_command$';
+      const matcher = agent === 'claude' ? 'Bash|PowerShell' : '^run_shell_command$';
       const installed = !parseError && jsonInstalled(settings, event, matcher, expectedCommand);
       const disabled = Boolean(settings.disableAllHooks);
       agents[agent] = { file, installed, effective: installed && source.valid && !disabled, disabled, parseError, hostActivationNotObservable: true };
     }
   }
   return {
+    hostPlatform: process.platform,
     home: base,
+    isWSL: isWslHost(),
+    installationScope: 'current-host-only',
+    hostScopeWarning: 'Windows와 WSL 등 다른 네이티브 호스트의 CLI는 해당 호스트에서 별도로 설치·확인해야 합니다.',
+    timeoutSeconds: 120,
+    hostTimeoutMayFailOpen: true,
     securityOnly: true,
     provider: 'vercel',
     source: { valid: source.valid, entries: source.entries },
@@ -244,6 +297,8 @@ export function hookStatus(options = {}) {
       covers: ['Codex/Claude/Gemini shell-tool Vercel CLI commands'],
       excludes: ['Vercel dashboard actions', 'Git-push automatic production deployments', 'external CI and other users'],
       hostActivationNotObservable: true,
+      timeoutSeconds: 120,
+      hostTimeoutMayFailOpen: true,
     },
     agents,
   };
@@ -252,22 +307,12 @@ export function hookStatus(options = {}) {
 export function installHooks({ agents, homeDir: requestedHome } = {}) {
   const selected = parseAgents(agents);
   const base = homeDir({ homeDir: requestedHome });
-  const files = installGuardFiles(base);
-  const command = hookCommand(files.guard);
+  const destination = guardFiles(base);
+  const command = hookCommand(destination.guard);
+  const prepared = prepareConfigChanges(selected, base, command, 'install');
+  installGuardFiles(base);
   const stamp = timestamp();
-  const changes = {};
-  for (const agent of selected) {
-    const file = agentConfigFile(agent, base);
-    if (agent === 'codex') {
-      const before = readText(file);
-      changes[agent] = { file, ...writeIfChanged(file, before, installCodexConfig(before, command), base, stamp) };
-    } else {
-      const before = readText(file);
-      const settings = readJson(file);
-      const after = serializeJson(installJsonHook(settings, agent, command));
-      changes[agent] = { file, ...writeIfChanged(file, before, after, base, stamp) };
-    }
-  }
+  const changes = applyConfigChanges(prepared, base, stamp);
   return { action: 'install', agents: selected, changes, status: hookStatus({ homeDir: base }) };
 }
 
@@ -275,19 +320,8 @@ export function uninstallHooks({ agents, homeDir: requestedHome } = {}) {
   const selected = parseAgents(agents);
   const base = homeDir({ homeDir: requestedHome });
   const stamp = timestamp();
-  const changes = {};
-  for (const agent of selected) {
-    const file = agentConfigFile(agent, base);
-    const before = readText(file);
-    let after = before;
-    if (agent === 'codex') after = removeCodexBlock(before).replace(/\n{3,}/g, '\n\n');
-    else if (before) {
-      const settings = readJson(file);
-      removeJsonHook(settings, agent === 'claude' ? 'PreToolUse' : 'BeforeTool');
-      after = serializeJson(settings);
-    }
-    changes[agent] = { file, ...writeIfChanged(file, before, after, base, stamp) };
-  }
+  const prepared = prepareConfigChanges(selected, base, hookCommand(guardFiles(base).guard), 'uninstall');
+  const changes = applyConfigChanges(prepared, base, stamp);
   const remaining = hookStatus({ homeDir: base });
   if (!Object.values(remaining.agents).some(agent => agent.installed)) {
     const files = guardFiles(base);

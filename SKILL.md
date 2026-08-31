@@ -50,6 +50,6 @@ description: 교사 제작 앱을 보안·에듀집·지식재산권 세 축으�
 
 ## 4. 사용자가 strict Vercel 배포 게이트를 요청한 경우
 
-먼저 `docs/STRICT-SECURITY-GATE.ko.md`를 끝까지 읽는다. 일반 점검과 달리 검토 완료 커밋 SHA를 고정하고, clean Git code strict, 전역 훅 상태 확인, `vercel --prod --skip-domain`, stdout의 정확한 URL live strict, `gate verify`, 같은 URL/ID promote 순서를 지킨다. 운영체제와 셸은 직접 감지하고 명령도 직접 실행한다. 사용자는 로그인, 훅 신뢰, 모르는 변경 확인만 한다.
+먼저 `docs/STRICT-SECURITY-GATE.ko.md`를 끝까지 읽는다. 일반 점검과 달리 검토 완료 커밋 SHA를 고정하고, clean Git code strict, 현재 호스트의 전역 훅 상태 확인, 두 Git metadata를 literal로 넣은 단일 staged `vercel` 명령, stdout의 정확한 URL live strict, `gate verify`, 같은 literal URL/ID의 단일 promote 순서를 지킨다. 운영체제와 셸은 직접 감지하고 명령도 직접 실행한다. 사용자는 로그인, 훅 신뢰, 모르는 변경 확인만 한다.
 
-결정적 검사 누락을 통과로 추정하지 않는다. `SECURITY_BLOCKED`, `INCOMPLETE`, `BINDING_MISMATCH`, `RECEIPT_INVALID`를 `judge`나 설명으로 덮지 않는다. 훅 설치는 자동 배포 권한이 아니며, 사용자가 배포를 명시적으로 요청한 범위에서만 staged production과 promote를 실행한다.
+결정적 검사 누락을 통과로 추정하지 않는다. `SECURITY_BLOCKED`, `INCOMPLETE`, `BINDING_MISMATCH`, `RECEIPT_INVALID`를 `judge`나 설명으로 덮지 않는다. 훅 설치는 자동 배포 권한이 아니며, 사용자가 배포를 명시적으로 요청한 범위에서만 staged production과 promote를 실행한다. Vercel production 변경에 wrapper, 변수, 스크립트, 복합 명령, source/artifact/project override를 쓰지 않는다. rollback·redeploy·rolling release·alias/API 쓰기는 자동 실행하지 않고 명시적 status/list 조회만 허용한다. Windows와 WSL은 각각의 현재 호스트에서 훅 상태를 확인한다.

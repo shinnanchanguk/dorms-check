@@ -37,7 +37,7 @@ npx -y github:shinnanchanguk/dorms-check submit      # once everything passes: e
 
 ### Strict Vercel deployment gate
 
-For a production-blocking gate, pin an exact reviewed Git commit instead of running the moving default branch. Strict mode issues signed 15-minute receipts bound to a clean Git SHA/tree and the exact Vercel deployment URL/ID. Global Codex, Claude Code, and Gemini CLI hooks block direct production deployment and promotion without matching receipts.
+For a production-blocking gate, pin an exact reviewed Git commit instead of running the moving default branch. Strict mode issues signed 15-minute receipts bound to a clean Git SHA/tree, exact Vercel URL/ID, source SHA, project/org, and gate runtime. Production changes must be one literal `vercel`/`vc` command; staged deploys require both `githubDeployment=1` and the full literal `githubCommitSha` metadata. All rollback, redeploy, rolling-release, alias, and arbitrary API writes are denied; only explicit status/list queries are exempt.
 
 ```bash
 dcheck hooks install --global --agents codex,claude,gemini --provider vercel --security-only

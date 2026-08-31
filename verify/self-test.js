@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { checkHeaders } from '../checks/external/headers.js';
+import { validateCsp, validateFrameProtection } from '../checks/external/header-policy.js';
 import { checkTls } from '../checks/external/tls.js';
 import { checkExposure } from '../checks/external/exposure.js';
 import { checkCors } from '../checks/external/cors.js';
@@ -69,6 +70,17 @@ async function run() {
     'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; object-src 'none'; base-uri 'self'; form-action 'self'",
   } });
   ok('unsafe-inline·unsafe-eval CSP → fail', weakCsp.results.find(r => r.id === 'sec.header.csp').status === 'fail');
+  const cspPrefix = "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action ";
+  ok("form-action 'none' 단일 값 → pass", validateCsp(`${cspPrefix}'none'`).valid);
+  ok('form-action 외부 HTTPS source → fail', !validateCsp(`${cspPrefix}https://evil.example`).valid);
+  ok('form-action data: source → fail', !validateCsp(`${cspPrefix}data:`).valid);
+  ok("form-action 'unsafe-inline' source → fail", !validateCsp(`${cspPrefix}'unsafe-inline'`).valid);
+  ok('form-action 복수 source → fail', !validateCsp(`${cspPrefix}'self' https://evil.example`).valid);
+  const frameCspPrefix = "default-src 'self'; frame-ancestors ";
+  ok("frame-ancestors 'self' 단일 값 → pass", validateFrameProtection('', `${frameCspPrefix}'self'`).valid);
+  ok('frame-ancestors 외부 HTTPS source → fail', !validateFrameProtection('', `${frameCspPrefix}https://evil.example`).valid);
+  ok('frame-ancestors data: source → fail', !validateFrameProtection('', `${frameCspPrefix}data:`).valid);
+  ok('frame-ancestors 복수 source → fail', !validateFrameProtection('', `${frameCspPrefix}'self' https://evil.example`).valid);
   const shortHsts = checkHeaders({ headers: { 'strict-transport-security': 'max-age=1' } });
   ok('너무 짧은 HSTS → fail', shortHsts.results.find(r => r.id === 'sec.header.hsts').status === 'fail');
 
