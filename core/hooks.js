@@ -331,7 +331,7 @@ function resolveWindowsVercelExecutable(options = {}) {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
         env: environment,
-        timeout: 10000,
+        timeout: 60000,
       })).trim();
     } catch (error) {
       const wrapped = new Error(`Get-Command vercel로 Windows vercel.cmd 절대 경로를 확인하지 못했습니다: ${error.message}`);

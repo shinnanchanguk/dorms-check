@@ -291,7 +291,7 @@ function verifyVercelCliVersion({ cwd = process.cwd() } = {}, options = {}) {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
         env: options.env || process.env,
-        timeout: 10000,
+        timeout: 60000,
       }, options);
     }
   } catch (error) {
