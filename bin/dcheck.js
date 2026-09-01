@@ -68,7 +68,7 @@ function help() {
   ${color.bold('dcheck scan')}  ${color.dim('--track security --strict --json --code-only --git-sha <SHA>')}   배포 전 코드 보안 게이트
   ${color.bold('dcheck scan')}  ${color.dim('--track security --strict --json --url <격리 URL> --git-sha <SHA> --vercel-deployment <같은 URL>')}   격리 배포 실측 게이트
   ${color.bold('dcheck gate verify')} ${color.dim('--git-sha <SHA> --vercel-deployment <URL> [--json]')}   현재 소스·배포와 strict 영수증 일치 확인
-  ${color.bold('dcheck hooks install')} ${color.dim('--global --agents codex,claude,gemini --provider vercel --security-only')}   전역 배포 차단 훅 설치
+  ${color.bold('dcheck hooks install')} ${color.dim('--global --agents codex,claude,gemini,antigravity --provider vercel --security-only')}   전역 배포 차단 훅 설치
   ${color.bold('dcheck hooks status|uninstall')} ${color.dim('[--agents ...] [--json]')}   훅 상태 확인·안전 제거
   ${color.bold('dcheck judge --in <answers.json>')}   교사 AI가 판단한 ai-review 항목 병합(증거 필수)
   ${color.bold('dcheck interview')} ${color.dim('[--answers <file>]')}   권리·허용범위 설문 문항 출력 / 답으로 권리 프로필 생성
@@ -795,7 +795,7 @@ function runGateCmd() {
 
 function validateHookMode(sub, json) {
   if (!['install', 'status', 'uninstall'].includes(sub)) {
-    outputMachineResult({ ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: '사용법: dcheck hooks install|status|uninstall [--agents codex,claude,gemini] [--json]' }, { json });
+    outputMachineResult({ ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: '사용법: dcheck hooks install|status|uninstall [--agents codex,claude,gemini,antigravity] [--json]' }, { json });
     return false;
   }
   if (sub === 'install' && (!flag('global') || !flag('security-only') || opt('provider', '') !== 'vercel')) {
@@ -810,7 +810,7 @@ function runHooksCmd() {
   const json = flag('json');
   if (!validateHookMode(sub, json)) return;
   try {
-    const selected = opt('agents', 'codex,claude,gemini');
+    const selected = opt('agents', ALL_AGENTS.join(','));
     const requestedAgents = [...new Set(selected.split(',').map(item => item.trim().toLowerCase()).filter(Boolean))];
     const unknownAgents = requestedAgents.filter(agent => !ALL_AGENTS.includes(agent));
     if (!requestedAgents.length || unknownAgents.length) {

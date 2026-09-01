@@ -43,30 +43,31 @@ dcheck init --name "내 앱" --track security --confirm-ownership
 
 `init`이 만든 설정과 배포할 코드가 의도한 변경인지 AI가 확인한 뒤 커밋합니다. 모르는 변경이나 다른 사람이 작업 중인 파일이 있으면 임의로 포함하지 말고 사용자에게 한 번 확인합니다.
 
-## 세 에이전트 전역 훅
+## 네 에이전트 전역 훅
 
 한 번에 설치:
 
 ```bash
-dcheck hooks install --global --agents codex,claude,gemini --provider vercel --security-only
-dcheck hooks status --agents codex,claude,gemini --json
+dcheck hooks install --global --agents codex,claude,gemini,antigravity --provider vercel --security-only
+dcheck hooks status --agents codex,claude,gemini,antigravity --json
 ```
 
-각 에이전트만 설치하려면 `--agents codex`, `--agents claude`, `--agents gemini` 중 하나를 씁니다. 설정 위치는 다음과 같습니다.
+각 에이전트만 설치하려면 `--agents codex`, `--agents claude`, `--agents gemini`, `--agents antigravity` 중 하나를 씁니다. 설정 위치는 다음과 같습니다.
 
 | 에이전트 | 기본 설정 | 공식 사용자 지정 루트 | 이벤트와 matcher |
 |---|---|---|---|
 | Codex | `~/.codex/config.toml` | `$CODEX_HOME/config.toml` | `PreToolUse`, `^Bash$` |
 | Claude Code | `~/.claude/settings.json` | `$CLAUDE_CONFIG_DIR/settings.json` | `PreToolUse`, `Bash|PowerShell` |
 | Gemini CLI | `~/.gemini/settings.json` | `$GEMINI_CLI_HOME/.gemini/settings.json` | `BeforeTool`, `^run_shell_command$` |
+| Antigravity CLI(`agy`) | `~/.gemini/antigravity-cli/hooks.json` | (없음 · 공식 전역 경로 고정) | `PreToolUse`, `run_command` (이름 `dorms-check-security-gate`) |
 
-사용자 지정 루트는 절대 경로여야 합니다. status는 각 에이전트의 실제 `configRoot`와 `configRootSource`를 보여 줍니다. 세 설정 모두 `~/.dorms-check/hooks/vercel-guard.cjs`를 호출하며, PATH의 `node` 문자열이 아니라 설치 시 검증한 현재 호스트의 절대 Node 실행 파일을 기록합니다. timeout은 120초입니다. 기존 설정은 보존하고, 바꾸기 전 사본은 `~/.dorms-check/backups/`에 둡니다. 모든 선택 설정을 먼저 파싱한 뒤 쓰므로 뒤쪽 JSON이 손상된 경우 앞쪽 설정만 바뀌지 않습니다. 같은 설치 명령을 다시 실행해도 중복 훅을 만들지 않습니다.
+사용자 지정 루트는 절대 경로여야 합니다. status는 각 에이전트의 실제 `configRoot`와 `configRootSource`를 보여 줍니다. 네 설정 모두 `~/.dorms-check/hooks/vercel-guard.cjs`를 호출하며, PATH의 `node` 문자열이 아니라 설치 시 검증한 현재 호스트의 절대 Node 실행 파일을 기록합니다. timeout은 120초입니다. 기존 설정은 보존하고, 바꾸기 전 사본은 `~/.dorms-check/backups/`에 둡니다. 모든 선택 설정을 먼저 파싱한 뒤 쓰므로 뒤쪽 JSON이 손상된 경우 앞쪽 설정만 바뀌지 않습니다. 같은 설치 명령을 다시 실행해도 중복 훅을 만들지 않습니다.
 
 native Windows에서 `hooks install`은 기본 제공 Windows PowerShell 5.1 `powershell.exe`와 `Get-Command vercel -All -CommandType Application`으로 exact `vercel.cmd`를 찾고 `vercel@59.10.0`인지 확인한 뒤 절대 경로·SHA-256·버전과 PowerShell 경로·해시를 manifest에 고정합니다. 그 실제 CLI는 직접 노출하지 않고 같은 strict gate를 스스로 실행하는 관리형 `~/.dorms-check/hooks/vercel.cmd` proxy를 `windowsVercelExecutable`로 제공합니다. 이 proxy는 Codex의 `PreToolUse`가 호스트 문제로 발화하지 않아도 영수증 검사 없이 backing Vercel CLI를 실행하지 않습니다. status의 `windowsPowerShellSupported`, `windowsVercelExecutableVerified`, `windowsVercelExecutable`, `windowsVercelExecutableSha256`, `windowsVercelBackingExecutable`, `windowsVercelBackingExecutableSha256`, `windowsVercelVersion`, `windowsPowerShellExecutableSha256`를 모두 확인합니다. 명령은 status가 반환한 proxy 경로 철자를 대소문자까지 그대로 복사해야 합니다. PowerShell 7 셸에서도 proxy 호출은 가능하지만 설치와 Codex CMD launcher 검증에는 Windows PowerShell 5.1이 필요합니다.
 
 Windows 업데이트나 npm 재설치로 proxy, backing `vercel.cmd`, PowerShell 해시 중 하나라도 바뀌면 훅과 proxy는 fail-closed로 멈춥니다. `vercel@59.10.0`을 확인한 뒤 훅 설치를 다시 실행해 새 해시를 고정합니다.
 
-Codex는 Windows의 CMD 훅 런처 제약을 피하도록 고정 PowerShell의 quote-free `-EncodedCommand`를 기록하고, Claude는 절대 Node exec form, Gemini는 PowerShell call-operator 형식으로 같은 guard를 호출합니다. 검사 대상 Vercel 명령은 관리형 proxy 경로를 직접 쓴 `& '<exact windowsVercelExecutable>' <literal args>` 단일 형식만 허용합니다. alias, function, `vercel.ps1`, backing 또는 다른 `.cmd`·`.exe`, 변수, splatting, `--%`, backtick, 동적 cmdlet, wrapper, pipe, redirect, 복합 명령은 차단합니다.
+Codex는 Windows의 CMD 훅 런처 제약을 피하도록 고정 PowerShell의 quote-free `-EncodedCommand`를 기록하고, Claude는 절대 Node exec form, Gemini는 PowerShell call-operator 형식으로 같은 guard를 호출합니다. Antigravity는 Windows에서 어느 셸이 훅을 실행하는지 공식 문서가 밝히지 않아 cmd·PowerShell 양쪽에서 같은 뜻인 Codex와 같은 `-EncodedCommand` 런처를 기록합니다. Antigravity 입력은 `toolCall.args.CommandLine`·`Cwd`를 읽고, 판정은 공식 계약대로 stdout JSON `{"decision":"allow"|"deny"}`로 쓰되 차단 시 exit 2도 함께 냅니다. 검사 대상 Vercel 명령은 관리형 proxy 경로를 직접 쓴 `& '<exact windowsVercelExecutable>' <literal args>` 단일 형식만 허용합니다. alias, function, `vercel.ps1`, backing 또는 다른 `.cmd`·`.exe`, 변수, splatting, `--%`, backtick, 동적 cmdlet, wrapper, pipe, redirect, 복합 명령은 차단합니다.
 
 `hooks install`과 `hooks status`는 설정 파일을 쓴 사실만 `configured`로 보고합니다. 현재 실행 중인 호스트가 훅을 로드하고 신뢰했는지는 관찰할 수 없으므로 `activation: unknown`, `ready: false`, 종료 코드 3을 유지합니다. 이것을 PASS로 바꾸어 해석하지 않습니다. `hooks status --json`의 에이전트별 `configRoot`, `configRootSource`와 공통 `nodeExecutable`, `nodeExecutableVerified`, `hostPlatform`, `home`, `isWSL`, `installationScope`, `timeoutSeconds`, `hostTimeoutMayFailOpen`도 확인합니다. 설치 범위는 `current-host-only`입니다. Windows와 WSL은 홈과 프로세스가 다른 별도 호스트이므로 실제 배포에 쓸 쪽마다 설치·확인해야 합니다. 사용하려는 호스트가 덮이지 않으면 READY로 보고하지 않습니다. 호스트 자체가 command hook timeout을 fail-open으로 처리할 가능성은 로컬 훅이 제거할 수 없습니다.
 
@@ -77,7 +78,7 @@ Codex는 Windows의 CMD 훅 런처 제약을 피하도록 고정 PowerShell의 q
 제거:
 
 ```bash
-dcheck hooks uninstall --agents codex,claude,gemini --json
+dcheck hooks uninstall --agents codex,claude,gemini,antigravity --json
 ```
 
 제거 명령은 dorms-check가 추가한 항목만 지웁니다. 다른 훅과 설정은 남깁니다.
@@ -224,4 +225,5 @@ strict 훅은 위의 검증된 staged와 exact promote 두 쓰기만 허용합�
 - [Vercel DNS](https://vercel.com/docs/cli/dns)
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks)
 - [Gemini CLI hooks reference](https://geminicli.com/docs/hooks/reference/)
+- [Antigravity hooks](https://antigravity.google/docs/hooks/)
 - [Codex hooks](https://learn.chatgpt.com/docs/hooks)

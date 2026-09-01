@@ -41,8 +41,8 @@ npx -y github:shinnanchanguk/dorms-check submit      # 다 통과하면 증빙�
 
 ```bash
 npm install --global vercel@59.10.0
-dcheck hooks install --global --agents codex,claude,gemini --provider vercel --security-only
-dcheck hooks status --agents codex,claude,gemini --json
+dcheck hooks install --global --agents codex,claude,gemini,antigravity --provider vercel --security-only
+dcheck hooks status --agents codex,claude,gemini,antigravity --json
 ```
 
 Windows status의 `windowsVercelBackingExecutable`은 `Get-Command`로 검증한 실제 CLI이고, 사용할 `windowsVercelExecutable`은 호스트 훅 미발화에도 영수증을 검사하는 관리형 proxy입니다.

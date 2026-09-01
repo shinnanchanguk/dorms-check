@@ -41,8 +41,8 @@ For a production-blocking gate, pin an exact reviewed Git commit and install the
 
 ```bash
 npm install --global vercel@59.10.0
-dcheck hooks install --global --agents codex,claude,gemini --provider vercel --security-only
-dcheck hooks status --agents codex,claude,gemini --json
+dcheck hooks install --global --agents codex,claude,gemini,antigravity --provider vercel --security-only
+dcheck hooks status --agents codex,claude,gemini,antigravity --json
 ```
 
 On Windows, `windowsVercelBackingExecutable` is the discovered real CLI. Run only the managed `windowsVercelExecutable` proxy, which re-checks the strict gate even if the host hook event does not fire.

@@ -211,8 +211,19 @@ try {
     encoding: 'utf8',
   });
   ok('Codex command_windows CMD-compatible EncodedCommand launches the guard', codexResult.status === 0, codexResult.stderr);
+  const antigravity = JSON.parse(fs.readFileSync(path.join(home, '.gemini', 'antigravity-cli', 'hooks.json'), 'utf8'));
+  const antigravityHandler = antigravity['dorms-check-security-gate'].PreToolUse.find(group => group.matcher === 'run_command').hooks[0];
+  const antigravityLauncher = path.join(home, 'run-antigravity-hook.cmd');
+  fs.writeFileSync(antigravityLauncher, `@echo off\r\n${antigravityHandler.command}\r\n`);
+  const antigravityResult = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', antigravityLauncher], {
+    cwd: root,
+    env: environment,
+    input: JSON.stringify({ toolCall: { name: 'run_command', args: { CommandLine: staged, Cwd: root } } }),
+    encoding: 'utf8',
+  });
+  ok('Antigravity hooks.json EncodedCommand launcher permits the exact staged command with a JSON allow decision', antigravityResult.status === 0 && /"decision":"allow"/.test(antigravityResult.stdout), antigravityResult.stderr);
   const status = hookStatus({ homeDir: home, environment, platform: 'win32' });
-  ok('Windows status validates all three configured handlers and proxy/backing hashes', Object.values(status.agents).every(agent => agent.configured)
+  ok('Windows status validates all four configured handlers and proxy/backing hashes', Object.values(status.agents).every(agent => agent.configured)
     && status.windowsVercelExecutableVerified
     && status.windowsVercelBackingExecutableSha256.length === 64);
   uninstallHooks({ homeDir: home, environment });

@@ -675,7 +675,7 @@ async function run() {
   fs.writeFileSync(path.join(hookHome, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo keep' }] }] } }, null, 2));
   fs.writeFileSync(path.join(hookHome, '.gemini', 'settings.json'), JSON.stringify({ theme: 'fixture' }, null, 2));
   const installed = installHooks({ homeDir: hookHome });
-  ok('all three hook configs are configured but activation remains unknown', Object.values(installed.status.agents).every(agent => agent.configured && agent.activation === 'unknown') && installed.status.ready === false);
+  ok('all four hook configs are configured but activation remains unknown', Object.values(installed.status.agents).every(agent => agent.configured && agent.activation === 'unknown') && installed.status.ready === false);
   ok('status names dashboard/Git/CI enforcement exclusions', installed.status.enforcementBoundary.excludes.length === 3 && installed.status.enforcementBoundary.hostActivationNotObservable === true);
   ok('status reports current-host-only Windows/WSL boundary', installed.status.installationScope === 'current-host-only' && typeof installed.status.hostPlatform === 'string' && typeof installed.status.isWSL === 'boolean');
   ok('status reports 120-second host timeout may fail open', installed.status.timeoutSeconds === 120 && installed.status.hostTimeoutMayFailOpen === true);
@@ -701,6 +701,28 @@ async function run() {
   ok('pre-existing Claude hook is preserved', claudeSettings.hooks.Stop[0].hooks[0].command === 'echo keep');
   const geminiSettings = JSON.parse(fs.readFileSync(path.join(hookHome, '.gemini', 'settings.json'), 'utf8'));
   ok('Gemini uses BeforeTool run_shell_command hook with 120s timeout', geminiSettings.hooks.BeforeTool.some(group => group.matcher === '^run_shell_command$' && group.hooks.some(handler => handler.timeout === 120000)));
+  const antigravityFile = path.join(hookHome, '.gemini', 'antigravity-cli', 'hooks.json');
+  const antigravityHooks = JSON.parse(fs.readFileSync(antigravityFile, 'utf8'));
+  const antigravityEntry = antigravityHooks['dorms-check-security-gate'];
+  ok('Antigravity writes a named hooks.json PreToolUse run_command hook with 120s timeout and a created config dir', antigravityEntry?.enabled === true
+    && antigravityEntry.PreToolUse.some(group => group.matcher === 'run_command'
+      && group.hooks.some(handler => handler.type === 'command' && handler.timeout === 120 && String(handler.command).includes('vercel-guard.cjs'))));
+  const antigravityGuard = path.join(hookHome, '.dorms-check', 'hooks', 'vercel-guard.cjs');
+  const antigravityAllow = runGuardInput(antigravityGuard, process.cwd(), hookHome, {
+    toolCall: { name: 'run_command', args: { CommandLine: 'git status', Cwd: process.cwd(), WaitMsBeforeAsync: 5000 } },
+    stepIdx: 1,
+  });
+  ok('Antigravity-shaped input allows a non-Vercel command with a JSON allow decision', antigravityAllow.status === 0
+    && /"decision":"allow"/.test(antigravityAllow.stdout), antigravityAllow.stderr);
+  const antigravityDeny = runGuardInput(antigravityGuard, process.cwd(), hookHome, {
+    toolCall: { name: 'run_command', args: { CommandLine: 'vercel promote https://dcheck-hook-challenge.invalid', Cwd: process.cwd() } },
+  });
+  ok('Antigravity-shaped input denies an unscanned promote with a JSON deny decision and exit 2', antigravityDeny.status === 2
+    && /"decision":"deny"/.test(antigravityDeny.stdout), antigravityDeny.stdout + antigravityDeny.stderr);
+  const antigravityWrongTool = runGuardInput(antigravityGuard, process.cwd(), hookHome, {
+    toolCall: { name: 'view_file', args: { CommandLine: 'vercel promote https://dcheck-hook-challenge.invalid' } },
+  });
+  ok('Antigravity input with an unexpected tool name is denied fail-closed', antigravityWrongTool.status === 2 && /"decision":"deny"/.test(antigravityWrongTool.stdout));
   const installedAgain = installHooks({ homeDir: hookHome });
   ok('second install is idempotent', Object.values(installedAgain.changes).every(change => change.changed === false));
   ok('config backups were created outside agent config dirs', fs.existsSync(path.join(hookHome, '.dorms-check', 'backups')));
@@ -748,6 +770,26 @@ async function run() {
   ok('tampered Gemini timeout/name is never reported configured', tamperedSchemaStatus.agents.gemini.installed === false && tamperedSchemaStatus.agents.gemini.configured === false);
   installHooks({ agents: 'claude,gemini', homeDir: hookHome });
   ok('reinstall repairs exact Claude and Gemini managed handler schemas', hookStatus({ homeDir: hookHome }).agents.claude.configured && hookStatus({ homeDir: hookHome }).agents.gemini.configured);
+  const tamperedAntigravity = JSON.parse(fs.readFileSync(antigravityFile, 'utf8'));
+  tamperedAntigravity['dorms-check-security-gate'].PreToolUse[0].matcher = 'view_file';
+  fs.writeFileSync(antigravityFile, JSON.stringify(tamperedAntigravity, null, 2));
+  ok('tampered Antigravity matcher is never reported configured', hookStatus({ homeDir: hookHome }).agents.antigravity.configured === false);
+  const disabledAntigravity = JSON.parse(fs.readFileSync(antigravityFile, 'utf8'));
+  disabledAntigravity['dorms-check-security-gate'].PreToolUse[0].matcher = 'run_command';
+  disabledAntigravity['dorms-check-security-gate'].enabled = false;
+  disabledAntigravity['keep-me'] = { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: 'echo keep' }] }] };
+  fs.writeFileSync(antigravityFile, JSON.stringify(disabledAntigravity, null, 2));
+  ok('disabled Antigravity entry is reported disabled and not configured', hookStatus({ homeDir: hookHome }).agents.antigravity.disabled === true && hookStatus({ homeDir: hookHome }).agents.antigravity.configured === false);
+  installHooks({ agents: 'antigravity', homeDir: hookHome });
+  const repairedAntigravity = JSON.parse(fs.readFileSync(antigravityFile, 'utf8'));
+  ok('reinstall repairs Antigravity hooks.json and preserves unrelated named hooks', hookStatus({ homeDir: hookHome }).agents.antigravity.configured === true
+    && repairedAntigravity['keep-me']?.PreToolUse?.[0]?.hooks?.[0]?.command === 'echo keep');
+  uninstallHooks({ agents: 'antigravity', homeDir: hookHome });
+  const uninstalledAntigravity = JSON.parse(fs.readFileSync(antigravityFile, 'utf8'));
+  ok('Antigravity uninstall removes only the managed entry', uninstalledAntigravity['dorms-check-security-gate'] === undefined
+    && uninstalledAntigravity['keep-me']?.PreToolUse?.[0]?.hooks?.[0]?.command === 'echo keep'
+    && hookStatus({ homeDir: hookHome }).agents.antigravity.managedPresent === false);
+  installHooks({ agents: 'antigravity', homeDir: hookHome });
 
   const switchedNodeHome = tempDir('dcheck-hooks-node-switch-');
   installHooks({ homeDir: switchedNodeHome });
@@ -762,6 +804,7 @@ async function run() {
   ok('partial uninstall after a Node switch preserves other configured hooks and shared guard files', switchedUninstall.status.agents.codex.managedPresent === false
     && switchedUninstall.status.agents.claude.configured
     && switchedUninstall.status.agents.gemini.configured
+    && switchedUninstall.status.agents.antigravity.configured
     && fs.existsSync(path.join(switchedNodeHome, '.dorms-check', 'hooks', 'vercel-guard.cjs')));
   const switchedClaudeFile = path.join(switchedNodeHome, '.claude', 'settings.json');
   const switchedClaude = JSON.parse(fs.readFileSync(switchedClaudeFile, 'utf8'));
@@ -772,7 +815,11 @@ async function run() {
     && switchedGeminiUninstall.status.agents.claude.configured === false
     && fs.existsSync(path.join(switchedNodeHome, '.dorms-check', 'hooks', 'vercel-guard.cjs')));
   const switchedClaudeUninstall = uninstallHooks({ agents: 'claude', homeDir: switchedNodeHome, nodeExecutable: alternateNode });
-  ok('shared guard files are removed only after the final managed handler is removed', switchedClaudeUninstall.status.agents.claude.managedPresent === false
+  ok('a remaining Antigravity managed handler still preserves shared guard files', switchedClaudeUninstall.status.agents.claude.managedPresent === false
+    && switchedClaudeUninstall.status.agents.antigravity.configured === true
+    && fs.existsSync(path.join(switchedNodeHome, '.dorms-check', 'hooks', 'vercel-guard.cjs')));
+  const switchedAntigravityUninstall = uninstallHooks({ agents: 'antigravity', homeDir: switchedNodeHome, nodeExecutable: alternateNode });
+  ok('shared guard files are removed only after the final managed handler is removed', switchedAntigravityUninstall.status.agents.antigravity.managedPresent === false
     && !fs.existsSync(path.join(switchedNodeHome, '.dorms-check', 'hooks', 'vercel-guard.cjs')));
 
   const malformedRemainingHome = tempDir('dcheck-hooks-malformed-remaining-');

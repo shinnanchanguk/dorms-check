@@ -10,7 +10,8 @@ import runtime from './strict-runtime.cjs';
 const MANAGED_TAG = 'dorms-check-security-only';
 const CODEX_START = `# >>> ${MANAGED_TAG} >>>`;
 const CODEX_END = `# <<< ${MANAGED_TAG} <<<`;
-const ALL_AGENTS = Object.freeze(['codex', 'claude', 'gemini']);
+const ALL_AGENTS = Object.freeze(['codex', 'claude', 'gemini', 'antigravity']);
+const ANTIGRAVITY_HOOK_NAME = 'dorms-check-security-gate';
 
 function homeDir(options = {}) {
   return runtime.resolveHome(options);
@@ -110,6 +111,12 @@ function agentConfigLocation(agent, base, environment) {
     const override = validatedConfigOverride(environment, 'CLAUDE_CONFIG_DIR');
     const configRoot = override || path.join(base, '.claude');
     return { file: path.join(configRoot, 'settings.json'), configRoot, configRootSource: override ? 'CLAUDE_CONFIG_DIR' : 'home-default' };
+  }
+  if (agent === 'antigravity') {
+    // Antigravity CLI(agy)는 settings.json이 아니라 별도 hooks.json(이름 → 이벤트 맵)을 읽는다.
+    // 공식 문서: 전역 ~/.gemini/antigravity-cli/hooks.json, 작업 공간 .agents/hooks.json.
+    const configRoot = path.join(base, '.gemini', 'antigravity-cli');
+    return { file: path.join(configRoot, 'hooks.json'), configRoot, configRootSource: 'home-default' };
   }
   const override = validatedConfigOverride(environment, 'GEMINI_CLI_HOME');
   const configRoot = override ? path.join(override, '.gemini') : path.join(base, '.gemini');
@@ -498,6 +505,41 @@ function installJsonHook(settings, agent, commands, platform) {
   return settings;
 }
 
+function isManagedAntigravityEntry(name, entry) {
+  if (name === ANTIGRAVITY_HOOK_NAME) return true;
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+  return Object.values(entry).some(groups => Array.isArray(groups)
+    && groups.some(group => Array.isArray(group?.hooks) && group.hooks.some(managedJsonHandlerPresent)));
+}
+
+function removeAntigravityHooks(settings) {
+  for (const [name, entry] of Object.entries(settings)) {
+    if (isManagedAntigravityEntry(name, entry)) delete settings[name];
+  }
+  return settings;
+}
+
+/**
+ * Antigravity CLI hooks.json 형식. 이벤트 PreToolUse, 셸 도구 이름은 run_command.
+ * Windows는 어느 셸이 훅을 실행하는지 공식 문서가 밝히지 않으므로 cmd·PowerShell 양쪽에서
+ * 같은 뜻인 고정 PowerShell EncodedCommand 런처(Codex Windows와 동일)를 기록한다.
+ */
+function installAntigravityHook(settings, commands, platform) {
+  removeAntigravityHooks(settings);
+  settings[ANTIGRAVITY_HOOK_NAME] = {
+    enabled: true,
+    PreToolUse: [{
+      matcher: 'run_command',
+      hooks: [{
+        type: 'command',
+        command: platform === 'win32' ? commands.codexWindows : commands.posix,
+        timeout: 120,
+      }],
+    }],
+  };
+  return settings;
+}
+
 function serializeJson(value) {
   return JSON.stringify(value, null, 2) + '\n';
 }
@@ -549,6 +591,15 @@ function prepareConfigChanges(selected, base, commands, action, environment, pla
         ? installCodexConfig(before, commands)
         : removeCodexBlock(before).replace(/\n{3,}/g, '\n\n');
       validateCodexToml(after, file);
+    } else if (agent === 'antigravity') {
+      if (action === 'install' || before) {
+        // agy가 아직 실행된 적 없으면 ~/.gemini/antigravity-cli 가 없을 수 있다. 훅 파일만 두는 디렉터리라 만들어도 안전하다.
+        if (action === 'install') fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+        const settings = readJson(file);
+        if (action === 'install') installAntigravityHook(settings, commands, platform);
+        else removeAntigravityHooks(settings);
+        after = serializeJson(settings);
+      }
     } else if (action === 'install' || before) {
       const settings = readJson(file);
       if (action === 'install') installJsonHook(settings, agent, commands, platform);
@@ -701,6 +752,31 @@ function jsonManagedStatus(settings, agent, event, matcher, expectedGuardPath, e
     }
   }
   return { managedPresent, installed: false, valid: false, error: managedPresent ? `${agent} 관리 훅 스키마가 정확하지 않습니다.` : '' };
+}
+
+function antigravityManagedStatus(settings, expectedGuardPath, expectedNodeExecutable, platform, expectedPowerShellExecutable = '') {
+  const managedPresent = Object.entries(settings).some(([name, entry]) => isManagedAntigravityEntry(name, entry));
+  for (const [name, entry] of Object.entries(settings)) {
+    if (!isManagedAntigravityEntry(name, entry)) continue;
+    const groups = Array.isArray(entry?.PreToolUse) ? entry.PreToolUse : [];
+    for (const group of groups) {
+      if (group?.matcher !== 'run_command' || !Array.isArray(group.hooks)) continue;
+      for (const handler of group.hooks) {
+        if (!managedJsonHandlerPresent(handler)) continue;
+        const command = platform === 'win32'
+          ? validateCodexWindowsCommand(handler.command, expectedGuardPath, expectedNodeExecutable, expectedPowerShellExecutable)
+          : validateManagedCommand(handler.command, expectedGuardPath, expectedNodeExecutable, 'posix');
+        const installed = command.valid
+          && name === ANTIGRAVITY_HOOK_NAME
+          && entry.enabled !== false
+          && handler.type === 'command'
+          && handler.timeout === 120;
+        if (installed) return { managedPresent: true, installed: true, ...command };
+        return { managedPresent: true, installed: false, ...command, error: command.error || 'Antigravity 관리 훅 스키마가 정확하지 않습니다.' };
+      }
+    }
+  }
+  return { managedPresent, installed: false, valid: false, error: managedPresent ? 'Antigravity 관리 훅 스키마가 정확하지 않습니다.' : '' };
 }
 
 function sourceStatus(base, options = {}) {
@@ -868,6 +944,43 @@ export function hookStatus(options = {}) {
         managedCommandError: managed.error || '',
         hostActivationNotObservable: true,
       };
+    } else if (agent === 'antigravity') {
+      const config = statusConfigText(file);
+      const text = config.text;
+      let settings = {};
+      let parseError = config.error || guardPathError;
+      if (!parseError && text) {
+        try {
+          settings = JSON.parse(text);
+          if (!settings || Array.isArray(settings) || typeof settings !== 'object') throw new Error('root must be an object');
+        } catch (error) { parseError = `${file} JSON을 읽지 못했습니다: ${error.message}`; }
+      }
+      const managed = parseError
+        ? { managedPresent: config.present || managedTextPresent(text), installed: false, valid: false, error: parseError }
+        : antigravityManagedStatus(
+            settings,
+            expectedGuardPath,
+            source.nodeExecutable,
+            platform,
+            platform === 'win32' ? source.windowsVercelExecutable?.powerShellPath || '' : '',
+          );
+      const disabled = settings?.[ANTIGRAVITY_HOOK_NAME]?.enabled === false;
+      const configured = managed.installed && managed.valid && source.valid && !disabled;
+      agents[agent] = {
+        file,
+        configRoot,
+        configRootSource,
+        managedPresent: managed.managedPresent,
+        installed: managed.installed,
+        configured,
+        activation: configured ? 'unknown' : 'not-configured',
+        disabled,
+        parseError,
+        managedNodeExecutable: managed.nodeExecutable || '',
+        managedNodeExecutableVerified: Boolean(managed.valid),
+        managedCommandError: managed.error || '',
+        hostActivationNotObservable: true,
+      };
     } else {
       const config = statusConfigText(file);
       const text = config.text;
@@ -947,7 +1060,7 @@ export function hookStatus(options = {}) {
       windowsVercelExecutableError: source.windowsVercelExecutableError,
     },
     enforcementBoundary: {
-      covers: ['Codex/Claude/Gemini shell-tool Vercel CLI commands'],
+      covers: ['Codex/Claude/Gemini/Antigravity shell-tool Vercel CLI commands'],
       excludes: ['Vercel dashboard actions', 'Git-push automatic production deployments', 'external CI and other users'],
       hostActivationNotObservable: true,
       timeoutSeconds: 120,
@@ -1024,4 +1137,4 @@ export function uninstallHooks({ agents, homeDir: requestedHome, environment: re
   return { action: 'uninstall', agents: selected, changes, status: hookStatus({ homeDir: base, environment }) };
 }
 
-export { ALL_AGENTS };
+export { ALL_AGENTS, ANTIGRAVITY_HOOK_NAME };
