@@ -116,7 +116,7 @@ function inspectedDeploymentBinding(inspected) {
   };
 }
 
-export function inspectVercelDeployment({ cwd, deployment, url, gitSha }, options = {}) {
+export function inspectVercelDeployment({ cwd, deployment, url, gitSha, requireCanonicalGitSource = false }, options = {}) {
   const reference = String(deployment || '').trim();
   if (!reference) {
     return { ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: 'Vercel 배포 URL 또는 ID가 필요합니다.' };
@@ -222,8 +222,18 @@ export function inspectVercelDeployment({ cwd, deployment, url, gitSha }, option
   if (binding.githubCommitShas.some(value => value !== gitSha)) {
     return { ok: false, exitCode: STRICT_EXIT.BINDING_MISMATCH, reason: 'Vercel 배포의 githubCommitSha metadata가 현재 HEAD와 다릅니다.' };
   }
-  if (!binding.gitSourceShas.length) {
-    return { ok: false, exitCode: STRICT_EXIT.INCOMPLETE, reason: 'Vercel deployment GET 정보에 canonical gitSource.sha가 없습니다.' };
+  // canonical gitSource.sha 는 Git 연동이 만든 배포에만 붙는다. 교사가 자기 앱을
+  // `vercel --prod --skip-domain` 으로 직접 올리는 연수 경로에서는 이 필드가 비어 있는
+  // 것이 정상이고, 화면에 보이는 Source 표시는 meta.githubCommitSha 다. 그래서 이
+  // 필드가 없다고 검사를 세우면 그 경로는 원리적으로 통과할 수 없다(실측: 연수자가
+  // 여기서 막혔다). 이 도구의 목적은 배포하는 본인이 공개 전에 스스로 점검하는 것이지
+  // 배포자를 못 믿는 것이 아니므로, 없으면 막지 않고 결속 근거의 등급을 낮춰 기록한다.
+  // 있으면 종전대로 정확히 대조하고, 값이 어긋나면 그대로 실패한다.
+  // 배포자를 신뢰할 수 없는 자리(대리 검증·제3자 감사)에서는
+  // requireCanonicalGitSource 로 예전 동작을 그대로 켤 수 있다.
+  const gitBinding = binding.gitSourceShas.length ? 'canonical' : 'declared';
+  if (requireCanonicalGitSource && gitBinding !== 'canonical') {
+    return { ok: false, exitCode: STRICT_EXIT.INCOMPLETE, reason: 'Vercel deployment GET 정보에 canonical gitSource.sha가 없습니다. Git 연동으로 만든 배포만 검사하도록 요청했습니다.' };
   }
   if ([...binding.gitSourceShas, ...binding.additionalSourceGitShas].some(value => value !== gitSha)) {
     return { ok: false, exitCode: STRICT_EXIT.BINDING_MISMATCH, reason: 'Vercel 배포의 Git source SHA가 현재 HEAD와 다릅니다.' };
@@ -248,5 +258,6 @@ export function inspectVercelDeployment({ cwd, deployment, url, gitSha }, option
     projectName: linked.projectName || binding.projectNames[0] || '',
     target: 'production',
     readyState: 'READY',
+    gitBinding,
   };
 }

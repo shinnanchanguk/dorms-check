@@ -315,7 +315,17 @@ async function run() {
   const inspectMissingGitSource = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, {
     execFileSync: inspectFixture({ gitSource: undefined, gitMetadata: { commitSha: inspectSha } }),
   });
-  ok('gitMetadata cannot substitute for required canonical gitSource.sha', !inspectMissingGitSource.ok && inspectMissingGitSource.exitCode === STRICT_EXIT.INCOMPLETE);
+  ok('CLI deploy without canonical gitSource still binds, recorded as declared evidence', inspectMissingGitSource.ok && inspectMissingGitSource.gitBinding === 'declared');
+  const inspectCanonicalGrade = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, { execFileSync: inspectFixture() });
+  ok('Git-integration deploy is graded as canonical evidence', inspectCanonicalGrade.ok && inspectCanonicalGrade.gitBinding === 'canonical');
+  const inspectRequireCanonical = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha, requireCanonicalGitSource: true }, {
+    execFileSync: inspectFixture({ gitSource: undefined, gitMetadata: { commitSha: inspectSha } }),
+  });
+  ok('requireCanonicalGitSource restores the strict canonical-only gate', !inspectRequireCanonical.ok && inspectRequireCanonical.exitCode === STRICT_EXIT.INCOMPLETE);
+  const inspectDeclaredWrongSha = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, {
+    execFileSync: inspectFixture({ gitSource: undefined, gitMetadata: { commitSha: 'b'.repeat(40) } }),
+  });
+  ok('declared Git evidence from another commit still fails closed -> exit 4', !inspectDeclaredWrongSha.ok && inspectDeclaredWrongSha.exitCode === STRICT_EXIT.BINDING_MISMATCH);
   const inspectWrongSha = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, { execFileSync: inspectFixture({ meta: { githubDeployment: '1', githubCommitSha: 'b'.repeat(40) } }) });
   ok('Vercel deployment from another Git SHA -> exit 4', !inspectWrongSha.ok && inspectWrongSha.exitCode === STRICT_EXIT.BINDING_MISMATCH);
   const inspectConflictingSourceSha = inspectVercelDeployment({ cwd: inspectRoot, deployment: 'dpl_fixture123', url: 'https://strict-fixture.vercel.app/', gitSha: inspectSha }, { execFileSync: inspectFixture({ gitSource: { type: 'github', sha: 'b'.repeat(40) } }) });

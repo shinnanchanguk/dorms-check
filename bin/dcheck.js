@@ -68,6 +68,7 @@ function help() {
   ${color.bold('dcheck scan')}  ${color.dim('--track security --strict --json --code-only --git-sha <SHA>')}   배포 전 코드 보안 게이트
   ${color.bold('dcheck scan')}  ${color.dim('--track security --strict --json --url <격리 URL> --git-sha <SHA> --vercel-deployment <같은 URL>')}   격리 배포 실측 게이트
   ${color.bold('dcheck gate verify')} ${color.dim('--git-sha <SHA> --vercel-deployment <URL> [--json]')}   현재 소스·배포와 strict 영수증 일치 확인
+  ${color.dim('  live 게이트에 --require-canonical-git-source 를 붙이면 Git 연동이 만든 배포만 통과시켜요(대리 검증·제3자 감사용).')}
   ${color.bold('dcheck hooks install')} ${color.dim('--global --agents codex,claude,gemini,antigravity --provider vercel --security-only')}   전역 배포 차단 훅 설치
   ${color.bold('dcheck hooks status|uninstall')} ${color.dim('[--agents ...] [--json]')}   훅 상태 확인·안전 제거
   ${color.bold('dcheck judge --in <answers.json>')}   교사 AI가 판단한 ai-review 항목 병합(증거 필수)
@@ -145,6 +146,7 @@ async function runScan() {
   let project = null;
   let deploymentId = '';
   let deploymentGitSha = '';
+  let gitBinding = '';
   let vercelProjectId = '';
   let vercelOrgId = '';
 
@@ -201,10 +203,20 @@ async function runScan() {
         }
         deploymentId = normalizedDeployment;
       }
-      const deploymentBinding = inspectVercelDeployment({ cwd: root, deployment: deploymentId, url: normalizedUrl, gitSha: project.gitSha });
+      const deploymentBinding = inspectVercelDeployment({
+        cwd: root,
+        deployment: deploymentId,
+        url: normalizedUrl,
+        gitSha: project.gitSha,
+        requireCanonicalGitSource: flag('require-canonical-git-source'),
+      });
       if (!deploymentBinding.ok) {
         fail(deploymentBinding.exitCode, deploymentBinding.reason);
         return;
+      }
+      gitBinding = deploymentBinding.gitBinding || 'declared';
+      if (gitBinding !== 'canonical' && !json) {
+        log.warn('이 배포에는 Git 연동이 붙인 소스 표식이 없어, 배포에 함께 넣은 커밋 값과 현재 HEAD 가 같은지로 확인했습니다. 검사 자체는 그대로 진행됩니다.');
       }
       deploymentId = deploymentBinding.id;
       deploymentGitSha = deploymentBinding.gitSha;
@@ -355,13 +367,21 @@ async function runScan() {
         sourceGitSha: deploymentGitSha,
         projectId: vercelProjectId,
         orgId: vercelOrgId,
+        // canonical: Git 연동이 배포에 직접 붙인 소스 SHA 로 확인함
+        // declared: 배포에 함께 넣은 커밋 값과 현재 HEAD 가 같은지로 확인함
+        gitBinding,
       } : null,
       strict: strictResult,
       results,
       receipt: stored ? { trustedFile: stored.trustedFile, expiresAt: stored.receipt.expiresAt } : null,
     };
     if (json) console.log(JSON.stringify(output, null, 2));
-    else if (strictResult.status === 'PASS') log.ok(`${phase} strict 보안 게이트 PASS`);
+    else if (strictResult.status === 'PASS') {
+      const bindingNote = phase === 'live' && gitBinding && gitBinding !== 'canonical'
+        ? ' (배포 소스 확인: 배포에 넣은 커밋 값 대조)'
+        : '';
+      log.ok(`${phase} strict 보안 게이트 PASS${bindingNote}`);
+    }
     else log.err(`${phase} strict 보안 게이트 ${strictResult.status}: ${[...strictResult.blockers, ...strictResult.incomplete].join(', ')}`);
     return;
   }
