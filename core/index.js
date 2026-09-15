@@ -6,8 +6,10 @@
 // 스킬(CLI)이 만든 report.json 은 참고이고 발급 근거가 아니다.
 import { runExternalScan } from '../checks/external/index.js';
 import { runRuntimeProbe } from '../checks/runtime/index.js';
+import { normalizeSecurityItems } from './minimum-policy.js';
 
 export { runExternalScan, runRuntimeProbe };
+export { evaluateMinimumSecurity, normalizeSecurityItems, classifySensitiveExposure, MINIMUM_SECURITY_POLICY_VERSION } from './minimum-policy.js';
 // 서버(도름스)가 마크 게이트에 쓰는 같은 채점·카탈로그(로직 표류 방지).
 export { scoreSecurity, scoreEdzip } from './score.js';
 export { catalogItem, allItems, trackItems, SEVERITY_RANK } from '../catalog/index.js';
@@ -15,11 +17,12 @@ export { catalogItem, allItems, trackItems, SEVERITY_RANK } from '../catalog/ind
 // 서버 권위 검증: 외부 표면 + 능동 런타임 프로브를 한 번에 실행해 결정적 관측값을 반환.
 // 반환 items 의 id 는 CLI 코치와 동일 네임스페이스(로직 표류 방지).
 export async function runServerVerification(url, opts = {}) {
-  const external = await runExternalScan(url, opts);
+  const options = { ...opts, deadlineAt: opts.deadlineAt ?? Date.now() + (opts.totalTimeout || 45000) };
+  const external = await runExternalScan(url, options);
   if (!external.reachable) {
     return { reachable: false, error: external.error, items: external.items, raw: external.raw };
   }
-  const runtime = await runRuntimeProbe(url, opts);
+  const runtime = await runRuntimeProbe(url, options);
   return {
     reachable: true,
     items: [...external.items, ...runtime.items],
@@ -35,7 +38,7 @@ export async function runServerVerification(url, opts = {}) {
 export function findMismatches(claimedItems, observedItems) {
   const claimed = new Map((claimedItems || []).map(i => [i.id, i.status]));
   const out = [];
-  for (const obs of observedItems || []) {
+  for (const obs of normalizeSecurityItems(observedItems)) {
     const c = claimed.get(obs.id);
     if (c && c === 'pass' && obs.status === 'fail') {
       out.push({ id: obs.id, claimed: c, observed: obs.status, detail: obs.observed });

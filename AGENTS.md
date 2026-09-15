@@ -1,46 +1,33 @@
-# dorms-check — 어떤 AI 코딩 도구든 이 안내를 따르세요
+# dorms-check AI 사용 안내
 
-이 파일은 Cursor·GitHub Copilot·Codex·Gemini·Cline·Windsurf 등 **어떤 AI 코딩 어시스턴트**가 읽어도 되는 크로스에이전트 안내입니다. (Claude 전용 안내는 `SKILL.md`에, 사람이 복붙할 프롬프트는 `USE-WITH-AI.md`에 있습니다. 내용은 같습니다.)
+Claude·Codex·Gemini·Cursor 등에서 같은 점검 흐름을 사용합니다. 기본 역할은 교사 앱의 최소 점검입니다.
 
-dorms-check 는 Node CLI이며 Claude·Codex·Gemini·Cursor 등 어떤 AI 코딩 도구에서도 사용할 수 있습니다. HWPX·PDF 생성 엔진과 공식 양식·출처 자산이 설치 패키지에 함께 듭니다.
+## 기본 흐름
 
-세 축(트랙)이 있습니다.
-- `security` 보안 점검: 헤더·SSL·노출·CORS·RLS 실측.
-- `edzip` 에듀집 제출·통과 준비와 승인 뒤 학교 서류: 필수기준 + 개인정보처리방침 + 내부 기안·학운위 안건.
-- `protection` 내 앱 비법·저작권 보호: 권리 확인·서버 분리·배포 위생·고지·증거.
+1. 사용자가 운영하는 앱 폴더에서 `npx -y github:shinnanchanguk/dorms-check#v0.3.0 detect`로 프로젝트 구성을 확인합니다.
+2. `init --name "<앱>" --url "<공개 주소>" --track security --confirm-ownership`으로 점검 설정을 만듭니다. 기존 설정은 임의로 덮어쓰지 않습니다.
+3. `scan --url "<공개 주소>"`를 실행하고 `status`와 `report`로 결과를 읽습니다. 위 `npx` 명령 뒤에 각 명령을 붙여 같은 버전을 사용하세요.
+4. 확인한 문제, 개선 권고, 미확인을 구분해 설명합니다. 사용자가 요청한 코드 보완이나 추가 근거가 있을 때 재검사합니다. 모든 항목을 통과시키는 반복 작업을 요구하지 않습니다.
+5. 원하면 `submit`으로 보관용 증빙팩을 만듭니다. 도름스 서버가 공개 주소를 직접 검사하므로 파일 제출만으로 마크가 발급되지는 않습니다.
 
-## 먼저 사용자에게 전할 것 (정직한 한계)
-- security 스캔은 앱을 고치지 않습니다. edzip 서류 생성과 protection 적용은 사용자가 승인한 계획 해시에서만 파일을 바꾸며, 인증은 발급하지 않습니다.
-- **protection 의 적용 단계만 파일을 바꿉니다.** 그것도 사용자가 승인한 계획 해시(`--plan-sha256`)와 `--confirm-apply` 플래그가 있을 때만이며, 자동 배포는 하지 않습니다.
-- 최종 인증마크는 도름스 서버가 스스로 다시 검증해 발급합니다. 이 도구의 통과는 신청 준비일 뿐입니다.
-- "보장·통과 약속·완전 보호"를 쓰지 마세요. 난독화·Base64 는 비밀이 아니고, 브라우저로 전달된 것은 공개로 가정합니다. 판정은 실제로 실행한 검사 결과만 신뢰하세요("대충 통과" 금지).
+## 점검의 범위
 
-> 설치 불필요: **깃허브 소스에서 바로 실행**합니다(Node 18+): `npx -y github:shinnanchanguk/dorms-check`.
-> 이 도구는 npm 레지스트리에 올리지 않습니다(올린 판은 손볼 때마다 다시 올려야 해서 금방 옛것이 됩니다). 위 깃허브 주소로 실행하면 항상 저장소 최신 판이 돕니다. `dorms-check@latest` 같은 npm 이름은 받아지지 않으니 쓰지 마세요.
+보안 최소 점검은 공개 HTTPS 정상 응답과 본문을 실제 검사하고 분명한 위험이 발견되지 않았는지 확인합니다. 로그인 화면과 한 장짜리 앱도 같은 기준입니다. 내부 DB·권한 설정·방침을 읽지 못하면 미확인으로 남깁니다. 앱 등록은 점검 마크와 별개입니다.
 
-## 절차
-1. `npx -y github:shinnanchanguk/dorms-check detect`
-2. `npx -y github:shinnanchanguk/dorms-check init --name "<앱>" --url "<배포주소>" --track security,edzip,protection --confirm-ownership`
-3. `npx -y github:shinnanchanguk/dorms-check scan --url "<배포주소>"` — **먼저 파일을 바꾸지 말고 스캔부터.**
-4. 에듀집 서류가 필요하면 `edzip prepare`로 계획과 5가지 비개인정보 질문을 받고, 계획 승인 후 `edzip prepare --apply --plan-sha256 <값> --confirm-apply --answers <JSON>`를 실행하세요. 에듀집 확인 완료 뒤에는 `edzip council --approved-url <공식 주소> --confirm-apply`로 내부 기안문과 학운위 안건문을 만드세요. 자세한 진행은 `skills/edzip-autopilot/SKILL.md`입니다.
-4. protection 트랙이면 `interview` 로 문항을 받아 사용자에게 **쉬운 선택지로 1~3문항씩** 묻고(권리자·학교 관여·기존 라이선스·AI 기여·제3자 자산·허용 범위), 답을 모아 `interview --answers <파일>` 로 권리 프로필을 만드세요. 프로필에 비밀 원문·민감 파일명을 넣지 마세요.
-5. 스캔이 "AI가 판단해야 할 항목"을 알려주면, 코드/개인정보처리방침을 직접 읽고 판정해 `judge --in answers.json` 으로 **증거(파일:라인)와 함께** 기록하세요. 증거 없는 pass 는 CLI 가 거부합니다. 보호 트랙의 결정적 항목은 judge 로 덮을 수 없습니다(스캔이 우선).
-6. protection 적용은 `protect plan` 으로 계획(서버 이전 후보·바꿀 파일·위험·복원 방법)을 사용자에게 보여주고 **동의를 받은 뒤에만** `protect apply --plan-sha256 <계획해시> --confirm-apply`. 적용 후 `verify`, 문제 시 `protect restore`. 재배포는 사용자가 따로 승인할 때만.
-7. `npx -y github:shinnanchanguk/dorms-check status` 로 남은 항목과 수정 프롬프트를 보고, 사용자 동의 하에 사용자 앱 코드를 고치세요(이 도구는 관여하지 않음). 고친 뒤 재배포하고 3~7 반복.
-8. 설정한 트랙이 모두 통과하면 `npx -y github:shinnanchanguk/dorms-check submit` 으로 증빙팩을 만들고 도름스 마크 신청을 안내하세요(protection 포함 시 v2 페이로드로 시크릿·개인 경로가 자동 마스킹됩니다).
-9. 학운위 마크가 "개인정보처리방침 필수 항목이 확인되지 않는다"로 막히면: 도름스는 앱 주소를 바깥에서 열어 방침 글자를 읽습니다. 방침을 별도 주소 없이 앱 안 팝업으로만 띄우는 한 장짜리 앱(React·Vite 등)은 바깥에서 빈 껍데기만 보여 못 읽힐 수 있어요(이 도구는 소스를 읽으니 "이상 없음"으로 갈립니다). ① 방침을 `/privacy` 같은 주소로도 열리게 두거나(권장) ② `submit` 이 만든 `.dorms-check/evidence/report.json` 을 신청 화면의 "dorms-check 결과 올리기"에 올리도록 안내하세요.
+헤더 누락, 공개 데이터 접근, CORS 설정만으로 위험을 단정하지 마세요. 확인이 어렵다는 이유로 호스팅 이전이나 특정 HTML 파일 작성을 강요하지 않습니다. 학운위 서류 준비는 방침 내용으로 별도 확인하고, 확인하지 못하면 그 표시만 보류합니다. 에듀집 공식 확인 표시는 공식 근거가 필요합니다.
 
-## 규칙
-- 본인이 만들고 운영하는 앱만 검사(비파괴 GET·SELECT만).
-- 파일 변경은 edzip·protection의 명시적 적용 단계뿐이며, 승인한 계획 해시 + `--confirm-apply` 없이는 절대 하지 않습니다. 자동 제출·배포 금지.
-- 사용자 노출 설명은 비개발자가 이해하는 쉬운 말로.
+검사에서 찾은 비밀 값은 사용자 안내나 외부 서비스에 복사하지 마세요. 근거 없이 미확인을 통과로 바꾸거나 `judge`로 실제 위험을 덮지 않습니다.
 
-## 사용자가 Vercel strict 배포 게이트를 명시적으로 요청한 경우
+## 파일과 권한
 
-`docs/STRICT-SECURITY-GATE.ko.md`를 끝까지 읽고 그 순서만 따르세요. 움직이는 기본 브랜치 대신 검토 완료 커밋 SHA를 고정합니다. 운영체제와 셸을 스스로 감지하고, Git SHA와 Vercel stdout URL을 직접 캡처하며, 사용자에게 터미널 명령을 옮겨 적게 하지 마세요. 사람이 해야 하는 동작은 Vercel 로그인, Codex 훅 신뢰, 모르는 dirty 파일 확인처럼 계정 또는 신뢰 경계를 넘는 것뿐입니다.
+`detect/status/report`는 읽기 명령입니다. `init`은 설정 파일을, `scan`은 `.dorms-check/`의 결과·보고서·이력을 저장합니다. 답변·계획·증빙팩도 해당 명령이 안내한 로컬 파일로 저장합니다. 기본 점검은 앱 소스나 전역 에이전트 설정을 바꾸지 않습니다.
 
-`judge`로 결정적 보안 결과를 덮지 마세요. 종료 코드 1은 확인된 결함, 2부터 5는 설정 오류, 미완료, 바인딩 불일치, 영수증 오류입니다. 어느 것도 임의로 PASS로 바꾸지 않습니다. `vercel@59.10.0`을 훅 설치 전에 고정하며 다른 버전은 사용하지 않습니다. macOS/Linux/WSL staged production은 현재 Git 루트에서 literal `vercel [deploy] --prod --skip-domain --meta githubDeployment=1 --meta githubCommitSha=<full HEAD>` 단일 명령만 씁니다. native Windows PowerShell은 `hooks status --json`의 검증된 `windowsVercelExecutable` 절대 경로를 직접 넣은 `& '<exact vercel.cmd>' [deploy] --prod ...` 단일 명령만 씁니다. `vc` 축약, 다른 `.cmd`·`.exe`, wrapper, 변수, 스크립트, 복합 명령, override 옵션은 쓰지 않습니다. 선택적 `deploy`는 첫 subcommand로 한 번만 쓸 수 있습니다. promote도 exact URL/ID를 직접 넣은 단일 명령만 씁니다. 훅은 command substitution, caret/backtick, runtime·package·task launcher도 보수적으로 차단합니다. 이 두 쓰기 외 모든 Vercel 변경은 차단하고 명시적 list/inspect/status/get/help/version/whoami 조회만 허용합니다. code 검사 뒤 `.vercel/project.json`, Git에 묶인 배포 입력, 허용된 legacy `.dorms-check` 상태를 바꾸지 마세요. Vercel project/org/team ambient 값은 링크와 정확히 같아야 하고 token/scope/config override는 제거해야 합니다. 훅 `configured`를 활성화 완료로 부르지 말고, 사용자 지정 config root와 절대 Node 경로를 확인한 뒤에도 재시작·신뢰·안전한 차단 challenge 전에는 `activation: unknown`과 NOT READY를 보고하세요.
+전역 훅과 배포 차단 기능은 제거됐습니다. 예전 명령이 실패하면 임의로 일반 검사로 바꾸지 말고 제거 사실을 설명합니다. 기존 훅 정리가 필요할 때만 [정리 안내](./docs/LEGACY-HOOK-CLEANUP.ko.md)를 따릅니다.
 
-비대화형 canonical staged에는 `--yes`를 붙입니다. native Windows에서는 훅 설치가 `Get-Command vercel -All -CommandType Application`으로 찾은 exact `vercel.cmd`, 해시, 버전, PowerShell 실행 파일을 고정합니다. Vercel 명령에 변수나 명령 치환을 넣지 말고 status에 보인 절대 경로와 실제 SHA·URL을 literal로 넣으세요.
+## 선택 기능
 
-자세한 내용: `README.ko.md` · `DISCLAIMER.md`
+에듀집 서류가 필요하면 [edzip-autopilot](./skills/edzip-autopilot/SKILL.md)을 읽습니다. 계획과 개인정보가 아닌 질문을 확인하고, 승인한 계획 해시와 `--confirm-apply`로 제출 서류를 만듭니다. 확인 완료 뒤 `edzip council`로 내부 기안문과 학운위 안건문을 준비합니다. 서류 생성은 외부 제출이나 공식 확인을 대신하지 않습니다.
+
+앱 보호를 요청하면 `interview`로 권리와 이용 범위를 쉬운 질문 1~3개씩 확인합니다. 비밀 원문과 민감한 개인 정보는 답변에 넣지 않습니다. `protect plan`을 보여주고 승인한 계획 해시와 `--confirm-apply`로 적용합니다. 이후 `verify`로 확인하고 문제가 있으면 `protect restore`를 사용합니다.
+
+자세한 설명은 [README.ko.md](./README.ko.md), 사용자용 프롬프트는 [USE-WITH-AI.md](./USE-WITH-AI.md)에 있습니다.

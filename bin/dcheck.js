@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// dorms-check CLI — 교사의 AI(코치)가 부르는 오케스트레이터.
+// dorms-check CLI, 교사의 AI(코치)가 부르는 오케스트레이터.
 // 이 도구는 앱을 고치지도, 인증을 발급하지도 않는다. 평가·안내·증빙만.
 import path from 'node:path';
 import readline from 'node:readline';
@@ -21,22 +21,7 @@ import { runProtectSteps, runProtectVerify, resolveBuildDir, saveProtectState, l
 import { restoreBackup, latestBackup } from '../core/util.js';
 import { verifyBuild } from '../protect/verify-static.js';
 import { applyEdzipPlan, buildEdzipPlan, prepareCouncilDocuments, writeEdzipPlan } from '../core/edzip-autopilot.js';
-import {
-  STRICT_EXIT,
-  STRICT_GATE_SCHEMA,
-  STRICT_RUNTIME_DIGEST,
-  SUPPORTED_VERCEL_CLI_VERSION,
-  createReceipt,
-  evaluateStrictSecurity,
-  invalidateReceipt,
-  inspectVercelDeployment,
-  normalizeDeploymentUrl,
-  projectIdentity,
-  storeReceipt,
-  verifyCodeGate,
-  verifyGate,
-} from '../core/strict.js';
-import { ALL_AGENTS, hookStatus, installHooks, uninstallHooks } from '../core/hooks.js';
+import { ALL_AGENTS, hookStatus, uninstallHooks } from '../core/hooks.js';
 
 const root = process.cwd();
 const [, , cmd, ...args] = process.argv;
@@ -48,57 +33,37 @@ const STATE_DIR = path.join(root, '.dorms-check');
 const REVIEW = path.join(STATE_DIR, 'review.json');
 
 function honesty() {
-  log.plain(color.dim('  이 도구는 앱을 고치지도, 인증을 발급하지도 않습니다. 고치도록 돕는 코치입니다.'));
-  log.plain(color.dim('  최종 마크는 도름스 서버가 스스로 다시 검증해 발급하며, 이 도구의 통과가 마크를 보장하지 않습니다.'));
+  log.plain(color.dim('  보안 점검은 공개 응답과 확인 가능한 코드를 살펴보는 최소 점검입니다.'));
+  log.plain(color.dim('  확인하지 못한 항목은 미확인으로 남깁니다. 전체 안전을 보장하거나 앱 등록을 막지 않습니다.'));
+  log.plain(color.dim('  도름스 마크는 서버가 공개 주소를 다시 검사해 발급합니다.'));
 }
 
 function help() {
-  log.title('dorms-check ' + color.dim('교사 앱 점검 코치 (보안 · 에듀집 · 내 앱 보호)'));
-  log.plain(color.dim('  Team DoRm · 교사 홍창욱 제작 · https://dorms.school'));
-  log.plain(`
-  세 축(트랙):
-  ${color.bold('security')}    보안 점검 (헤더·SSL·노출·CORS·RLS 실측)
-  ${color.bold('edzip')}       에듀집 제출·통과 준비와 승인 뒤 학교 서류 작성
-  ${color.bold('protection')}  내 앱 비법·저작권 보호 (권리 확인·서버 분리·고지·증거)
-
-  ${color.bold('dcheck detect')}                 스택 감지(Next.js/Vite/정적, Supabase 여부, 빌드 산출물)
-  ${color.bold('dcheck init')}  ${color.dim('--name --url --track security,edzip,protection --stack')}   설정 생성
-  ${color.dim('  터미널에서 --track 없이 실행하면 세 축 중 원하는 것만 골라 물어봐요(보안 마크만 원하면 보안만).')}
-  ${color.bold('dcheck scan')}  ${color.dim('--url <URL> [--code-only]')}   결정적 스캔(외부 표면+RLS 실측+정적+보호 상태) + 리포트
-  ${color.bold('dcheck scan')}  ${color.dim('--track security --strict --json --code-only --git-sha <SHA>')}   배포 전 코드 보안 게이트
-  ${color.bold('dcheck scan')}  ${color.dim('--track security --strict --json --url <격리 URL> --git-sha <SHA> --vercel-deployment <같은 URL>')}   격리 배포 실측 게이트
-  ${color.bold('dcheck gate verify')} ${color.dim('--git-sha <SHA> --vercel-deployment <URL> [--json]')}   현재 소스·배포와 strict 영수증 일치 확인
-  ${color.dim('  live 게이트에 --require-canonical-git-source 를 붙이면 Git 연동이 만든 배포만 통과시켜요(대리 검증·제3자 감사용).')}
-  ${color.bold('dcheck hooks install')} ${color.dim('--global --agents codex,claude,gemini,antigravity --provider vercel --security-only')}   전역 배포 차단 훅 설치
-  ${color.bold('dcheck hooks status|uninstall')} ${color.dim('[--agents ...] [--json]')}   훅 상태 확인·안전 제거
-  ${color.bold('dcheck judge --in <answers.json>')}   교사 AI가 판단한 ai-review 항목 병합(증거 필수)
-  ${color.bold('dcheck interview')} ${color.dim('[--answers <file>]')}   권리·허용범위 설문 문항 출력 / 답으로 권리 프로필 생성
-  ${color.bold('dcheck protect plan')}           보호 계획 생성(무엇을 바꿀지 + 계획 해시. 파일 안 바꿈)
-  ${color.bold('dcheck protect apply')} ${color.dim('--plan-sha256 <값> --confirm-apply')}   승인한 계획대로만 적용(백업 후)
-  ${color.bold('dcheck protect restore')} ${color.dim('[--from <백업경로>]')}   마지막 백업으로 복원
-  ${color.bold('dcheck edzip prepare')}              에듀집 제출·통과 준비 계획 생성(파일 안 바꿈)
-  ${color.bold('dcheck edzip prepare')} ${color.dim('--apply --plan-sha256 <값> --confirm-apply --answers <JSON>')}  에듀집 제출용 HWPX·PDF 생성
-  ${color.bold('dcheck edzip council')} ${color.dim('--approved-url <에듀집 주소> --confirm-apply [--source-dir <폴더>]')}  승인 뒤 내부 기안·학운위 안건 HWPX 생성
-  ${color.bold('dcheck verify')}                 적용 전후 산출물 정적 검사 비교(깨짐 확인)
-  ${color.bold('dcheck status')}                 남은 미충족 항목 + 수정 프롬프트
-  ${color.bold('dcheck report')}                 전체 리포트 출력(.dorms-check/REPORT.md)
-  ${color.bold('dcheck submit')}                 증빙팩 생성 + 도름스 마크 신청 안내
-  ${color.bold('dcheck help')}                   도움말
-`);
-  log.plain(color.dim('  security 스캔은 검사만 합니다. edzip prepare와 protection apply는 각각'));
-  log.plain(color.dim('  사용자가 승인한 계획 해시와 --confirm-apply 플래그가 있을 때만입니다. 자동 배포는 하지 않습니다.'));
-  log.plain(color.dim('  staged는 지원 Bash/WSL에서 literal vercel 단일 명령, --yes, githubDeployment=1 + full githubCommitSha metadata를 요구합니다.'));
-  log.plain(color.dim(`  배포 파일 열거와 metadata 결합은 Vercel CLI ${SUPPORTED_VERCEL_CLI_VERSION}에 고정되며 다른 버전은 차단합니다.`));
-  log.plain(color.dim('  promote도 exact literal URL/ID 단일 명령만 허용하며 wrapper·변수·스크립트·override 옵션은 차단합니다.'));
-  log.plain(color.dim('  이 둘 외 Vercel 쓰기는 모두 차단하고 명시적 list/inspect/status/get/help/version/whoami 조회만 허용합니다.'));
-  log.plain(color.dim('  code 영수증은 Git 배포 입력, 허용된 project state, .vercel/project.json의 project/org와 digest에 묶여 사용자 홈에만 저장됩니다.'));
-  log.plain(color.dim('  link/switch와 foreign project/org/team env, ambient token/scope/config override는 차단합니다.'));
-  log.plain(color.dim('  command substitution·caret/backtick·runtime·package/workspace·task launcher도 보수적으로 차단합니다.'));
-  log.plain(color.dim('  훅은 사용자 지정 config root와 검증된 절대 Node를 기록하지만 configured만 증명합니다.'));
-  log.plain(color.dim('  현재 호스트 활성화는 unknown이므로 재시작·신뢰·안전한 차단 challenge가 필요합니다.'));
-  log.plain(color.dim('  native Windows는 Get-Command로 고정한 CLI 뒤에 관리형 vercel.cmd proxy를 설치하고 exact PowerShell literal 명령만 허용합니다.'));
-  log.plain(color.dim('  status의 windowsVercelExecutable 경로를 사용하세요. WSL은 별도 설치하며 120초 host timeout은 fail-open일 수 있습니다.'));
-  log.plain(color.dim('  전역 훅은 AI 셸 명령 경로만 관찰합니다. 대시보드·Git 자동 production·외부 CI는 별도로 막아야 합니다.'));
+  log.title('dorms-check ' + PKG.version + ' · 교사 앱 최소 점검');
+  log.plain('  dcheck detect                              프로젝트 구성 확인');
+  log.plain('  dcheck init --name <앱> --url <주소>         점검 설정 생성');
+  log.plain('  dcheck scan --url <주소> [--json]           공개 응답·로컬 코드 검사와 결과 저장');
+  log.plain('  dcheck scan --code-only [--json]            로컬 코드만 검사');
+  log.plain('  dcheck status                              확인한 위험·권고·미확인 항목 보기');
+  log.plain('  dcheck report                              저장한 점검 보고서 보기');
+  log.plain('  dcheck submit                              보관용 증빙팩 생성');
+  log.plain('');
+  log.plain('  필요한 경우 --track security,edzip,protection 중 원하는 항목을 고르세요.');
+  log.plain('  기본값은 security입니다. 서류와 앱 보호 기능은 별도로 선택합니다.');
+  log.plain('  dcheck judge --in <JSON>                    직접 확인한 추가 근거 기록');
+  log.plain('  dcheck edzip prepare                       에듀집 서류 작성 계획 저장');
+  log.plain('  dcheck edzip prepare --apply --plan-sha256 <값> --confirm-apply --answers <JSON>');
+  log.plain('  dcheck edzip council --approved-url <주소> --confirm-apply');
+  log.plain('  dcheck interview [--answers <JSON>]         권리·이용 범위 질문 또는 답변 저장');
+  log.plain('  dcheck protect plan                        앱 보호 변경 계획 저장');
+  log.plain('  dcheck protect apply --plan-sha256 <값> --confirm-apply');
+  log.plain('  dcheck protect restore [--from <경로>]      적용 전 백업 복원');
+  log.plain('  dcheck verify                              앱 보호 적용 전후 산출물 비교');
+  log.plain('');
+  log.plain('  이전 버전 정리: dcheck hooks status|uninstall [--agents ' + ALL_AGENTS.join(',') + '] [--json]');
+  log.plain('  status는 기존 설정을 읽고, uninstall은 백업 후 도름스가 넣은 항목만 제거합니다.');
+  log.plain('  init은 설정 파일, scan은 .dorms-check의 검사 결과·보고서·이력을 저장합니다.');
+  log.plain('  서류 생성과 앱 보호 적용은 각 명령의 승인 절차를 따릅니다.');
   honesty();
 }
 
@@ -106,313 +71,106 @@ function printDetect() {
   const d = detectStack(root);
   log.title('스택 감지');
   log.plain(`  프레임워크: ${color.bold(d.framework)}`);
-  log.plain(`  Supabase : ${d.hasSupabase ? color.green('예') + ' — RLS 실측 프로브 대상' : '아니오'}`);
+  log.plain(`  Supabase : ${d.hasSupabase ? color.green('예') + ', RLS 실측 프로브 대상' : '아니오'}`);
   log.plain(`  적용 태그: ${d.applies.join(', ') || '(없음)'}`);
   if (d.buildDir) log.plain(`  빌드 산출물: ${d.buildDir} ${color.dim('(protection 트랙 검사 대상)')}`);
   return d;
 }
 
-function strictIdentityBinding(project) {
-  return JSON.stringify({
-    root: project?.root || '',
-    rootHash: project?.rootHash || '',
-    gitSha: project?.gitSha || '',
-    treeSha: project?.treeSha || '',
-    clean: project?.clean === true,
-    vercel: project?.vercel || {},
-    deploymentInputs: project?.deploymentInputs || {},
-  });
-}
-
 async function runScan() {
-  const strict = flag('strict');
   const json = flag('json');
   const cfg = loadConfig(root);
-  const fail = (exitCode, reason, extra = {}) => {
-    process.exitCode = exitCode;
-    if (json) console.log(JSON.stringify({ ok: false, exitCode, reason, ...extra }, null, 2));
-    else log.err(reason);
-  };
   if (cfg._parseError) {
-    fail(strict ? STRICT_EXIT.USAGE_CONFIG : 1, 'dorms-check.config.json 파싱 실패. 고치거나 삭제 후 다시.');
+    outputMachineResult({ ok: false, code: 'INVALID_CONFIG', exitCode: 2, reason: 'dorms-check.config.json을 읽지 못했습니다. JSON 형식을 확인하세요.' }, { json });
     return;
   }
   const url = opt('url', cfg.app?.url || '');
   const codeOnly = flag('code-only') || !url;
   const stack = cfg.app?.stack || detectStack(root).framework;
   const trackArg = opt('track', '');
-  const tracks = trackArg ? trackArg.split(',').map(item => item.trim()).filter(Boolean) : (cfg.tracks && cfg.tracks.length ? cfg.tracks : ['security']);
-  const phase = codeOnly ? 'code' : 'live';
-  let project = null;
-  let deploymentId = '';
-  let deploymentGitSha = '';
-  let gitBinding = '';
-  let vercelProjectId = '';
-  let vercelOrgId = '';
-
-  if (strict) {
-    if (tracks.length !== 1 || tracks[0] !== 'security') {
-      fail(STRICT_EXIT.USAGE_CONFIG, 'strict 모드는 --track security 단일 트랙만 허용합니다.');
-      return;
-    }
-    if (!cfg.ownershipConfirmed) {
-      fail(STRICT_EXIT.USAGE_CONFIG, 'strict 검사 전 init --confirm-ownership으로 본인이 운영하는 앱임을 확인해야 합니다.');
-      return;
-    }
-    const requestedSha = opt('git-sha', '');
-    if (!requestedSha) {
-      fail(STRICT_EXIT.USAGE_CONFIG, 'strict 검사에는 --git-sha <현재 HEAD>가 필요합니다.');
-      return;
-    }
-    project = projectIdentity(root);
-    if (!project.ok) { fail(project.exitCode || STRICT_EXIT.BINDING_MISMATCH, project.reason); return; }
-    if (!project.clean) {
-      fail(STRICT_EXIT.BINDING_MISMATCH, 'strict 검사는 커밋되지 않은 변경이 없는 Git 작업트리에서만 영수증을 만듭니다.', { dirty: project.dirty });
-      return;
-    }
-    if (requestedSha !== project.gitSha) {
-      fail(STRICT_EXIT.BINDING_MISMATCH, `--git-sha ${requestedSha}와 현재 HEAD ${project.gitSha}가 다릅니다.`);
-      return;
-    }
-    if (phase === 'live') {
-      const codeGate = verifyCodeGate({ cwd: root, gitSha: requestedSha });
-      if (!codeGate.ok) {
-        fail(codeGate.exitCode, `live strict 전에 현재 Vercel 프로젝트에 묶인 code strict PASS가 필요합니다. ${codeGate.reason}`);
-        return;
-      }
-    }
-    // A failed or interrupted re-scan must not leave an older PASS receipt
-    // usable for the same source/deployment.
-    invalidateReceipt(phase, project, root);
-    if (phase === 'live') {
-      deploymentId = opt('vercel-deployment', '');
-      if (!deploymentId) {
-        fail(STRICT_EXIT.USAGE_CONFIG, 'live strict 검사에는 --vercel-deployment <격리 배포 URL 또는 ID>가 필요합니다.');
-        return;
-      }
-      let normalizedUrl;
-      try { normalizedUrl = normalizeDeploymentUrl(url); }
-      catch (error) { fail(STRICT_EXIT.USAGE_CONFIG, error.message); return; }
-      if (/^https?:\/\//i.test(deploymentId)) {
-        let normalizedDeployment;
-        try { normalizedDeployment = normalizeDeploymentUrl(deploymentId); }
-        catch (error) { fail(STRICT_EXIT.USAGE_CONFIG, error.message); return; }
-        if (normalizedUrl !== normalizedDeployment) {
-          fail(STRICT_EXIT.BINDING_MISMATCH, '--url과 --vercel-deployment URL이 다릅니다. 실제 격리 배포 URL 하나를 똑같이 넣으세요.');
-          return;
-        }
-        deploymentId = normalizedDeployment;
-      }
-      const deploymentBinding = inspectVercelDeployment({
-        cwd: root,
-        deployment: deploymentId,
-        url: normalizedUrl,
-        gitSha: project.gitSha,
-        requireCanonicalGitSource: flag('require-canonical-git-source'),
-      });
-      if (!deploymentBinding.ok) {
-        fail(deploymentBinding.exitCode, deploymentBinding.reason);
-        return;
-      }
-      gitBinding = deploymentBinding.gitBinding || 'declared';
-      if (gitBinding !== 'canonical' && !json) {
-        log.warn('이 배포에는 Git 연동이 붙인 소스 표식이 없어, 배포에 함께 넣은 커밋 값과 현재 HEAD 가 같은지로 확인했습니다. 검사 자체는 그대로 진행됩니다.');
-      }
-      deploymentId = deploymentBinding.id;
-      deploymentGitSha = deploymentBinding.gitSha;
-      vercelProjectId = deploymentBinding.projectId;
-      vercelOrgId = deploymentBinding.orgId;
-      if (vercelProjectId !== project.vercel.projectId || vercelOrgId !== project.vercel.orgId) {
-        fail(STRICT_EXIT.BINDING_MISMATCH, 'live 검사 중 Vercel project/org 링크가 code strict 시점과 달라졌습니다.');
-        return;
-      }
-    }
-  }
-
-  if (!cfg.ownershipConfirmed) {
-    if (!json) log.warn('본인이 만들고 운영하는 앱만 스캔하세요. init 에서 ownershipConfirmed:true 로 동의가 필요합니다.');
-  }
-
-  const results = [];
-  let raw = {};
-  let bonus = [];
-  if (!codeOnly) {
-    if (!json) log.step(`외부 표면 스캔: ${url}`);
-    let ext;
-    try { ext = await runExternalScan(url, strict && phase === 'live' ? { expectedOrigin: url } : {}); }
-    catch (error) {
-      fail(strict ? STRICT_EXIT.INCOMPLETE : 1, `외부 표면 스캔을 시작하지 못했습니다: ${error.message}`);
-      return;
-    }
-    if (strict && phase === 'live' && ext.binding && !ext.binding.ok) {
-      fail(STRICT_EXIT.BINDING_MISMATCH, ext.binding.reason, { binding: ext.binding });
-      return;
-    }
-    results.push(...ext.items);
-    raw = ext.raw;
-    bonus = ext.bonus || [];
-    if (ext.reachable) {
-      if (!json) log.step('능동 런타임 프로브(RLS 실측·엔드포인트) …');
-      let rt;
-      try { rt = await runRuntimeProbe(url); }
-      catch (error) {
-        fail(strict ? STRICT_EXIT.INCOMPLETE : 1, `능동 런타임 프로브를 완료하지 못했습니다: ${error.message}`);
-        return;
-      }
-      results.push(...rt.items);
-    } else {
-      if (!json) log.warn(`URL 접속 실패, 코드 검사만 진행(${ext.error || ''})`);
-    }
-  } else {
-    if (!json) log.step('URL 없음, 로컬 코드 검사만(--code-only)');
-  }
-
-  if (!json) log.step('로컬 코드 정적 검사 …');
-  const deploymentFiles = strict
-    ? (project?.deploymentInputs?.manifest || [])
-    : null;
-  results.push(...runStaticScan(root, strict ? { files: deploymentFiles } : {}).items);
-
-  // ai-review 판단(review.json) 병합
-  const review = strict ? {} : (readJsonSafe(REVIEW) || {});
-  for (const [id, v] of Object.entries(review)) {
-    const existing = results.find(r => r.id === id);
-    const cat = catalogItem(id);
-    const reviewable = ['ai', 'hybrid', 'declared'].includes(cat?.method);
-    if (existing && reviewable) {
-      existing.status = v.status;
-      existing.observed = v.evidence || existing.observed;
-      existing.evidence = { ...existing.evidence, aiJudgment: v };
-    } else if (!existing) {
-      results.push({ id, status: v.status, observed: v.evidence || '(AI 판단)', evidence: { aiJudgment: v } });
-    }
-  }
-  // 트랙별 항목 보충(레지스트리 경유): edzip pending seed·protection 결정적 검사 등
-  for (const t of TRACKS) {
-    if (!tracks.includes(t.id) || !t.collect) continue;
-    results.push(...t.collect({ results, review, config: cfg, root }));
-  }
-
-  // 트랙별 채점(레지스트리 경유)
-  const trackResults = {};
-  for (const t of TRACKS) {
-    if (!tracks.includes(t.id)) continue;
-    trackResults[t.id] = t.score(results, { bonus, config: cfg, root });
-  }
-
-  // Strict receipts live only in the trusted user home. Writing reports into
-  // the project here would mutate the exact deployment inputs between scan and
-  // stage. Legacy/non-strict scans retain their existing project reports.
-  if (!strict) {
-    const state = loadState(root);
-    recordRound(state, { trackResults, results });
-    saveState(root, state);
-
-    const md = renderReportMd({ config: { ...cfg, app: { ...cfg.app, stack } }, results, trackResults, bonus });
-    ensureDir(STATE_DIR);
-    writeText(path.join(STATE_DIR, 'REPORT.md'), md);
-    writeText(path.join(STATE_DIR, 'scan.json'), JSON.stringify({ at: new Date().toISOString(), url, results, bonus, raw }, null, 2));
-  }
-
-  if (strict) {
-    const strictResult = evaluateStrictSecurity(results, phase);
-    let stored = null;
-    if (strictResult.status === 'PASS') {
-      const refreshedProject = projectIdentity(root);
-      if (!refreshedProject.ok || !refreshedProject.clean || strictIdentityBinding(refreshedProject) !== strictIdentityBinding(project)) {
-        fail(STRICT_EXIT.BINDING_MISMATCH, 'strict 검사 중 Git, Vercel 링크 또는 실제 배포 입력이 바뀌어 영수증을 만들지 않았습니다.', {
-          detail: refreshedProject.reason || 'source binding changed during scan',
-        });
-        return;
-      }
-      project = refreshedProject;
-      if (phase === 'live') {
-        const freshCodeGate = verifyCodeGate({ cwd: root, gitSha: project.gitSha });
-        if (!freshCodeGate.ok) {
-          fail(freshCodeGate.exitCode, `live strict 완료 직전 code 영수증을 다시 확인하지 못했습니다: ${freshCodeGate.reason}`);
-          return;
-        }
-      }
-      const receipt = createReceipt({
-        phase,
-        project,
-        deploymentUrl: phase === 'live' ? url : '',
-        deploymentId,
-        deploymentGitSha,
-        vercelProjectId,
-        vercelOrgId,
-        strict: strictResult,
-        results,
-        tool: { version: PKG.version, commit: PKG.gitHead || '' },
-      });
-      stored = storeReceipt(receipt, root);
-    }
-    process.exitCode = strictResult.exitCode;
-    const output = {
-      ok: strictResult.status === 'PASS',
-      exitCode: strictResult.exitCode,
-      phase,
-      status: strictResult.status,
-      gate: { schema: STRICT_GATE_SCHEMA, runtimeSha256: STRICT_RUNTIME_DIGEST },
-      project: {
-        gitSha: project.gitSha,
-        treeSha: project.treeSha,
-        clean: project.clean,
-        vercel: project.vercel,
-        deploymentInputs: project.deploymentInputs,
-      },
-      deployment: phase === 'live' ? {
-        url: normalizeDeploymentUrl(url),
-        id: deploymentId,
-        sourceGitSha: deploymentGitSha,
-        projectId: vercelProjectId,
-        orgId: vercelOrgId,
-        // canonical: Git 연동이 배포에 직접 붙인 소스 SHA 로 확인함
-        // declared: 배포에 함께 넣은 커밋 값과 현재 HEAD 가 같은지로 확인함
-        gitBinding,
-      } : null,
-      strict: strictResult,
-      results,
-      receipt: stored ? { trustedFile: stored.trustedFile, expiresAt: stored.receipt.expiresAt } : null,
-    };
-    if (json) console.log(JSON.stringify(output, null, 2));
-    else if (strictResult.status === 'PASS') {
-      const bindingNote = phase === 'live' && gitBinding && gitBinding !== 'canonical'
-        ? ' (배포 소스 확인: 배포에 넣은 커밋 값 대조)'
-        : '';
-      log.ok(`${phase} strict 보안 게이트 PASS${bindingNote}`);
-    }
-    else log.err(`${phase} strict 보안 게이트 ${strictResult.status}: ${[...strictResult.blockers, ...strictResult.incomplete].join(', ')}`);
+  const tracks = trackArg ? trackArg.split(',').map(item => item.trim()).filter(Boolean) : (cfg.tracks?.length ? cfg.tracks : ['security']);
+  const invalid = tracks.filter(id => !TRACKS.some(track => track.id === id));
+  if (invalid.length) {
+    outputMachineResult({ ok: false, code: 'INVALID_TRACK', exitCode: 2, reason: '알 수 없는 점검 종류: ' + invalid.join(', ') }, { json });
     return;
   }
+  if (!cfg.ownershipConfirmed && !json) log.warn('본인이 만들고 운영하는 앱만 점검하세요.');
 
-  printSummary({ trackResults, results, config: { ...cfg, app: { ...cfg.app, stack } } });
+  let results = [];
+  let raw = {};
+  let bonus = [];
+  let reachable = false;
+  const scanOptions = { timeout: 5000, totalTimeout: 45000, deadlineAt: Date.now() + 45000 };
+  if (!codeOnly) {
+    if (!json) log.step('공개 응답 점검: ' + url);
+    let external;
+    try { external = await runExternalScan(url, scanOptions); }
+    catch (error) {
+      external = { reachable: false, items: [], raw: {}, error: String(error?.message || error) };
+    }
+    results.push(...external.items);
+    raw = external.raw || {};
+    bonus = external.bonus || [];
+    reachable = external.reachable === true;
+    if (reachable) {
+      if (!json) log.step('공개된 데이터 접근 설정 점검');
+      try { results.push(...(await runRuntimeProbe(url, scanOptions)).items); }
+      catch (error) {
+        results.push({ id: 'meta.runtime-probe', status: 'unknown', observed: '데이터 접근 설정을 확인하지 못했습니다.', evidence: { error: String(error?.message || error) } });
+      }
+    } else {
+      results.push({ id: 'meta.public-surface', status: 'unknown', observed: '공개 응답 검사를 완료하지 못했습니다.', evidence: { error: external.error || 'unavailable' } });
+      if (!json) log.warn('주소를 확인하지 못한 항목은 미확인으로 남기고 로컬 코드 검사를 계속합니다.');
+    }
+  } else if (!json) log.step('로컬 코드만 점검합니다. 공개 주소 검사는 미확인으로 남습니다.');
 
-  // ai-review 해야 할 항목 안내(교사 AI에게)
-  // protection 의 결정적(deterministic)·설문(declared) 항목은 judge 대상이 아니다
-  // (결정적 검사가 자기신고를 덮고, 설문은 interview 가 채운다). ai 판단 항목만 남긴다.
-  const pending = results.filter(r => {
-    if (!(r.status === 'pending' || (r.status === 'info' && String(r.id).startsWith('code.')))) return false;
-    const cat = catalogItem(r.id);
-    if (cat && cat.track === 'protection' && cat.method !== 'ai') return false;
-    return true;
-  });
-  if (pending.length) {
-    log.title('AI가 판단해야 할 항목(judge 로 기록)');
-    for (const r of pending) {
-      const cat = catalogItem(r.id);
-      log.plain(`  - ${r.id}: ${cat ? cat.title : ''} — 코드/방침을 확인하고 pass|fail|na 를 증거와 함께 judge 로 기록`);
+  results.push(...runStaticScan(root).items);
+  const review = readJsonSafe(REVIEW) || {};
+  for (const [id, value] of Object.entries(review)) {
+    const existing = results.find(item => item.id === id);
+    const catalog = catalogItem(id);
+    const reviewable = ['ai', 'hybrid', 'declared'].includes(catalog?.method);
+    if (existing && reviewable) {
+      existing.status = value.status;
+      existing.observed = value.evidence || existing.observed;
+      existing.evidence = { ...existing.evidence, aiJudgment: value };
+    } else if (!existing && reviewable) {
+      results.push({ id, status: value.status, observed: value.evidence || '(AI 판단)', evidence: { aiJudgment: value } });
     }
   }
-  if (!json) {
-    log.plain('');
-    log.plain(color.dim('  리포트: .dorms-check/REPORT.md'));
-    honesty();
+  for (const track of TRACKS) {
+    if (tracks.includes(track.id) && track.collect) results.push(...track.collect({ results, review, config: cfg, root }));
   }
+
+  const scan = { reachable, items: results, raw };
+  const trackResults = {};
+  for (const track of TRACKS) {
+    if (tracks.includes(track.id)) trackResults[track.id] = track.score(results, { bonus, config: cfg, root, scan });
+  }
+  const normalized = new Map((trackResults.security?.items || []).map(item => [item.id, item]));
+  results = results.map(item => normalized.get(item.id) || (item.status === 'pending' ? { ...item, status: 'unknown' } : item));
+
+  const state = loadState(root);
+  recordRound(state, { trackResults, results });
+  saveState(root, state);
+  const config = { ...cfg, app: { ...cfg.app, stack }, tracks };
+  const md = renderReportMd({ config, results, trackResults, bonus });
+  ensureDir(STATE_DIR);
+  writeText(path.join(STATE_DIR, 'REPORT.md'), md);
+  const saved = { at: new Date().toISOString(), url, reachable, results, bonus, raw, trackResults };
+  writeText(path.join(STATE_DIR, 'scan.json'), JSON.stringify(saved, null, 2));
+  if (json) {
+    console.log(JSON.stringify({ ok: true, command: 'scan', ...saved }, null, 2));
+    return;
+  }
+  printSummary({ trackResults, results, config });
+  log.plain(color.dim('  리포트: .dorms-check/REPORT.md'));
+  log.plain(color.dim('  미확인은 실패도 통과도 아닙니다. 필요한 근거가 있으면 judge로 추가할 수 있습니다.'));
+  honesty();
 }
 
 // 사람이 터미널에서 직접 실행할 때(TTY) 세 축 중 원하는 것만 고르게 물어본다.
-// AI 가 파이프로 실행할 때(비대화형)는 호출하지 않는다 — 그때는 --track 플래그/기본값을 쓴다.
+// AI 가 파이프로 실행할 때(비대화형)는 호출하지 않는다, 그때는 --track 플래그/기본값을 쓴다.
 const AXIS_LABELS = {
   security: '보안',
   edzip: '학운위·개인정보',
@@ -462,7 +220,7 @@ async function runInit() {
   } else if (process.stdin.isTTY) {
     tracks = await promptTracks();
   } else {
-    tracks = defaultConfig().tracks; // ['security'] — 기존 비대화형 동작 그대로
+    tracks = defaultConfig().tracks; // ['security'], 기존 비대화형 동작 그대로
   }
   cfg.tracks = tracks.length ? tracks : ['security'];
   cfg.teacher.dormsHandle = opt('handle', '');
@@ -494,7 +252,7 @@ function runJudge() {
     }
     // 증거 없는 pass 는 거부(할루시네이션 방지: 서술만으로 통과 못 함)
     if (v.status === 'pass' && (!v.evidence || String(v.evidence).trim().length < 4)) {
-      log.warn(`거부: ${id} — pass 에는 증거(파일:라인 또는 실측 요약)가 필요합니다.`);
+      log.warn(`거부: ${id}, pass 에는 증거(파일:라인 또는 실측 요약)가 필요합니다.`);
       rejected++; continue;
     }
     review[id] = { status: v.status, evidence: v.evidence || '', by: v.by || 'teacher-assistant', at: new Date().toISOString() };
@@ -506,17 +264,19 @@ function runJudge() {
 }
 
 function runStatus() {
-  if (!exists(path.join(STATE_DIR, 'scan.json'))) { log.warn('먼저 scan 하세요.'); return; }
-  const scan = readJsonSafe(path.join(STATE_DIR, 'scan.json'));
+  const file = path.join(STATE_DIR, 'scan.json');
+  if (!exists(file)) { log.warn('먼저 scan을 실행하세요.'); return; }
+  const scan = readJsonSafe(file);
   const cfg = loadConfig(root);
   const stack = cfg.app?.stack || '내';
-  const unmet = (scan.results || []).filter(r => (r.status === 'fail' || r.status === 'pending'));
-  log.title(`남은 항목 ${unmet.length}건`);
-  for (const r of unmet) {
-    const cat = catalogItem(r.id); if (!cat) continue;
-    log.plain(`  ${color.yellow('!')} [${cat.severity || cat.track}] ${cat.title}`);
-    if (cat.plain) log.plain(`      ${cat.plain}`);
-    if (cat.aiFix) log.plain(`      ${color.dim('AI에게:')} ${cat.aiFix.replaceAll('{stack}', stack)}`);
+  const items = (scan?.results || []).filter(item => ['fail', 'info', 'unknown', 'pending'].includes(item.status));
+  log.title('확인한 위험·권고·미확인 ' + items.length + '건');
+  for (const item of items) {
+    const catalog = catalogItem(item.id);
+    const label = item.status === 'fail' ? '확인한 문제' : item.status === 'info' ? '권고' : '미확인';
+    log.plain('  [' + label + '] ' + (catalog?.title || item.id));
+    if (item.observed) log.plain('      ' + item.observed);
+    if (item.status === 'fail' && catalog?.aiFix) log.plain('      AI에게: ' + catalog.aiFix.replaceAll('{stack}', stack));
   }
   honesty();
 }
@@ -538,7 +298,7 @@ function runSubmit() {
   const trackResults = {};
   for (const t of TRACKS) {
     if (!cfg.tracks?.includes(t.id)) continue;
-    trackResults[t.id] = t.score(results, { bonus, config: cfg, root });
+    trackResults[t.id] = t.score(results, { bonus, config: cfg, root, scan: { reachable: scan.reachable, items: results, raw: scan.raw || {} } });
   }
   const payload = buildPayload({ config: { ...cfg, app: { ...cfg.app, stack } }, results, trackResults, bonus, toolVersion: PKG.version });
 
@@ -548,15 +308,10 @@ function runSubmit() {
   writeText(path.join(outDir, 'REPORT.md'), readFileSync(path.join(STATE_DIR, 'REPORT.md'), 'utf8'));
   log.ok(`증빙팩 생성: ${path.relative(root, outDir)}/ (report.json · REPORT.md)`);
 
-  const ready = TRACKS.every(t => !trackResults[t.id] || t.passed(trackResults[t.id]));
   log.title('도름스 마크 신청');
-  if (!ready) {
-    log.warn('아직 통과하지 못한 항목이 있어요. status 로 남은 항목을 고친 뒤 다시 scan → submit 하세요.');
-  }
-  log.plain('  1) 도름스(dorms.school)에 로그인하세요.');
-  log.plain('  2) 내가 만든 앱의 앱 공유 페이지에서 "보안 검토 마크 신청"을 누르세요.');
-  log.plain('  3) 도름스 서버가 이 앱의 주소를 스스로 다시 검사합니다(외부 표면 + RLS 실측).');
-  log.plain(color.dim('     서버 재검사에서 통과하지 못하면 마크가 발급되지 않습니다. 이 도구의 통과는 신청 준비일 뿐입니다.'));
+  log.plain('  도름스 앱 공유 화면에서 공개 주소의 최소 점검을 신청할 수 있습니다.');
+  log.plain('  도름스 서버가 공개 응답을 직접 확인하며, 이 파일만으로 마크를 발급하지 않습니다.');
+  log.plain('  미확인 항목이나 아직 받지 못한 마크 때문에 앱 등록을 중단할 필요는 없습니다.');
   for (const t of TRACKS) {
     if (cfg.tracks?.includes(t.id) && t.submitNotes) t.submitNotes({ config: cfg, root, outDir });
   }
@@ -636,7 +391,7 @@ async function runProtectPlan() {
     log.plain(`  - ${s.title}: 변경 ${s.willChange.length}개 · 생성 ${s.willCreate.length}개`);
   }
   if (plan.serverMoveCandidates.length) {
-    log.title(`서버 이전 후보 ${plan.serverMoveCandidates.length}건 (이 계획은 코드를 옮기지 않아요 — 교사 AI 가 별도 동의로)`);
+    log.title(`서버 이전 후보 ${plan.serverMoveCandidates.length}건 (이 계획은 코드를 옮기지 않아요, 교사 AI 가 별도 동의로)`);
     for (const c of plan.serverMoveCandidates.slice(0, 8)) log.plain(`  ! ${c.kind} @ ${c.file}`);
   }
   log.title('위험·복원');
@@ -674,7 +429,7 @@ async function runProtectApply() {
   log.title('적용 후 검증');
   const v = runProtectVerify(root, buildDir);
   if (v.errors) {
-    log.err(`손상 ${v.errors}건 감지 — dcheck protect restore 로 되돌린 뒤 원인을 확인하세요.`);
+    log.err(`손상 ${v.errors}건 감지, dcheck protect restore 로 되돌린 뒤 원인을 확인하세요.`);
     process.exitCode = 1;
   } else {
     log.ok(`산출물 정적 검증 통과${v.warnings ? color.dim(` (주의 ${v.warnings}건)`) : ''}. 다시 scan 하면 보호 상태에 반영됩니다.`);
@@ -703,7 +458,7 @@ function runVerify() {
   const st = loadProtectState(root);
   if (st.baseline && st.baseline.buildDir === buildDir) {
     const delta = v.errors - st.baseline.errors;
-    log.plain(`  적용 전 기준선: 오류 ${st.baseline.errors}건 → 지금 ${v.errors}건${delta > 0 ? color.red(` (+${delta} — 적용으로 생긴 손상 의심)`) : delta < 0 ? color.green(` (${delta})`) : color.dim(' (변화 없음)')}`);
+    log.plain(`  적용 전 기준선: 오류 ${st.baseline.errors}건 → 지금 ${v.errors}건${delta > 0 ? color.red(` (+${delta}, 적용으로 생긴 손상 의심)`) : delta < 0 ? color.green(` (${delta})`) : color.dim(' (변화 없음)')}`);
   }
   if (v.errors) {
     log.err(`검증 실패: 오류 ${v.errors}건. dcheck protect restore 로 되돌릴 수 있습니다.`);
@@ -790,96 +545,47 @@ async function runEdzipCmd() {
 }
 
 function outputMachineResult(result, { json = false, success = '' } = {}) {
-  process.exitCode = result.exitCode ?? (result.ok ? STRICT_EXIT.PASS : STRICT_EXIT.USAGE_CONFIG);
+  process.exitCode = result.exitCode ?? (result.ok ? 0 : 2);
   if (json) console.log(JSON.stringify(result, null, 2));
-  else if (result.ok) log.ok(success || 'PASS');
-  else log.err(result.reason || '요청을 완료하지 못했습니다.');
+  else if (result.ok) log.ok(success || '요청을 완료했습니다.');
+  else log.err((result.code ? result.code + ': ' : '') + (result.reason || '요청을 완료하지 못했습니다.'));
 }
 
-function runGateCmd() {
-  const sub = args[0];
-  const json = flag('json');
-  if (sub !== 'verify') {
-    outputMachineResult({ ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: '사용법: dcheck gate verify --git-sha <SHA> --vercel-deployment <URL 또는 ID> [--url <URL>] [--json]' }, { json });
-    return;
-  }
-  const gitSha = opt('git-sha', '');
-  const deployment = opt('vercel-deployment', '');
-  if (!gitSha || !deployment) {
-    outputMachineResult({ ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: 'gate verify에는 --git-sha와 --vercel-deployment가 모두 필요합니다.' }, { json });
-    return;
-  }
-  const result = verifyGate({ cwd: root, gitSha, deployment, url: opt('url', '') });
-  outputMachineResult(result, { json, success: 'strict code/live 영수증이 현재 Git과 Vercel 배포에 일치합니다.' });
-}
-
-function validateHookMode(sub, json) {
-  if (!['install', 'status', 'uninstall'].includes(sub)) {
-    outputMachineResult({ ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: '사용법: dcheck hooks install|status|uninstall [--agents codex,claude,gemini,antigravity] [--json]' }, { json });
-    return false;
-  }
-  if (sub === 'install' && (!flag('global') || !flag('security-only') || opt('provider', '') !== 'vercel')) {
-    outputMachineResult({ ok: false, exitCode: STRICT_EXIT.USAGE_CONFIG, reason: '설치는 --global --provider vercel --security-only를 모두 명시해야 합니다.' }, { json });
-    return false;
-  }
+function removedFeature() {
+  const removedOptions = new Set(['--strict', '--git-sha', '--vercel-deployment', '--require-canonical-git-source', '--provider', '--security-only', '--receipt', '--receipt-file']);
+  const option = [cmd, ...args].find(value => typeof value === 'string' && removedOptions.has(value.split('=')[0]));
+  if (!option && !['gate', 'receipt', 'proxy'].includes(cmd) && !(cmd === 'hooks' && args[0] === 'install')) return false;
+  outputMachineResult({
+    ok: false, code: 'FEATURE_REMOVED', exitCode: 2,
+    reason: '전역 훅 설치와 배포 차단 기능은 제거됐습니다. 점검은 scan으로 새로 요청하고, 이전 설치는 hooks status와 hooks uninstall로 정리하세요.',
+  }, { json: flag('json') });
   return true;
 }
 
 function runHooksCmd() {
   const sub = args[0];
   const json = flag('json');
-  if (!validateHookMode(sub, json)) return;
+  if (!['status', 'uninstall'].includes(sub)) {
+    outputMachineResult({ ok: false, code: 'INVALID_COMMAND', exitCode: 2, reason: '사용법: dcheck hooks status|uninstall [--agents codex,claude,gemini,antigravity] [--json]' }, { json });
+    return;
+  }
   try {
     const selected = opt('agents', ALL_AGENTS.join(','));
-    const requestedAgents = [...new Set(selected.split(',').map(item => item.trim().toLowerCase()).filter(Boolean))];
-    const unknownAgents = requestedAgents.filter(agent => !ALL_AGENTS.includes(agent));
-    if (!requestedAgents.length || unknownAgents.length) {
-      const error = new Error(`--agents는 ${ALL_AGENTS.join(',')} 중에서 골라야 합니다${unknownAgents.length ? `: ${unknownAgents.join(',')}` : ''}.`);
-      error.exitCode = STRICT_EXIT.USAGE_CONFIG;
-      throw error;
+    const result = sub === 'status' ? hookStatus({ agents: selected }) : uninstallHooks({ agents: selected });
+    outputMachineResult({ ...result, ok: result.ok, exitCode: result.ok ? 0 : 2 }, { json, success: sub === 'status' ? '이전 설치 상태를 확인했습니다.' : '선택한 에이전트의 도름스 훅을 정리했습니다.' });
+    if (!json) {
+      const status = sub === 'status' ? result : result.status;
+      for (const [agent, info] of Object.entries(status.agents)) log.plain('  ' + agent + ': ' + (info.error || (info.managedPresent ? '이전 도름스 훅이 남아 있습니다.' : '도름스 훅이 없습니다.')));
+      for (const change of result.changes || []) if (change.backup) log.plain('  원본 백업: ' + change.backup);
+      if (result.retainedFiles?.length) log.plain('  참조가 남거나 소유 여부를 확인하지 못한 공용 파일은 보존했습니다.');
     }
-    if (sub === 'status') {
-      const status = hookStatus();
-      const parseErrors = requestedAgents.map(agent => status.agents[agent]?.parseError).filter(Boolean);
-      const allConfigured = requestedAgents.every(agent => status.agents[agent]?.configured);
-      const exitCode = parseErrors.length ? STRICT_EXIT.USAGE_CONFIG : STRICT_EXIT.INCOMPLETE;
-      outputMachineResult({
-        ok: false,
-        exitCode,
-        configured: allConfigured,
-        reason: parseErrors.length
-          ? `에이전트 설정을 파싱하지 못했습니다: ${parseErrors.join(' | ')}`
-          : (allConfigured
-              ? '훅 파일과 설정은 구성됐지만 현재 호스트가 훅을 로드·신뢰했는지는 관찰할 수 없습니다. 재시작·신뢰 뒤 안전한 차단 challenge를 실제 에이전트 셸에서 확인하세요.'
-              : '선택한 훅 설정이 모두 구성되지 않았습니다.'),
-        ...status,
-      }, { json });
-      return;
-    }
-    const result = sub === 'install' ? installHooks({ agents: selected }) : uninstallHooks({ agents: selected });
-    const ok = sub === 'install'
-      ? false
-      : result.agents.every(agent => !result.status.agents[agent]?.managedPresent);
-    outputMachineResult({
-      ok,
-      exitCode: ok ? STRICT_EXIT.PASS : STRICT_EXIT.INCOMPLETE,
-      ...(sub === 'install' ? {
-        configured: result.agents.every(agent => result.status.agents[agent]?.configured),
-        activation: 'unknown',
-        ready: false,
-        reason: '훅 설정을 기록했습니다. 호스트 활성화는 아직 unknown이므로 재시작·신뢰 뒤 안전한 차단 challenge를 실제 에이전트 셸에서 확인하세요.',
-      } : {}),
-      ...result,
-    }, {
-      json,
-      success: 'dorms-check 전역 훅을 제거했습니다.',
-    });
   } catch (error) {
-    outputMachineResult({ ok: false, exitCode: error.exitCode || STRICT_EXIT.USAGE_CONFIG, reason: error.message }, { json });
+    outputMachineResult({ ok: false, code: 'CLEANUP_FAILED', exitCode: 2, reason: error.message }, { json });
   }
 }
 
 async function main() {
+  if (removedFeature()) return;
   switch (cmd) {
     case 'detect': printDetect(); break;
     case 'init': await runInit(); break;
@@ -888,21 +594,15 @@ async function main() {
     case 'interview': runInterview(); break;
     case 'protect': await runProtectCmd(); break;
     case 'edzip': await runEdzipCmd(); break;
-    case 'gate': runGateCmd(); break;
     case 'hooks': runHooksCmd(); break;
     case 'verify': runVerify(); break;
     case 'status': runStatus(); break;
     case 'report': runReport(); break;
     case 'submit': runSubmit(); break;
-    case 'help': case undefined: help(); break;
+    case 'help': case '--help': case '-h': case undefined: help(); break;
     default: log.err(`알 수 없는 명령: ${cmd}`); help(); process.exitCode = 1;
   }
 }
-main().catch(e => {
-  const strictFailure = cmd === 'scan' && flag('strict');
-  const exitCode = strictFailure ? STRICT_EXIT.INCOMPLETE : 1;
-  const reason = String(e?.message || e);
-  if (strictFailure && flag('json')) console.log(JSON.stringify({ ok: false, exitCode, status: 'INCOMPLETE', reason }, null, 2));
-  else log.err(String(e?.stack || e));
-  process.exitCode = exitCode;
+main().catch(error => {
+  outputMachineResult({ ok: false, code: 'COMMAND_FAILED', exitCode: 1, reason: String(error?.message || error) }, { json: flag('json') });
 });

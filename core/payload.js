@@ -6,6 +6,7 @@
 import { catalogItem, TRACKS } from './tracks.js';
 import { sha256 } from './util.js';
 import { redactPayload } from './redact.js';
+import { normalizeSecurityItems, MINIMUM_SECURITY_POLICY_VERSION } from './minimum-policy.js';
 
 const V1_TRACK_IDS = ['security', 'edzip'];
 
@@ -24,7 +25,7 @@ export function buildPayload({ config, results, security, edzip, bonus, toolVers
   const claimedTracks = config.tracks || [];
   const isV2 = [...claimedTracks, ...Object.keys(tr)].some(id => !V1_TRACK_IDS.includes(id));
 
-  const items = results.map(r => {
+  const items = normalizeSecurityItems(results).map(r => {
     const cat = catalogItem(r.id) || {};
     return {
       id: r.id,
@@ -50,6 +51,7 @@ export function buildPayload({ config, results, security, edzip, bonus, toolVers
     schemaVersion: isV2 ? 2 : 1,
     tool: { name: 'dorms-check', version: toolVersion || '0.1.0' },
     generatedAt: new Date().toISOString(),
+    policyVersion: MINIMUM_SECURITY_POLICY_VERSION,
     app: {
       name: config.app?.name || null,
       url: config.app?.url || null,
@@ -63,12 +65,12 @@ export function buildPayload({ config, results, security, edzip, bonus, toolVers
     // 서버가 target.url 로 재스캔해 대조할 결정적 항목(스킬 자기신고가 아닌 것)
     reverifyHints: {
       revalidate: items.filter(i => i.serverVerifiable).map(i => i.id),
-      note: '서버는 이 항목을 앱 URL 로 독립 재스캔해 대조한다. 불일치 시 발급 거부. 나머지(code.hardcoded-secret 등)는 자기신고로 투명 표기.',
+      note: '서버는 이 항목을 앱 URL 로 독립 재스캔해 대조한다. 확인된 위험이 있을 때 발급하지 않는다. 나머지(code.hardcoded-secret 등)는 자기신고로 투명 표기.',
     },
   };
 
   // v2: 제출 전 시크릿·경로 마스킹(redact). v1 은 기존 출력 그대로(하위 호환).
-  const finalPayload = isV2 ? redactPayload(payload) : payload;
+  const finalPayload = redactPayload(payload);
   finalPayload.manifestSha256 = sha256(JSON.stringify({ ...finalPayload, manifestSha256: undefined }));
   return finalPayload;
 }

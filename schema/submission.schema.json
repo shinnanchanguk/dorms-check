@@ -46,7 +46,7 @@
           "severity": { "enum": ["critical", "high", "medium", "low", "info", null] },
           "method": { "enum": ["deterministic", "ai", "hybrid"] },
           "serverVerifiable": { "type": "boolean" },
-          "status": { "enum": ["pass", "fail", "na", "info", "pending"] },
+          "status": { "enum": ["pass", "fail", "na", "info", "pending", "unknown"] },
           "observed": { "type": "string" },
           "evidence": { "type": "object" }
         }

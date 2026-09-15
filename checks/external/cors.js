@@ -13,6 +13,7 @@ export async function checkCors(url, requestImpl = request) {
     captureBody: false,
     timeout: 12000,
   });
+  if (!r.status || r.status >= 500 || r.status === 429) return [{ id: 'cors.policy', status: 'unknown', observed: 'CORS 응답을 확인하지 못했습니다.', evidence: { probeError: true } }];
   const acao = (r.headers['access-control-allow-origin'] || '').trim();
   const acac = (r.headers['access-control-allow-credentials'] || '').trim().toLowerCase();
 
@@ -22,9 +23,9 @@ export async function checkCors(url, requestImpl = request) {
 
   let status = 'pass';
   let observed = 'CORS가 임의 Origin을 허용하지 않음(양호)';
-  if (reflects && withCreds) { status = 'fail'; observed = '임의 Origin 반사 + credentials 허용(가장 위험)'; }
-  else if (reflects) { status = 'fail'; observed = '임의 Origin 반사 허용'; }
-  else if (wildcard && withCreds) { status = 'fail'; observed = '와일드카드(*) + credentials 허용'; }
+  if (reflects && withCreds) { status = 'info'; observed = '임의 Origin 반사 + credentials 허용(가장 위험)'; }
+  else if (reflects) { status = 'info'; observed = '임의 Origin 반사 허용'; }
+  else if (wildcard && withCreds) { status = 'info'; observed = '와일드카드(*) + credentials 허용'; }
   else if (wildcard) { status = 'info'; observed = '와일드카드(*) 허용 — 공개 API면 무방, 인증 API면 위험'; }
 
   return [{

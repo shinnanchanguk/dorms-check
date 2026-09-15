@@ -1,7 +1,7 @@
 {
   "name": "dorms-check",
-  "version": "0.2.0",
-  "description": "교사가 만든 앱을 보안·에듀집·지식재산권 세 축으로 점검하고, 에듀집 제출 자료와 승인 뒤 학교 내부 기안·학운위 HWPX 문서를 만드는 코치. 외부 제출은 하지 않는다.",
+  "version": "0.3.0",
+  "description": "교사 앱의 공개 응답과 코드를 최소 점검하고 확인한 위험·권고·미확인을 알려주는 도구. 선택적으로 에듀집 서류와 앱 보호 계획을 준비한다.",
   "type": "module",
   "bin": {
     "dcheck": "bin/dcheck.js"
@@ -13,10 +13,9 @@
   },
   "scripts": {
     "assets:internal-approval": "node scripts/generate-internal-approval-template.mjs",
-    "selftest": "node verify/self-test.js && node verify/strict-test.js",
-    "test:strict": "node verify/strict-test.js",
-    "test:windows": "node verify/windows-powershell-test.js",
-    "scan": "node bin/dcheck.js scan"
+    "selftest": "node verify/self-test.js && node verify/minimum-test.js && node verify/legacy-hooks-test.js && node verify/pem-regression-test.js",
+    "scan": "node bin/dcheck.js scan",
+    "test:legacy-hooks": "node verify/legacy-hooks-test.js"
   },
   "keywords": [
     "security",
@@ -46,7 +45,6 @@
     "bin",
     "core",
     "checks",
-    "hooks",
     "catalog",
     "protect",
     "ai",

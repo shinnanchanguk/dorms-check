@@ -36,8 +36,8 @@ export async function checkLegalPages(mainRes, url, req) {
   const policy = await findPage(url, body, POLICY_HINTS, POLICY_PATHS, req);
   results.push({
     id: 'legal.privacy-policy',
-    status: policy.found ? 'pass' : 'fail',
-    observed: policy.found ? `개인정보처리방침 발견(${policy.via}: ${policy.where})` : '개인정보처리방침 페이지/링크 없음',
+    status: policy.found ? 'pass' : 'unknown',
+    observed: policy.found ? `개인정보처리방침 발견(${policy.via}: ${policy.where})` : '받은 HTML과 확인한 주소에서 방침을 찾지 못했습니다. 앱 안 팝업이나 로그인 뒤 화면은 확인하지 않았습니다.',
     evidence: policy,
   });
 

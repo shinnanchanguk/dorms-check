@@ -1,65 +1,53 @@
-// 정보 유출: 민감 파일 정적 노출 + 소스맵 + 스택트레이스 + mixed content.
-// .env 오탐 수정: HTTP 200 여부가 아니라 '본문 시그니처'로 판정한다.
-// (SPA fallback 은 모든 경로에 200+HTML 을 주므로 200 만으로는 못 가른다.)
+// Public exposure requires an actual credential or high-confidence private data.
 import { probePath } from '../../core/http.js';
-
+import { classifySensitiveExposure } from '../../core/minimum-policy.js';
 const SECRET_PATHS = ['/.env', '/.env.local', '/.env.production', '/.git/config', '/.git/HEAD'];
 const CONFIG_PATHS = ['/next.config.js', '/vercel.json', '/.npmrc'];
-
-// 본문이 진짜 그 파일인지 시그니처로 확인.
-function looksLikeEnv(body) {
-  if (!body) return false;
-  const lines = body.split(/\r?\n/).filter(Boolean).slice(0, 40);
-  const kv = lines.filter(l => /^[A-Z0-9_]{2,}=/.test(l.trim()));
-  return kv.length >= 2; // KEY=value 라인이 2개 이상이면 진짜 .env
-}
-function looksLikeGitConfig(body) {
-  return !!body && /\[core\]|\[remote\b|\[branch\b/.test(body);
-}
-function looksLikeGitHead(body) {
-  return !!body && /^ref:\s+refs\//.test(body.trim());
-}
 function looksLikeHtml(body) {
   return !!body && /<!doctype html|<html[\s>]/i.test(body.slice(0, 500));
 }
-
 export async function checkExposure(mainRes, url, request) {
   const results = [];
-
-  // 시크릿 경로 노출 — 단일 집계 항목(info.secret-exposed). 본문 시그니처로 진짜 노출만 판정.
   const probed = [];
   const exposedPaths = [];
-  for (const p of SECRET_PATHS) {
-    const r = await probePath(url, p, { req: request });
-    let exposed = false;
-    if (r.status === 200 && !looksLikeHtml(r.body)) {
-      if (p.startsWith('/.env')) exposed = looksLikeEnv(r.body);
-      else if (p === '/.git/config') exposed = looksLikeGitConfig(r.body);
-      else if (p === '/.git/HEAD') exposed = looksLikeGitHead(r.body);
-      else exposed = r.body.length > 0;
-    }
-    probed.push({ path: p, httpStatus: r.status, exposed });
-    if (exposed) exposedPaths.push(p);
-  }
-  results.push({
-    id: 'info.secret-exposed',
-    status: exposedPaths.length ? 'fail' : 'pass',
-    observed: exposedPaths.length
-      ? `민감 파일 노출 확인(본문 시그니처 일치): ${exposedPaths.join(', ')}`
-      : '민감 파일(.env/.git) 노출 없음',
-    evidence: { probed, exposedPaths },
-  });
-
-  // 설정 파일 노출(민감도 낮음, medium)
   const configExposed = [];
-  for (const p of CONFIG_PATHS) {
+  const mainExposure = classifySensitiveExposure(mainRes.body || '', { path: new URL(mainRes.finalUrl || url).pathname });
+  if (mainExposure.confirmed) exposedPaths.push(new URL(mainRes.finalUrl || url).pathname);
+  let kind = mainExposure.kind;
+  let incomplete = false;
+  for (const p of [...SECRET_PATHS, ...CONFIG_PATHS]) {
     const r = await probePath(url, p, { req: request });
-    if (r.status === 200 && !looksLikeHtml(r.body) && r.body.length > 0) configExposed.push(p);
+    const available = r.status >= 200 && r.status < 300;
+    const exposure = available ? classifySensitiveExposure(r.body, { path: p }) : { confirmed: false };
+    const failed = !r.status || r.status >= 500 || r.status === 429;
+    incomplete ||= failed;
+    probed.push({ path: p, httpStatus: r.status, exposed: exposure.confirmed, checked: !failed });
+    if (exposure.confirmed) { exposedPaths.push(p); kind ||= exposure.kind; }
+    else if (available && r.body && !looksLikeHtml(r.body)) configExposed.push(p);
   }
+  const base = new URL(mainRes.finalUrl || url);
+  const scripts = [...(mainRes.body || '').matchAll(/<script\b[^>]*src=["']([^"']+)["']/gi)].slice(0, 6);
+  for (const match of scripts) {
+    let script;
+    try { script = new URL(match[1], base); } catch { continue; }
+    if (script.origin !== base.origin) continue;
+    const r = await request(script.href, { method: 'GET', redirect: 'follow', maxBody: 2 * 1024 * 1024 });
+    const checked = r.status >= 200 && r.status < 300;
+    const exposure = checked ? classifySensitiveExposure(r.body, { path: script.pathname }) : { confirmed: false };
+    incomplete ||= !checked;
+    probed.push({ path: script.pathname, httpStatus: r.status, exposed: exposure.confirmed, checked });
+    if (exposure.confirmed) { exposedPaths.push(script.pathname); kind ||= exposure.kind; }
+  }
+  const confirmed = exposedPaths.length > 0;
   results.push({
-    id: 'info.config-exposed',
-    status: configExposed.length ? 'fail' : 'pass',
-    observed: configExposed.length ? `설정 파일 노출: ${configExposed.join(', ')}` : '설정 파일 비노출',
+    id: 'info.secret-exposed', status: confirmed ? 'fail' : (incomplete ? 'unknown' : 'pass'),
+    observed: confirmed ? `비공개 인증정보 또는 민감 자료 노출 확인: ${exposedPaths.join(', ')}`
+      : (incomplete ? '받은 본문에서 민감정보가 확인되지 않았습니다. 일부 추가 경로는 확인하지 못했습니다.' : '확인한 본문과 경로에서 비공개 인증정보가 발견되지 않았습니다.'),
+    evidence: { probed, exposedPaths, mainBodyChecked: true, confirmedSensitiveExposure: confirmed, ...(kind ? { kind } : {}) },
+  });
+  results.push({
+    id: 'info.config-exposed', status: configExposed.length ? 'info' : (incomplete ? 'unknown' : 'pass'),
+    observed: configExposed.length ? `공개된 설정 형태의 자료가 있습니다. 공개 의도를 확인해 주세요: ${configExposed.join(', ')}` : '추가로 확인된 설정 자료가 없습니다.',
     evidence: { exposed: configExposed },
   });
 

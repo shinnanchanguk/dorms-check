@@ -1,7 +1,6 @@
 // 하드코딩 시크릿 정적 검출(로컬 코드). 결정적: 정규식 매치 위치(파일:라인) 를 증거로.
 import path from 'node:path';
 import { walk, readTextSafe } from '../../core/util.js';
-import { readExactDeploymentFile } from './exact-file.js';
 
 const CODE_EXT = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.env', '.json', '.yml', '.yaml', '.py', '.rb', '.go'];
 
@@ -32,38 +31,23 @@ function findServiceRoleJwt(text) {
   return -1;
 }
 
-export function checkSecrets(root, options = {}) {
-  const exactDeploymentFiles = Array.isArray(options.files);
-  const files = exactDeploymentFiles ? options.files : walk(root, { exts: CODE_EXT, maxFiles: 5000 });
+export function checkSecrets(root) {
+  const files = walk(root, { exts: CODE_EXT, maxFiles: 5000 });
   const hits = [];
-  for (const entry of files) {
-    const exact = exactDeploymentFiles ? readExactDeploymentFile(root, entry) : null;
-    const f = exactDeploymentFiles ? exact.file : entry;
-    // .env.example / 샘플은 제외
+  let readFailures = 0;
+  for (const f of files) {
     const base = path.basename(f).toLowerCase();
-    if (!exactDeploymentFiles && /example|sample|template/.test(base)) continue;
-    const text = exactDeploymentFiles ? exact.text : readTextSafe(f);
-    if (text === null) {
-      if (exactDeploymentFiles) throw new Error(`${f} 배포 입력을 시크릿 검사 중 읽지 못했습니다.`);
-      continue;
-    }
+    if (/example|sample|template/.test(base)) continue;
+    const text = readTextSafe(f);
+    if (text === null) { readFailures++; continue; }
     if (!text) continue;
     const serviceRoleJwtIndex = findServiceRoleJwt(text);
     if (serviceRoleJwtIndex >= 0) {
       hits.push({
-        file: exactDeploymentFiles ? exact.relativePath : path.relative(root, f),
+        file: path.relative(root, f),
         line: text.slice(0, serviceRoleJwtIndex).split(/\r?\n/).length,
         kind: 'Supabase service_role JWT payload',
       });
-    }
-    if (exactDeploymentFiles) {
-      for (const p of SECRET_PATTERNS) {
-        if (p.re.test(text) && (!p.extra || p.extra.test(text))) {
-          const index = text.search(p.re);
-          hits.push({ file: exact.relativePath, line: index < 0 ? 1 : text.slice(0, index).split(/\r?\n/).length, kind: p.name });
-        }
-      }
-      continue;
     }
     const lines = text.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
@@ -78,8 +62,8 @@ export function checkSecrets(root, options = {}) {
   }
   return [{
     id: 'code.hardcoded-secret',
-    status: hits.length ? 'fail' : 'pass',
+    status: hits.length ? 'fail' : (readFailures || !files.length ? 'unknown' : 'pass'),
     observed: hits.length ? `하드코딩된 것으로 보이는 시크릿 ${hits.length}건` : '하드코딩 시크릿 미검출',
-    evidence: { hits: hits.slice(0, 50) },
+    evidence: { hits: hits.slice(0, 50), inspectedFiles: files.length - readFailures, readFailures },
   }];
 }

@@ -42,6 +42,8 @@ export async function request(url, {
     });
     const hdrs = headersToObject(res.headers);
     let body = '';
+    let bodyRead = false;
+    let bodyTruncated = false;
     if (captureBody && method !== 'HEAD') {
       const reader = res.body?.getReader?.();
       if (reader) {
@@ -50,13 +52,18 @@ export async function request(url, {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          const remaining = Math.max(0, maxBody - total);
+          body += dec.decode(value.subarray(0, remaining), { stream: true });
           total += value.length;
-          if (total <= maxBody) body += dec.decode(value, { stream: true });
-          if (total > maxBody) { try { await reader.cancel(); } catch { /* ignore */ } break; }
+          if (total > maxBody) { bodyTruncated = true; try { await reader.cancel(); } catch { /* ignore */ } break; }
         }
+        body += dec.decode();
       } else {
-        try { body = (await res.text()).slice(0, maxBody); } catch { body = ''; }
+        const text = await res.text();
+        bodyTruncated = text.length > maxBody;
+        body = text.slice(0, maxBody);
       }
+      bodyRead = true;
     }
     return {
       ok: true,
@@ -65,6 +72,8 @@ export async function request(url, {
       redirected: res.redirected,
       finalUrl: res.url || url,
       body,
+      bodyRead,
+      bodyTruncated,
       ms: Date.now() - started,
     };
   } catch (e) {
@@ -75,7 +84,10 @@ export async function request(url, {
       redirected: false,
       finalUrl: url,
       body: '',
+      bodyRead: false,
+      bodyTruncated: false,
       error: String(e && e.message ? e.message : e),
+      errorCode: String(e?.cause?.code || e?.code || ''),
       aborted: ac.signal.aborted,
       ms: Date.now() - started,
     };

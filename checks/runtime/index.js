@@ -1,18 +1,15 @@
-// 능동 런타임 프로브 오케스트레이터 — CLI와 도름스 서버가 공유.
-// 코드 항목을 '모델 판단' 없이 실제 요청으로 실측한다(할루시네이션 방지).
+// Optional runtime observations share the caller's deadline and fetch boundary.
 import { rlsProbe } from './rls-probe.js';
 import { firebaseProbe } from './firebase-probe.js';
 import { endpointAuthProbe } from './endpoint-auth.js';
-
+import { normalizeSecurityItems } from '../../core/minimum-policy.js';
 export async function runRuntimeProbe(rawUrl, opts = {}) {
-  const items = [];
-  try { items.push(...await rlsProbe(rawUrl, opts)); }
-  catch (e) { items.push({ id: 'code.rls.anon-read', status: 'na', observed: `RLS 프로브 실패: ${e.message}`, evidence: { probeError: true } }); }
-  try { items.push(...await firebaseProbe(rawUrl, opts)); }
-  catch (e) { items.push({ id: 'code.firebase.public-read', status: 'na', observed: `Firebase 프로브 실패: ${e.message}`, evidence: { probeError: true } }); }
-  try { items.push(...await endpointAuthProbe(rawUrl, opts)); }
-  catch (e) { items.push({ id: 'code.endpoint.unauth', status: 'na', observed: `엔드포인트 프로브 실패: ${e.message}`, evidence: {} }); }
-  return { items };
+  const options = { ...opts, deadlineAt: opts.deadlineAt ?? Date.now() + (opts.totalTimeout || 45000) };
+  const probes = [[rlsProbe, 'code.rls.anon-read'], [firebaseProbe, 'code.firebase.public-read'], [endpointAuthProbe, 'code.endpoint.unauth']];
+  const groups = await Promise.all(probes.map(async ([probe, id]) => {
+    try { return await probe(rawUrl, options); }
+    catch { return [{ id, status: 'unknown', observed: '내부 접근 권한을 확인하지 못했습니다.', evidence: { probeError: true } }]; }
+  }));
+  return { items: normalizeSecurityItems(groups.flat()) };
 }
-
 export { rlsProbe, firebaseProbe, endpointAuthProbe };

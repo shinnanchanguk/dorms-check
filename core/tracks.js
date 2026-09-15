@@ -5,12 +5,12 @@
 //   initNotes/submitNotes(CLI 안내), alwaysInPayload(v1 호환: 미실행이어도 payload.tracks 에 null 로 유지) }
 // 새 트랙은 카탈로그 파일을 만들고 여기 TRACKS 에 정의 하나를 추가하면
 // catalog/score/report/payload/session/CLI 가 전부 레지스트리 경유로 따라온다.
-import path from 'node:path';
 import { SECURITY_ITEMS } from '../catalog/security.js';
 import { EDZIP_ITEMS, EDZIP_CASE_QUESTIONS } from '../catalog/edzip.js';
 import { PROTECTION_ITEMS } from '../catalog/protection.js';
 import { runProtectionScan, pendingProtectionSeeds } from '../checks/protection/index.js';
 import { color, log } from './util.js';
+import { evaluateMinimumSecurity } from './minimum-policy.js';
 
 // ── 항목 인덱스(카탈로그 SSOT) ──
 const byId = new Map();
@@ -38,19 +38,6 @@ function fill(text, stack) {
   return (text || '').replaceAll('{stack}', stack || '내');
 }
 
-function grade(score) {
-  if (score >= 97) return 'A+';
-  if (score >= 93) return 'A';
-  if (score >= 90) return 'A-';
-  if (score >= 87) return 'B+';
-  if (score >= 83) return 'B';
-  if (score >= 80) return 'B-';
-  if (score >= 75) return 'C+';
-  if (score >= 70) return 'C';
-  if (score >= 60) return 'D';
-  return 'F';
-}
-
 function evidenceLine(r) {
   const e = r.evidence || {};
   if (e.value) return `헤더값: ${e.value}`;
@@ -61,50 +48,14 @@ function evidenceLine(r) {
   return '';
 }
 
-// ── 채점기 (기존 core/score.js 구현을 그대로 이전 — 로직 불변) ──
-
-// results: [{id, status, observed, evidence}], bonus: [{id, points}]
-export function scoreSecurity(results, bonus = []) {
-  let score = 100;
-  const failing = [];
+// Legacy numeric fields remain nullable for callers that have not migrated yet.
+export function scoreSecurity(results, bonus = [], context = {}) {
+  const items = (results || []).filter(item => catalogItem(item.id)?.track === 'security' || item.id === 'meta.public-surface' || item.id === 'security.malicious');
+  const evaluated = evaluateMinimumSecurity({ ...(context.scan || {}), items }, { malicious: context.malicious === true });
+  const blockingFails = evaluated.blockingFails;
   const failingBySeverity = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-  const byId = new Map((results || []).filter(result => result?.id).map(result => [result.id, result]));
-  for (const r of byId.values()) {
-    const cat = catalogItem(r.id);
-    if (!cat || cat.track !== 'security') continue;
-    const permittedNa = r.status === 'na'
-      && ['code.rls.anon-read', 'code.firebase.public-read'].includes(r.id)
-      && r.evidence?.providerDetected === false;
-    const unresolvedBlocking = cat.gate
-      && SEVERITY_RANK[cat.severity] >= SEVERITY_RANK.high
-      && r.status !== 'pass'
-      && !permittedNa;
-    if (r.status === 'fail' || unresolvedBlocking) {
-      score -= cat.weight || 0;
-      failingBySeverity[cat.severity] = (failingBySeverity[cat.severity] || 0) + 1;
-      if (cat.gate) failing.push({ id: r.id, severity: cat.severity, title: cat.title, missing: false });
-    }
-  }
-  // An absent required server result is not evidence of safety. This prevents an
-  // empty or truncated scan from receiving 100/A+ and eligible=true.
-  for (const cat of SECURITY_ITEMS) {
-    if (!cat.gate || !cat.serverVerifiable || SEVERITY_RANK[cat.severity] < SEVERITY_RANK.high || byId.has(cat.id)) continue;
-    score -= cat.weight || 0;
-    failingBySeverity[cat.severity] = (failingBySeverity[cat.severity] || 0) + 1;
-    failing.push({ id: cat.id, severity: cat.severity, title: cat.title, missing: true });
-  }
-  for (const b of bonus) score += b.points || 0;
-  score = Math.max(0, Math.min(100, score));
-
-  // 마크 게이트: gate 항목 중 critical/high fail 이 0 이어야 자격.
-  const blockingFails = failing.filter(f => f.severity === 'critical' || f.severity === 'high');
-  return {
-    score,
-    grade: grade(score),
-    eligible: blockingFails.length === 0,
-    blockingFails,
-    failingBySeverity,
-  };
+  for (const item of blockingFails) failingBySeverity[item.severity]++;
+  return { ...evaluated, blockingFails, score: null, grade: null, failingBySeverity };
 }
 
 // edzip: gate 항목 전부 pass/na 이고 개인정보처리방침(legal.privacy-policy)이 존재해야 자격.
@@ -127,72 +78,36 @@ export function scoreEdzip(results) {
 // ── 트랙 정의 ──
 
 const securityTrack = {
-  id: 'security',
-  name: '보안 검토',
-  description: '보안 헤더·전송 보안·정보 유출·CORS·RLS 실측·코드 시크릿 점검',
-  items: SECURITY_ITEMS,
-  alwaysInPayload: true, // v1 호환: 미실행이어도 payload.tracks.security = null 유지
-
-  score(results, ctx = {}) {
-    return scoreSecurity(results, ctx.bonus || []);
-  },
-
-  reportSection({ result, results, stack }) {
-    const security = result;
-    const lines = [];
-    lines.push(`## 보안 검토`);
-    lines.push(`- 점수: ${security.score}/100 (${security.grade})`);
-    lines.push(`- 마크 자격(critical/high 0): ${security.eligible ? '충족' : '미충족'}`);
-    lines.push('');
-    lines.push(`### 통과 항목(증빙)`);
-    for (const r of results.filter(x => x.status === 'pass')) {
-      const cat = catalogItem(r.id); if (!cat || cat.track !== 'security') continue;
-      lines.push(`- [v] ${cat.title} — ${evidenceLine(r)}`);
-    }
-    lines.push('');
-    const unmet = results.filter(x => x.status === 'fail' && (catalogItem(x.id)?.track === 'security'));
-    if (unmet.length) {
-      lines.push(`### 아직 고쳐야 할 항목`);
-      unmet.sort((a, b) => (SEVERITY_RANK[catalogItem(b.id).severity] - SEVERITY_RANK[catalogItem(a.id).severity]));
-      for (const r of unmet) {
-        const cat = catalogItem(r.id);
-        lines.push(`#### [${cat.severity}] ${cat.title}`);
-        lines.push(`- 무엇: ${fill(cat.plain, stack)}`);
-        lines.push(`- 지금 상태: ${r.observed}`);
-        if (cat.aiFix) lines.push(`- AI에게 이렇게 시켜주세요: \`${fill(cat.aiFix, stack)}\``);
-        lines.push('');
-      }
-    }
-    const info = results.filter(x => x.status === 'info' && catalogItem(x.id)?.track === 'security');
-    if (info.length) {
-      lines.push(`### 참고(검토 권장, 마크 게이트 아님)`);
-      for (const r of info) lines.push(`- ${catalogItem(r.id).title}: ${r.observed}`);
+  id: 'security', name: '보안 최소 점검',
+  description: '공개 화면에서 확인할 수 있는 기본 연결과 민감정보 노출 점검',
+  items: SECURITY_ITEMS, alwaysInPayload: true,
+  score(results, ctx = {}) { return scoreSecurity(results, ctx.bonus || [], ctx); },
+  reportSection({ result }) {
+    const labels = { eligible: '공개 화면 최소 점검 완료', blocked: '확인된 위험 있음', unavailable: '공개 화면 점검 미완료' };
+    const lines = ['## 보안 최소 점검', '', `- 결과: ${labels[result.outcome]}`, `- 확인 ${result.coverage.checked}건 · 미확인 ${result.coverage.unverified}건 · 해당 없음 ${result.coverage.notApplicable}건`,
+      '- 점검 범위 밖의 내부 기능과 자료까지 안전하다는 뜻은 아닙니다.', ''];
+    for (const [title, statuses] of [['확인된 위험', ['fail']], ['보완하면 좋은 항목', ['info']], ['확인하지 못한 항목', ['unknown']], ['확인한 항목', ['pass']], ['해당 없는 항목', ['na']]]) {
+      const group = result.items.filter(item => statuses.includes(item.status));
+      if (!group.length) continue;
+      lines.push(`### ${title}`, '');
+      for (const item of group) lines.push(`- ${catalogItem(item.id)?.title || '공개 화면'}: ${item.observed || evidenceLine(item)}`);
       lines.push('');
     }
     return lines;
   },
-
-  summaryLines({ result, results, stack }) {
-    const security = result;
-    log.title(`보안 검토  ${security.score}/100 (${security.grade})  마크자격: ${security.eligible ? color.green('충족') : color.yellow('미충족')}`);
-    const unmet = results.filter(x => x.status === 'fail' && catalogItem(x.id)?.track === 'security');
-    for (const r of unmet) {
-      const cat = catalogItem(r.id);
-      log.plain(`  ${color.red('x')} [${cat.severity}] ${cat.title} — ${fill(cat.plain, stack)}`);
+  summaryLines({ result }) {
+    const labels = { eligible: '공개 화면 최소 점검 완료', blocked: '확인된 위험 있음', unavailable: '공개 화면 점검 미완료' };
+    log.title(`보안 최소 점검: ${labels[result.outcome]}`);
+    log.plain(`  확인 ${result.coverage.checked}건 · 미확인 ${result.coverage.unverified}건 · 해당 없음 ${result.coverage.notApplicable}건`);
+    for (const item of result.items.filter(item => item.status !== 'pass' && item.status !== 'na')) {
+      log.plain(`  [${item.status === 'fail' ? '위험 확인' : item.status === 'unknown' ? '미확인' : '권고'}] ${catalogItem(item.id)?.title || '공개 화면'}: ${item.observed}`);
     }
   },
-
   payloadSection({ result, config }) {
-    return { claimed: config.tracks?.includes('security'), score: result.score, grade: result.grade, eligible: result.eligible };
+    return { claimed: config.tracks?.includes('security'), score: null, grade: null, eligible: result.eligible, outcome: result.outcome, coverage: result.coverage, policyVersion: result.policyVersion };
   },
-
-  roundSummary(result) {
-    return { score: result.score, grade: result.grade, eligible: result.eligible, blocking: result.blockingFails.map(f => f.id) };
-  },
-
-  passed(result) {
-    return result.eligible;
-  },
+  roundSummary(result) { return { score: null, grade: null, eligible: result.eligible, outcome: result.outcome, coverage: result.coverage, blocking: result.blockingFails.map(item => item.id) }; },
+  passed(result) { return result.eligible; },
 };
 
 const edzipTrack = {
@@ -266,13 +181,12 @@ const edzipTrack = {
   },
 
   // submit 시 트랙별 추가 안내(기존 bin 인라인 로직 이전)
-  submitNotes({ root, outDir }) {
-    log.title('학운위 마크: 방침을 앱 안에서만 보여주는 앱이라면');
+  submitNotes() {
+    log.title('학운위 마크: 개인정보처리방침은 공개 주소로 열어 주세요');
     log.plain('  도름스는 앱 주소를 바깥에서 열어 개인정보처리방침 글자를 읽습니다. 방침을 별도 주소 없이');
     log.plain('  앱 안 팝업으로만 띄우면(리액트·Vite 같은 한 장짜리 앱) 바깥에서는 빈 화면이라 못 읽을 수 있어요.');
-    log.plain('  "개인정보처리방침 필수 항목이 확인되지 않는다"가 뜨면 둘 중 하나로 푸세요.');
-    log.plain(`  · 방침을 /privacy 같은 주소로도 열리게 두기(권장)`);
-    log.plain(`  · 방금 만든 ${path.relative(root, path.join(outDir, 'report.json'))} 를 신청 화면의 "dorms-check 결과 올리기"에 올리기`);
+    log.plain('  "개인정보처리방침 필수 항목이 확인되지 않는다"가 뜨면 /privacy 같은 공개 주소로도 열리게 해 주세요.');
+    log.plain('  report.json은 본인 보관용 점검 증빙이며, 인증 판정을 대신하지 않습니다.');
   },
 };
 

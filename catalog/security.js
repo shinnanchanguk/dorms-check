@@ -4,7 +4,7 @@
 //   serverVerifiable(도름스 서버가 재검증 가능한 결정적 항목인지).
 // {stack} 토큰은 report 렌더 시 실제 스택으로 치환.
 
-export const SECURITY_ITEMS = [
+const ITEMS = [
   // ── 보안 응답 헤더 ──
   { id: 'sec.header.csp', group: '보안 헤더', title: 'Content-Security-Policy', severity: 'high', weight: 12, gate: true, serverVerifiable: true,
     plain: '외부에서 내 페이지에 악성 스크립트를 끼워넣는 공격(XSS)을 막는 기본 규칙이 없어요.',
@@ -43,8 +43,8 @@ export const SECURITY_ITEMS = [
     aiFix: '세션/인증 쿠키에 HttpOnly 와 Secure, SameSite=Lax(또는 Strict) 플래그를 붙여줘.' },
 
   // ── 정보 유출 ──
-  { id: 'info.secret-exposed', group: '정보 유출', title: '민감 파일 노출(.env/.git)', severity: 'critical', weight: 15, gate: true, serverVerifiable: true,
-    plain: '.env 나 .git 같은 비밀 파일이 인터넷에 그대로 노출됐어요. 키·비밀번호가 새는 심각한 문제예요.',
+  { id: 'info.secret-exposed', group: '정보 유출', title: '비공개 인증정보·민감 자료 노출', severity: 'critical', weight: 15, gate: true, serverVerifiable: true,
+    plain: '공개 응답에서 비공개 인증정보나 민감 자료를 확인했어요.',
     aiFix: "배포에서 .env 와 .git 이 공개되지 않도록 해줘. 노출된 키·토큰은 '즉시 재발급(rotate)'하고, 배포 산출물에서 해당 파일을 제외해줘." },
   { id: 'info.config-exposed', group: '정보 유출', title: '설정 파일 노출', severity: 'medium', weight: 4, gate: false, serverVerifiable: true,
     plain: 'next.config·vercel.json 같은 설정 파일이 직접 열려요. 내부 구조가 노출돼요.',
@@ -69,7 +69,7 @@ export const SECURITY_ITEMS = [
     plain: '로그인하지 않은 사람이 데이터베이스의 개인정보를 그냥 읽을 수 있어요. 학생·회원 정보가 새는 가장 위험한 문제예요. (Supabase 를 쓰는 앱은 RLS 를 실제로 찔러 확인해요.)',
     aiFix: 'Supabase 의 모든 테이블에 RLS(행 수준 보안)를 켜고, 개인정보가 든 테이블은 본인/권한 있는 사용자만 읽도록 정책을 만들어줘. 공개해도 되는 테이블만 익명 읽기를 허용해줘. 익명 anon 키로 실제 접속해서 개인정보 행이 안 나오는지 다시 확인해줘.' },
   { id: 'code.firebase.public-read', group: '데이터 접근 권한', title: '익명 접근 차단(Firebase 규칙)', severity: 'critical', weight: 15, gate: true, serverVerifiable: true,
-    plain: '로그인하지 않은 사람이 Firebase 실시간 DB 의 데이터를 그냥 읽을 수 있어요. Supabase 가 아니어도 같은 위험이에요.',
+    plain: 'Firebase에 공개로 읽히는 경로가 있어요. 공개 자료인지 확인해 주세요.',
     aiFix: 'Firebase 실시간 DB 보안 규칙에서 최상위 읽기 권한(".read": true 등)을 끄고, 개인정보가 든 경로는 인증·권한이 있는 사용자만 읽도록 규칙을 세워줘. 규칙 배포 후 로그인 없이 /.json 이 막히는지 다시 확인해줘.' },
   { id: 'code.endpoint.unauth', group: '데이터 접근 권한', title: '미인증 API 접근', severity: 'high', weight: 8, gate: false, serverVerifiable: true,
     plain: '로그인 없이 호출해도 데이터를 돌려주는 API 후보가 있어요. 공개용이 아니면 인증을 걸어야 해요. (Supabase·Firebase 가 아닌 자체 백엔드도 이렇게 접근 권한을 확인해요.)',
@@ -106,3 +106,9 @@ export const SECURITY_ITEMS = [
   { id: 'legal.contact', group: '법적 표면', title: '연락처', severity: 'low', weight: 2, gate: false, serverVerifiable: true,
     plain: '문의할 연락처가 보이면 신뢰가 높아져요.', aiFix: '푸터 등에 문의 연락처(이메일)를 넣어줘.' },
 ];
+
+// Recommendations and uncertainty never become requirements merely because of severity.
+export const SECURITY_ITEMS = ITEMS.map(item => ({
+  ...item,
+  gate: ['sec.transport.ssl-valid', 'info.secret-exposed', 'code.rls.anon-read', 'code.firebase.public-read'].includes(item.id),
+}));

@@ -22,7 +22,7 @@ export function renderReportMd({ config, results, security, edzip, bonus, trackR
   lines.push(`- 스택: ${stack}`);
   lines.push(`- 점검 트랙: ${(config.tracks || []).join(', ')}`);
   lines.push('');
-  lines.push(`> 이 리포트는 dorms-check(코치)의 자체 점검 결과입니다. 최종 인증마크는 도름스 서버가 스스로 다시 검증해 발급하며, 이 리포트의 통과가 마크를 보장하지 않습니다.`);
+  lines.push(`> 이 리포트는 dorms-check(코치)의 자체 점검 결과입니다. 마크는 도름스가 공개 주소를 다시 확인해 발급합니다. 이 결과는 내부 기능까지 모두 안전하다는 뜻은 아닙니다.`);
   lines.push('');
 
   for (const t of TRACKS) {
