@@ -3,7 +3,7 @@
 아래 문장을 사용 중인 AI에 붙여넣고 앱 이름과 공개 주소를 알려주세요.
 
 ~~~text
-내가 만든 앱을 dorms-check로 최소 점검해줘. 앱 폴더에서 다음 명령을 같은 v0.3.0 릴리스로 실행해줘.
+내가 만든 앱을 dorms-check로 최소 점검해줘. 앱 폴더에서 다음 명령을 같은 v0.3.1 릴리스로 실행해줘.
 
 npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz detect
 npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz init --name "<내 앱 이름>" --url "<공개 주소>" --track security --confirm-ownership
