@@ -16,14 +16,14 @@ Council document readiness and official EDZIP verification have separate outcome
 
 ## Start
 
-Use Node.js 18 or newer. These examples pin the `v0.3.0` GitHub release. If your organization reviewed a particular commit, keep using that commit instead.
+Use Node.js 18 or newer. These examples pin the `v0.3.1` GitHub release. If your organization reviewed a particular commit, keep using that commit instead.
 
 ~~~bash
-npx -y github:shinnanchanguk/dorms-check#v0.3.0 detect
-npx -y github:shinnanchanguk/dorms-check#v0.3.0 init --name "My App" --url "https://my-app.example" --track security --confirm-ownership
-npx -y github:shinnanchanguk/dorms-check#v0.3.0 scan --url "https://my-app.example"
-npx -y github:shinnanchanguk/dorms-check#v0.3.0 status
-npx -y github:shinnanchanguk/dorms-check#v0.3.0 report
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz detect
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz init --name "My App" --url "https://my-app.example" --track security --confirm-ownership
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz scan --url "https://my-app.example"
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz status
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz report
 ~~~
 
 See [USE-WITH-AI.md](./USE-WITH-AI.md) for an assistant prompt. Before deployment, `scan --code-only` inspects local code and leaves public-response checks unknown.

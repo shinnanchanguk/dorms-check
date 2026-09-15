@@ -1,6 +1,6 @@
 {
   "name": "dorms-check",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "교사 앱의 공개 응답과 코드를 최소 점검하고 확인한 위험·권고·미확인을 알려주는 도구. 선택적으로 에듀집 서류와 앱 보호 계획을 준비한다.",
   "type": "module",
   "bin": {

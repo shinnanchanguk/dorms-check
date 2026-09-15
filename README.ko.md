@@ -16,14 +16,14 @@
 
 ## 시작하기
 
-Node.js 18 이상이 필요합니다. 아래 명령은 GitHub의 `v0.3.0` 릴리스를 받아 실행하는 예시입니다. 조직이나 교육 자료에서 검토한 커밋을 지정했다면 같은 커밋을 계속 사용하세요.
+Node.js 18 이상이 필요합니다. 아래 명령은 GitHub의 `v0.3.1` 릴리스를 받아 실행하는 예시입니다. 조직이나 교육 자료에서 검토한 커밋을 지정했다면 같은 커밋을 계속 사용하세요.
 
 ~~~bash
-npx -y github:shinnanchanguk/dorms-check#v0.3.0 detect
-npx -y github:shinnanchanguk/dorms-check#v0.3.0 init --name "내 앱" --url "https://my-app.example" --track security --confirm-ownership
-npx -y github:shinnanchanguk/dorms-check#v0.3.0 scan --url "https://my-app.example"
-npx -y github:shinnanchanguk/dorms-check#v0.3.0 status
-npx -y github:shinnanchanguk/dorms-check#v0.3.0 report
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz detect
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz init --name "내 앱" --url "https://my-app.example" --track security --confirm-ownership
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz scan --url "https://my-app.example"
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz status
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz report
 ~~~
 
 AI에게 맡기려면 [복사해 쓰는 프롬프트](./USE-WITH-AI.md)를 사용하세요. 배포 전에는 `scan --code-only`로 코드를 살펴볼 수 있습니다. 이 경우 공개 주소 검사는 미확인입니다.

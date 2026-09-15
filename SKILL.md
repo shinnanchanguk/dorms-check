@@ -15,7 +15,7 @@ description: 교사 앱의 공개 응답과 코드를 최소 점검하고 확인
 
 ## 점검
 
-`detect`, `init --track security`, `scan --url "<공개 주소>"`, `status`, `report` 순서로 사용합니다. 실행 예시는 [SETUP.md](./SETUP.md)에 있습니다. `v0.3.0` 릴리스 또는 사용자가 검토한 커밋을 고정합니다.
+`detect`, `init --track security`, `scan --url "<공개 주소>"`, `status`, `report` 순서로 사용합니다. 실행 예시는 [SETUP.md](./SETUP.md)에 있습니다. `v0.3.1` 릴리스 또는 사용자가 검토한 커밋을 고정합니다.
 
 읽지 못한 DB·방침·권한은 미확인으로 설명합니다. 필요한 근거가 생겼을 때만 다시 점검하세요. 특정 호스팅, 방침 URL, HTML 형태를 마크의 필수 조건으로 요구하지 않습니다. 마크별 확인 범위를 분리해 설명합니다.
 
