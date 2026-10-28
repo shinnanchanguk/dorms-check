@@ -5,7 +5,7 @@ dorms-check 0.3.0은 전역 훅 설치와 배포 차단 기능을 제거했습�
 ## 상태 확인
 
 ~~~bash
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz hooks status --json
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz hooks status --json
 ~~~
 
 이 명령은 설정을 읽기만 합니다. Codex·Claude·Gemini·Antigravity의 현재 사용자 지정 경로와 기본 경로를 확인합니다. 예전에 사용했지만 지금은 지정하지 않는 별도 경로나 다른 호스트의 설치는 자동으로 찾지 못할 수 있습니다.
@@ -13,7 +13,7 @@ npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.ta
 ## 해제
 
 ~~~bash
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz hooks uninstall --json
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz hooks uninstall --json
 ~~~
 
 `--agents codex,claude`처럼 일부만 선택할 수도 있습니다. 선택한 설정을 모두 읽어 구조를 확인한 뒤 원본을 `~/.dorms-check/backups/legacy-hooks-...`에 백업합니다. 출력의 `backup` 값이 원본 위치입니다.

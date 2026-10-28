@@ -3,13 +3,13 @@
 아래 문장을 사용 중인 AI에 붙여넣고 앱 이름과 공개 주소를 알려주세요.
 
 ~~~text
-내가 만든 앱을 dorms-check로 최소 점검해줘. 앱 폴더에서 다음 명령을 같은 v0.3.1 릴리스로 실행해줘.
+내가 만든 앱을 dorms-check로 최소 점검해줘. 앱 폴더에서 다음 명령을 같은 v0.3.2 릴리스로 실행해줘.
 
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz detect
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz init --name "<내 앱 이름>" --url "<공개 주소>" --track security --confirm-ownership
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz scan --url "<공개 주소>"
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz status
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz report
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz detect
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz init --name "<내 앱 이름>" --url "<공개 주소>" --track security --confirm-ownership
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz scan --url "<공개 주소>"
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz status
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz report
 
 기존 설정이 있으면 내용을 먼저 읽고 임의로 덮어쓰지 마. init은 설정 파일을 만들고 scan은 검사 결과·보고서·이력을 .dorms-check에 저장해도 돼. 앱 소스를 바꾸는 작업이 필요하면 실제 문제와 변경 내용을 먼저 설명해줘.
 

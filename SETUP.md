@@ -4,10 +4,10 @@
 
 Node.js 18 이상이 필요합니다. 명령을 실행하면 점검 도구와 문서 생성에 필요한 패키지를 내려받습니다. 점검 대상 프로젝트의 의존성은 바꾸지 않습니다.
 
-아래 예시는 GitHub 릴리스 `v0.3.1`을 지정합니다. 검토한 커밋이 따로 있으면 릴리스 태그 대신 그 커밋을 쓰세요. 이름이 같은 다른 패키지를 대신 설치하거나 움직이는 기본 브랜치를 강제하지 않습니다.
+아래 예시는 GitHub 릴리스 `v0.3.2`을 지정합니다. 검토한 커밋이 따로 있으면 릴리스 태그 대신 그 커밋을 쓰세요. 이름이 같은 다른 패키지를 대신 설치하거나 움직이는 기본 브랜치를 강제하지 않습니다.
 
 ~~~bash
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz detect
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz detect
 ~~~
 
 소스를 직접 확인하며 사용하려면 릴리스를 내려받아 의존성을 설치한 뒤 실행합니다.
@@ -25,7 +25,7 @@ node bin/dcheck.js help
 
 ## 기본 명령
 
-아래 표의 `dcheck`는 `npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz`의 짧은 표기입니다.
+아래 표의 `dcheck`는 `npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz`의 짧은 표기입니다.
 
 | 명령 | 하는 일 |
 | --- | --- |

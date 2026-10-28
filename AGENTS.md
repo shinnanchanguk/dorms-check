@@ -4,7 +4,7 @@ Claude·Codex·Gemini·Cursor 등에서 같은 점검 흐름을 사용합니다.
 
 ## 기본 흐름
 
-1. 사용자가 운영하는 앱 폴더에서 `npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz detect`로 프로젝트 구성을 확인합니다.
+1. 사용자가 운영하는 앱 폴더에서 `npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz detect`로 프로젝트 구성을 확인합니다.
 2. `init --name "<앱>" --url "<공개 주소>" --track security --confirm-ownership`으로 점검 설정을 만듭니다. 기존 설정은 임의로 덮어쓰지 않습니다.
 3. `scan --url "<공개 주소>"`를 실행하고 `status`와 `report`로 결과를 읽습니다. 위 `npx` 명령 뒤에 각 명령을 붙여 같은 버전을 사용하세요.
 4. 확인한 문제, 개선 권고, 미확인을 구분해 설명합니다. 사용자가 요청한 코드 보완이나 추가 근거가 있을 때 재검사합니다. 모든 항목을 통과시키는 반복 작업을 요구하지 않습니다.

@@ -16,14 +16,14 @@
 
 ## 시작하기
 
-Node.js 18 이상이 필요합니다. 아래 명령은 GitHub의 `v0.3.1` 릴리스를 받아 실행하는 예시입니다. 조직이나 교육 자료에서 검토한 커밋을 지정했다면 같은 커밋을 계속 사용하세요.
+Node.js 18 이상이 필요합니다. 아래 명령은 GitHub의 `v0.3.2` 릴리스를 받아 실행하는 예시입니다. 조직이나 교육 자료에서 검토한 커밋을 지정했다면 같은 커밋을 계속 사용하세요.
 
 ~~~bash
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz detect
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz init --name "내 앱" --url "https://my-app.example" --track security --confirm-ownership
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz scan --url "https://my-app.example"
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz status
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.1.tar.gz report
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz detect
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz init --name "내 앱" --url "https://my-app.example" --track security --confirm-ownership
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz scan --url "https://my-app.example"
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz status
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz report
 ~~~
 
 AI에게 맡기려면 [복사해 쓰는 프롬프트](./USE-WITH-AI.md)를 사용하세요. 배포 전에는 `scan --code-only`로 코드를 살펴볼 수 있습니다. 이 경우 공개 주소 검사는 미확인입니다.
@@ -45,6 +45,7 @@ AI에게 맡기려면 [복사해 쓰는 프롬프트](./USE-WITH-AI.md)를 사�
 기본 점검은 `security`입니다. `--track`으로 필요한 기능을 쉼표로 골라 실행할 수 있습니다.
 
 - `security`: 공개 응답, HTTPS, 노출된 비밀정보, 공개 데이터 접근, 로컬 코드를 점검합니다.
+  Supabase 앱은 학교 개인정보 자체점검표 항목(비밀번호 기준, 주민번호·비밀번호 평문 저장, 로그인 없이 수정·삭제가 열린 DB 규칙, 업로드 용량·형식 제한)도 마이그레이션과 설정 파일로 살펴 권고로 알려줍니다. 2단계 인증·자동 로그아웃·접속기록 보관처럼 코드로 확정할 수 없는 항목은 흔적만 참고로 보여줍니다.
 - `edzip`: 제출 서류를 준비합니다. `edzip prepare`의 계획과 질문을 확인한 뒤 승인한 계획 해시와 `--confirm-apply`로 HWPX·PDF·Markdown 서류를 만듭니다. 에듀집 확인 완료 뒤에는 `edzip council`로 내부 기안문과 학운위 안건문을 만듭니다. [서류 작성 안내](./skills/edzip-autopilot/SKILL.md)를 따르세요.
 - `protection`: 권리와 이용 범위를 묻고 앱 보호 변경 계획을 세웁니다. `protect apply`는 승인한 계획 해시와 `--confirm-apply`가 있을 때 백업 후 적용합니다. `verify`로 확인하고 필요하면 `protect restore`로 복원합니다.
 
