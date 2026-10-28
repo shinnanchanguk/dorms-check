@@ -13,7 +13,7 @@
   },
   "scripts": {
     "assets:internal-approval": "node scripts/generate-internal-approval-template.mjs",
-    "selftest": "node verify/self-test.js && node verify/minimum-test.js && node verify/legacy-hooks-test.js && node verify/pem-regression-test.js",
+    "selftest": "node verify/self-test.js && node verify/minimum-test.js && node verify/legacy-hooks-test.js && node verify/pem-regression-test.js && node verify/school-selfcheck.test.js",
     "scan": "node bin/dcheck.js scan",
     "test:legacy-hooks": "node verify/legacy-hooks-test.js"
   },
