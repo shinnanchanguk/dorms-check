@@ -68,6 +68,11 @@ async function run() {
   const inv = buildInventory(root);
   const has = (kind, file) => inv.surfaces.some(s => s.kind === kind && (!file || s.file === file));
   ok('API 경로와 메서드', inv.surfaces.some(s => s.kind === 'api-route' && s.scope === 'GET'));
+  write(root, 'app/p/[code]/route.ts', "import { svc } from '@/lib/supabase/service';\nexport async function GET() {}\n");
+  const inv2 = buildInventory(root);
+  ok('api 폴더 밖 라우트 핸들러도 센다', inv2.surfaces.some(s => s.kind === 'api-route' && s.file === 'app/p/[code]/route.ts'));
+  ok('서비스 키 클라이언트를 가져오는 파일도 센다', inv2.surfaces.some(s => s.kind === 'service-client' && s.file === 'app/p/[code]/route.ts'));
+  fs.rmSync(path.join(root, 'app/p'), { recursive: true, force: true });
   ok('서버 액션', has('server-action', 'app/actions.ts'));
   ok('AI 호출', has('ai-call', 'lib/ai.ts'));
   ok('HTML 그리기', has('html-sink', 'components/Note.tsx'));

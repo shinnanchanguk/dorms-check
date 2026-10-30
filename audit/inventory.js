@@ -55,14 +55,14 @@ export function subsystemOf(rel) {
 }
 
 const RULES = [
-  { kind: 'api-route', path: /(^|\/)app\/(.+\/)?api\/.+\/route\.[cm]?[jt]sx?$|(^|\/)pages\/api\/.+\.[cm]?[jt]sx?$|^api\/.+\.[cm]?[jt]s$|(^|\/)server\/(api|routes)\/.+\.[cm]?[jt]s$/ },
+  { kind: 'api-route', path: /(^|\/)app\/(.+\/)?route\.[cm]?[jt]sx?$|(^|\/)pages\/api\/.+\.[cm]?[jt]sx?$|^api\/.+\.[cm]?[jt]s$|(^|\/)server\/(api|routes)\/.+\.[cm]?[jt]s$/ },
   { kind: 'server-action', text: /^\s*['"]use server['"]/m },
   { kind: 'edge-function', path: /(^|\/)supabase\/functions\/[^/]+\/index\.[cm]?[jt]s$|(^|\/)netlify\/functions\/.+\.[cm]?[jt]s$|(^|\/)functions\/src\/.+\.[cm]?[jt]s$/ },
   { kind: 'auth-flow', path: /(^|\/)(auth|login|logout|signin|signup|sign-in|sign-up|callback|oauth|reset-password|password|verify-email)(\/|\.|-|_)/i, codeOnly: true },
   { kind: 'auth-flow', text: /\b(exchangeCodeForSession|signInWith(OAuth|Password|Otp|IdToken)|resetPasswordForEmail|verifyOtp|updateUser\(\s*\{\s*password|signInWithPopup|getRedirectResult)\b/ },
   { kind: 'webhook', path: /(^|\/)(webhooks?|hooks?)(\/|\.)/i, codeOnly: true },
   { kind: 'webhook', text: /\b(webhooks\.constructEvent|x-hub-signature|svix-signature|x-signature|createHmac\(\s*['"]sha256)/ },
-  { kind: 'service-client', text: /\b(SUPABASE_SERVICE_ROLE_KEY|SUPABASE_SECRET_KEY|service_role|createAdminClient|supabaseAdmin|firebase-admin)\b/ },
+  { kind: 'service-client', text: /\b(SUPABASE_SERVICE_ROLE_KEY|SUPABASE_SECRET_KEY|service_role|createAdminClient|createServiceClient|supabaseAdmin|firebase-admin)\b|from\s+['"][^'"]*\/supabase\/(service|admin)['"]/ },
   { kind: 'storage', text: /\.storage\s*\.from\(|storage\.buckets|getSignedUrl|createSignedUrl|createSignedUploadUrl|putObject\(|PutObjectCommand/ },
   { kind: 'upload', text: /\.upload\(|request\.formData\(\)|req\.formData\(\)|multer\(|busboy|type=["']file["']|createSignedUploadUrl/ },
   { kind: 'export', path: /(export|download|backup|csv|xlsx)/i, codeOnly: true },
