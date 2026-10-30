@@ -50,8 +50,10 @@ export function readInput(file) {
 
 // 점검 대상 저장소는 믿을 수 없다. 그 저장소의 .git/config 가 core.fsmonitor·clean 필터로 명령을 실행하지 못하게
 // fsmonitor 를 끄고, 필터를 부르는 명령(status 등)은 쓰지 않는다.
-const GIT_SAFE = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.hooksPath=/dev/null'];
-const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' };
+// 부분 클론의 자동 내려받기와 모든 전송(ext:: 포함)도 막는다(저장소 설정의 원격 주소로 명령이 실행되지 않게).
+export const GIT_SAFE = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.hooksPath=/dev/null',
+  '-c', 'protocol.allow=never', '-c', 'core.sshCommand=false', '-c', 'core.pager=cat', '-c', 'log.showSignature=false'];
+export const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1', GIT_CONFIG_NOSYSTEM: '1', GIT_PROTOCOL_FROM_USER: '0' };
 function git(root, args) {
   try { return execFileSync('git', ['-C', root, ...GIT_SAFE, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: GIT_ENV, maxBuffer: 4 * 1024 * 1024 }).trim(); }
   catch { return null; }

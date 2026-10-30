@@ -722,6 +722,11 @@ function runHooksCmd() {
 
 async function main() {
   if (removedFeature()) return;
+  // .dorms-check 가 심볼릭 링크(예: public 을 가리킴)면 결과를 쓰는 명령은 모두 멈춘다.
+  if (!['help', '--help', '-h', undefined, 'detect', 'hooks', 'status', 'report', 'audit'].includes(cmd) && !stateDirIsSafe()) {
+    outputMachineResult({ ok: false, code: 'UNSAFE_STATE_DIR', exitCode: 2, reason: '.dorms-check 가 심볼릭 링크라 결과를 쓰지 않습니다. 링크를 지우고 다시 실행하세요.' }, { json: flag('json') });
+    return;
+  }
   switch (cmd) {
     case 'detect': printDetect(); break;
     case 'init': await runInit(); break;

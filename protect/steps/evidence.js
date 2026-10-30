@@ -7,6 +7,7 @@
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { readJsonSafe, exists, writeText, sha256 } from '../../core/util.js';
+import { GIT_SAFE, GIT_ENV } from '../../audit/run.js';
 
 export const evidenceStep = {
   id: 'evidence',
@@ -43,8 +44,8 @@ export const evidenceStep = {
     let gitInfo = '(git 저장소가 아니거나 git 미설치)';
     try {
       // 앱 폴더의 .git/config 가 fsmonitor·서명 확인 프로그램으로 명령을 실행하지 못하게 막고 부른다.
-      const safe = ['-C', root, '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'log.showSignature=false'];
-      const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' };
+      const safe = ['-C', root, ...GIT_SAFE];
+      const env = GIT_ENV;
       const head = execFileSync('git', [...safe, 'rev-parse', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'], env }).toString().trim();
       const lg = execFileSync('git', [...safe, 'log', '-10', '--no-show-signature', '--pretty=format:%h %ad %s', '--date=iso'], { stdio: ['ignore', 'pipe', 'ignore'], env }).toString();
       gitInfo = `HEAD: ${head}\n\n${lg}`;
