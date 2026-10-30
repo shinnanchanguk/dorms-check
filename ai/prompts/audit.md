@@ -23,7 +23,7 @@
    - 결과는 `.dorms-check/audit/run-N` 에 쓰입니다. `.dorms-check` 가 `.gitignore` 에 없으면 홈 폴더(`~/.dorms-check-audit/`)에 씁니다. 약점 설명이 담기므로 커밋하지 않습니다.
 3. **정찰**: `architecture.md` 를 1,000 단어 안으로 채웁니다(누가 쓰는지, 무엇을 지키는지, 신뢰 경계와 가장 강한 통제의 코드 위치).
 4. **찾기**: `AUDIT-PLAN.md` 의 묶음마다 `dcheck audit prompt --role hunter --agent <ID> --group <번호>` 로 지시문을 받아 서로 다른 에이전트에게 맡깁니다. 하위 에이전트가 없는 AI 라면 묶음 하나씩 새 대화에서 처리합니다.
-5. **병합**: 돌아온 JSON 을 파일로 저장하고 `dcheck audit merge --agent <ID> --in <파일>`. 형식이 틀린 단위는 다시 맡길 수 있게 예정으로 돌아갑니다.
+5. **병합**: 돌아온 JSON 을 파일로 저장하고 `dcheck audit lint --agent <ID> --in <파일>` 로 형식부터 확인합니다(범위표는 바뀌지 않음). 오류가 있으면 그 에이전트에게 형식만 고쳐 달라고 돌려보낸 뒤 `dcheck audit merge --agent <ID> --in <파일>`. 형식이 틀린 단위는 다시 맡길 수 있게 예정으로 돌아가고, 단위의 읽은 경로는 확인 기록이 뒷받침하는 만큼만 인정합니다.
 6. **범위 비평**: `dcheck audit prompt --role critic --agent <새 ID>` → 결과를 같은 merge 명령으로.
 7. **반박 검증**: 후보마다 찾지 않은 새 에이전트에게 `dcheck audit prompt --role verifier --agent <ID> --fingerprint <지문>` → `dcheck audit record --agent <ID> --in <파일>`.
 8. **최종 확인**(quick 이 아니면): 확인한 위험·미확인 기록마다 또 다른 새 에이전트가 기록 자체를 다시 확인합니다. `{"decision":"verified","fingerprint":"..."}` 또는 `{"decision":"replace","reason":"...","record":{...}}`. 판정이 세지거나 뜻이 바뀌는 교체는 또 다른 새 담당자가 verified 를 보내야 적용됩니다.
