@@ -27,7 +27,9 @@
 6. **범위 비평**: `dcheck audit prompt --role critic --agent <새 ID>` → 결과를 같은 merge 명령으로.
 7. **반박 검증**: 후보마다 찾지 않은 새 에이전트에게 `dcheck audit prompt --role verifier --agent <ID> --fingerprint <지문>` → `dcheck audit record --agent <ID> --in <파일>`.
 8. **최종 확인**(quick 이 아니면): 확인한 위험·미확인 기록마다 또 다른 새 에이전트가 기록 자체를 다시 확인합니다. `{"decision":"verified","fingerprint":"..."}` 또는 `{"decision":"replace","reason":"...","record":{...}}`. 판정이 세지거나 뜻이 바뀌는 교체는 또 다른 새 담당자가 verified 를 보내야 적용됩니다.
-9. `dcheck audit check` → `dcheck audit report`. 보고서는 `AUDIT.md` 입니다.
+9. `dcheck audit check` → `dcheck audit report`. 보고서는 `AUDIT.md` 입니다. `check` 는 형식 오류면 1, 형식은 맞지만 아직 미완료면 3 으로 끝납니다.
+
+이전 회차는 이 컴퓨터의 열쇠로 봉인한 보고서만 이어받습니다. 앱 폴더를 옮기거나 다른 컴퓨터에서 이어 하면 이전 회차를 믿지 않고 새로 시작하며, 보고서에 그 사실을 적습니다. 결과를 두 번 이상 낸 원인은 찾은 사람 모두가 그 후보를 검증할 수 없고, standard·deep 은 마지막 깨끗한 범위 비평을 앞선 비평가·찾는 사람과 다른 새 담당자가 해야 완료됩니다. `--budget` 을 주면 그 수를 넘는 배정은 거부합니다.
 
 ## 선생님께 설명할 때
 

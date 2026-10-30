@@ -272,6 +272,18 @@ export function validateLedger(ledger) {
     for (const p of u.starting_paths || []) if (!isRepoRelative(p)) errors.push(`${label}.starting_paths: 상대 경로가 아닙니다.`);
     checkEvidenceState(u, label, errors);
     let lastWave = 0;
+    // 다시 맡긴 단위는 새 담당자의 새 근거로만 닫는다. 보관된 담당자·확인·산출물을 지금 기록에 다시 쓰지 않는다.
+    const archivedOwners = new Set();
+    const archivedArtifacts = new Set();
+    for (const a of u.attempts || []) {
+      if (a?.agent_id) archivedOwners.add(a.agent_id);
+      for (const c of a?.local_checks || []) { if (c?.agent_id) archivedOwners.add(c.agent_id); if (c?.artifact) archivedArtifacts.add(c.artifact); }
+    }
+    for (const c of Array.isArray(u.local_checks) ? u.local_checks : []) {
+      if (archivedOwners.has(c?.agent_id)) errors.push(`${label}: 이전 담당자(${c.agent_id})의 확인 기록을 다시 맡긴 단위의 지금 기록에 쓸 수 없습니다.`);
+      if (c?.artifact && archivedArtifacts.has(c.artifact)) errors.push(`${label}: 보관된 시도의 산출물을 다시 쓸 수 없습니다.`);
+    }
+    if (u.agent_id && archivedOwners.has(u.agent_id)) errors.push(`${label}: 다시 맡긴 단위는 이전과 다른 담당자여야 합니다.`);
     (u.attempts || []).forEach((a, j) => {
       checkEvidenceState(a, `${label}.attempts[${j}]`, errors, { archived: true });
       if (!Number.isInteger(a.wave) || a.wave <= lastWave || a.wave >= u.wave) errors.push(`${label}.attempts[${j}].wave: 보관 기록의 차수는 늘어나야 하고 지금 차수보다 작아야 합니다.`);

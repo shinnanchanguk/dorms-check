@@ -68,7 +68,7 @@ function help() {
   log.plain('  dcheck audit lint --agent <ID> --in <JSON>       돌려주기 전 형식만 확인(바꾸지 않음)');
   log.plain('  dcheck audit merge --agent <ID> --in <JSON>      찾은 결과·범위 비평을 범위표에 넣기');
   log.plain('  dcheck audit record --agent <ID> --in <JSON>     반박 검증·최종 확인 기록');
-  log.plain('  dcheck audit promote --agent <ID> --file <경로>   scratch 산출물을 증거로 옮기기');
+  log.plain('  dcheck audit promote --agent <ID> --file <경로>   작업 폴더의 결과물을 증거로 옮기기');
   log.plain('  dcheck audit check | report [--run <폴더>]');
   log.plain('');
   log.plain('  이전 버전 정리: dcheck hooks status|uninstall [--agents ' + ALL_AGENTS.join(',') + '] [--json]');
@@ -276,7 +276,7 @@ function runJudge() {
 
 function runStatus() {
   const file = path.join(STATE_DIR, 'scan.json');
-  if (!exists(file)) { log.warn('먼저 scan을 실행하세요.'); return; }
+  if (!exists(file)) { log.warn('먼저 scan을 실행하세요.'); printAuditSummary(); return; }
   const scan = readJsonSafe(file);
   const cfg = loadConfig(root);
   const stack = cfg.app?.stack || '내';
@@ -298,7 +298,7 @@ function printAuditSummary() {
   try { summary = latestAuditSummary(root); } catch { summary = null; }
   if (!summary) return;
   log.title(`심층 점검(${summary.profile}, ${summary.run_status === 'complete' ? '완료' : '미완료'})`);
-  for (const f of summary.confirmed) log.plain(`  [확인한 위험 · ${SEVERITY_LABEL[f.severity] || f.severity}] ${f.title}`);
+  for (const f of summary.confirmed) log.plain(`  [확인한 위험 · ${SEVERITY_LABEL[f.severity] || f.severity}${f.final ? '' : ' · 최종 확인 전'}] ${f.title}`);
   for (const t of summary.needs_validation) log.plain(`  [미확인] ${t}`);
   if (!summary.confirmed.length && !summary.needs_validation.length) log.plain('  기록된 위험·미확인이 없습니다. 범위와 빈칸은 보고서에서 확인하세요.');
   log.plain(color.dim('  보고서: ' + path.join(summary.runDir, 'AUDIT.md')));
@@ -616,6 +616,7 @@ async function runAuditCmd() {
     if (sub === 'merge') {
       const r = mergeResult(resolveRunDir(root, runOpt), { agentId: opt('agent', ''), input: readAuditInput() });
       if (r.kind === 'critic') log.ok(`범위 비평 반영: 새 단위 ${r.added}개, 다시 맡김 ${r.reassigned}개`);
+      else if (!r.accepted.length && r.errors.length) log.warn(`받아들인 단위가 없습니다. 아래 오류를 고쳐 다시 넣어 주세요.`);
       else log.ok(`찾기 결과 반영: 받아들인 단위 ${r.accepted.length}개, 다시 맡길 단위 ${r.reopened.length}개, 후보 ${r.candidates}건, 새 경계 ${r.uncovered}개${r.normalized ? `, 읽은 경로를 확인 기록 기준으로 맞춘 단위 ${r.normalized}개` : ''}`);
       for (const e of r.errors.slice(0, 20)) log.warn('  ' + e);
       if (r.errors.length) process.exitCode = 2;
@@ -630,7 +631,8 @@ async function runAuditCmd() {
     }
     if (sub === 'record') {
       const r = recordDecision(resolveRunDir(root, runOpt), { agentId: opt('agent', ''), input: readAuditInput() });
-      log.ok(`검증 기록: 반영 ${r.applied.length}건, 새 담당자 확인 대기 ${r.pending.length}건`);
+      if (!r.applied.length && !r.pending.length && r.errors.length) log.warn('반영한 기록이 없습니다. 아래 오류를 확인하세요.');
+      else log.ok(`검증 기록: 반영 ${r.applied.length}건, 새 담당자 확인 대기 ${r.pending.length}건`);
       for (const e of r.errors.slice(0, 20)) log.warn('  ' + e);
       if (r.errors.length) process.exitCode = 2;
       return;
@@ -644,7 +646,11 @@ async function runAuditCmd() {
       const r = checkRun(resolveRunDir(root, runOpt));
       if (r.errors.length) { log.err(`형식 오류 ${r.errors.length}건`); for (const e of r.errors.slice(0, 30)) log.plain('  - ' + e); process.exitCode = 1; }
       else log.ok('범위표와 결과 기록의 형식이 맞습니다.');
-      if (r.reasons.length) { log.warn('아직 완료가 아닙니다:'); for (const x of r.reasons) log.plain('  - ' + x); }
+      if (r.reasons.length) {
+        log.warn('아직 완료가 아닙니다:'); for (const x of r.reasons) log.plain('  - ' + x);
+        // 형식 오류(1)와 구분되게 미완료는 3 으로 끝낸다.
+        if (!process.exitCode) process.exitCode = 3;
+      }
       return;
     }
     if (sub === 'report') {
