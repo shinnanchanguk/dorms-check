@@ -16,14 +16,14 @@
 
 ## 시작하기
 
-Node.js 18 이상이 필요합니다. 아래 명령은 GitHub의 `v0.3.2` 릴리스를 받아 실행하는 예시입니다. 조직이나 교육 자료에서 검토한 커밋을 지정했다면 같은 커밋을 계속 사용하세요.
+Node.js 18 이상이 필요합니다. 아래 명령은 GitHub의 `v0.4.0` 릴리스를 받아 실행하는 예시입니다. 조직이나 교육 자료에서 검토한 커밋을 지정했다면 같은 커밋을 계속 사용하세요.
 
 ~~~bash
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz detect
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz init --name "내 앱" --url "https://my-app.example" --track security --confirm-ownership
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz scan --url "https://my-app.example"
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz status
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz report
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.4.0.tar.gz detect
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.4.0.tar.gz init --name "내 앱" --url "https://my-app.example" --track security --confirm-ownership
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.4.0.tar.gz scan --url "https://my-app.example"
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.4.0.tar.gz status
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.4.0.tar.gz report
 ~~~
 
 AI에게 맡기려면 [복사해 쓰는 프롬프트](./USE-WITH-AI.md)를 사용하세요. 배포 전에는 `scan --code-only`로 코드를 살펴볼 수 있습니다. 이 경우 공개 주소 검사는 미확인입니다.
@@ -50,6 +50,18 @@ AI에게 맡기려면 [복사해 쓰는 프롬프트](./USE-WITH-AI.md)를 사�
 - `protection`: 권리와 이용 범위를 묻고 앱 보호 변경 계획을 세웁니다. `protect apply`는 승인한 계획 해시와 `--confirm-apply`가 있을 때 백업 후 적용합니다. `verify`로 확인하고 필요하면 `protect restore`로 복원합니다.
 
 에듀집 서류에는 공식 원본과 제출 안내가 함께 들어갑니다. 이름·학교·전화·결재선·서명은 받거나 저장하지 않고 사용자가 채울 위치를 안내합니다. 구글폼 제출 뒤 며칠이 지나도 연락이 없으면 서류에 적힌 KERIS 담당 부서에 진행 상태를 문의하세요.
+
+## 심층 점검(요청할 때만)
+
+`dcheck audit`은 기본 점검보다 깊이 코드를 나눠 보는 정밀 보안 점검입니다. Cloudflare의 security-audit-skill(MIT) 흐름을 교사 앱에 맞게 옮겼고, 기본 점검과 겹치는 헤더·HTTPS·공개 비밀값·익명 DB 읽기는 빼고 코드 안의 권한 우회·업무 규칙·AI 기능·요금 고갈·데이터 칸막이를 봅니다.
+
+- 범위표: 앱의 서버 API·서버 액션·DB 함수·AI 호출·업로드 같은 표면을 자동으로 찾아 "무엇을 봤고 무엇을 못 봤는지"를 단위로 기록합니다.
+- 역할 분리: 찾는 에이전트와 반박 검증하는 에이전트를 나눕니다. 같은 담당자가 자기 후보를 검증하려 하면 도구가 거부합니다.
+- 판정 셋: 확인한 위험(심각도 있음), 확인이 더 필요한 것(심각도 없음, 막힌 사실과 직접 확인할 곳), 기각.
+- 안전: 배포된 서버에 공격 요청을 보내지 않고, 결과 폴더는 `.gitignore`가 덮는 곳이나 홈 폴더에만 씁니다.
+- 이어서 점검: 다음 회차는 이전 보고서의 결과를 이어받고, 코드가 바뀐 곳만 다시 봅니다.
+
+순서는 [AI용 안내](./ai/prompts/audit.md)에 있습니다. `audit plan → prompt → merge → record → check → report`.
 
 ## 저장하는 파일
 

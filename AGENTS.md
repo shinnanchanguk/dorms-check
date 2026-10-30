@@ -4,7 +4,7 @@ Claude·Codex·Gemini·Cursor 등에서 같은 점검 흐름을 사용합니다.
 
 ## 기본 흐름
 
-1. 사용자가 운영하는 앱 폴더에서 `npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz detect`로 프로젝트 구성을 확인합니다.
+1. 사용자가 운영하는 앱 폴더에서 `npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.4.0.tar.gz detect`로 프로젝트 구성을 확인합니다.
 2. `init --name "<앱>" --url "<공개 주소>" --track security --confirm-ownership`으로 점검 설정을 만듭니다. 기존 설정은 임의로 덮어쓰지 않습니다.
 3. `scan --url "<공개 주소>"`를 실행하고 `status`와 `report`로 결과를 읽습니다. 위 `npx` 명령 뒤에 각 명령을 붙여 같은 버전을 사용하세요.
 4. 확인한 문제, 개선 권고, 미확인을 구분해 설명합니다. 사용자가 요청한 코드 보완이나 추가 근거가 있을 때 재검사합니다. 모든 항목을 통과시키는 반복 작업을 요구하지 않습니다.
@@ -25,6 +25,9 @@ Claude·Codex·Gemini·Cursor 등에서 같은 점검 흐름을 사용합니다.
 전역 훅과 배포 차단 기능은 제거됐습니다. 예전 명령이 실패하면 임의로 일반 검사로 바꾸지 말고 제거 사실을 설명합니다. 기존 훅 정리가 필요할 때만 [정리 안내](./docs/LEGACY-HOOK-CLEANUP.ko.md)를 따릅니다.
 
 ## 선택 기능
+
+정밀 보안 점검·보안 감사를 명시적으로 요청받으면 [ai/prompts/audit.md](./ai/prompts/audit.md)를 읽고 `audit` 명령으로 진행합니다. 범위표(무엇을 봤고 못 봤는지)는 도구만 고치고, 찾은 에이전트와 검증하는 에이전트를 나누며, 확인한 위험·미확인·기각을 구분해 `AUDIT.md`로 보고합니다. 배포된 서버에 공격 요청을 보내지 않고, 결과 폴더는 버전 관리에 올리지 않습니다.
+
 
 에듀집 서류가 필요하면 [edzip-autopilot](./skills/edzip-autopilot/SKILL.md)을 읽습니다. 계획과 개인정보가 아닌 질문을 확인하고, 승인한 계획 해시와 `--confirm-apply`로 제출 서류를 만듭니다. 확인 완료 뒤 `edzip council`로 내부 기안문과 학운위 안건문을 준비합니다. 서류 생성은 외부 제출이나 공식 확인을 대신하지 않습니다.
 

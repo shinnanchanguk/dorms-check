@@ -8,4 +8,6 @@
 - 공개 저장소에 과거 MIT 라이선스로 배포된 판에 이미 성립한 허가는 소급해 취소되지 않습니다.
 - 에듀집·학교운영위원회·개인정보·저작권 안내는 법률 자문이 아닙니다. 제출 전 학교와 관계 기관의 최신 안내를 확인하세요.
 
+- 심층 점검(`audit/`)의 흐름과 공격 분류 일부는 Cloudflare 의 security-audit-skill(MIT)을 옮겨 고친 것이며, 그 부분은 [audit/THIRD-PARTY-NOTICE.md](audit/THIRD-PARTY-NOTICE.md)의 MIT 조건을 함께 따릅니다.
+
 세부 조건은 [LICENSE](LICENSE)를 따릅니다. 공식 저장소는 https://github.com/shinnanchanguk/dorms-check 입니다.

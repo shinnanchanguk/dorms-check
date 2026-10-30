@@ -22,6 +22,8 @@ import { restoreBackup, latestBackup } from '../core/util.js';
 import { verifyBuild } from '../protect/verify-static.js';
 import { applyEdzipPlan, buildEdzipPlan, prepareCouncilDocuments, writeEdzipPlan } from '../core/edzip-autopilot.js';
 import { ALL_AGENTS, hookStatus, uninstallHooks } from '../core/hooks.js';
+import { planRun, resolveRunDir, huntPrompt, verifierPrompt, criticPrompt, mergeResult, recordDecision, promoteArtifact, checkRun, reportRun, latestAuditSummary } from '../audit/run.js';
+import { SEVERITY_LABEL } from '../audit/findings.js';
 
 const root = process.cwd();
 const [, , cmd, ...args] = process.argv;
@@ -59,6 +61,14 @@ function help() {
   log.plain('  dcheck protect apply --plan-sha256 <값> --confirm-apply');
   log.plain('  dcheck protect restore [--from <경로>]      적용 전 백업 복원');
   log.plain('  dcheck verify                              앱 보호 적용 전후 산출물 비교');
+  log.plain('');
+  log.plain('  심층 점검(정밀 보안 감사, 요청할 때만):');
+  log.plain('  dcheck audit plan [--profile quick|standard|deep] [--scope <경로,경로>] [--budget <N>]');
+  log.plain('  dcheck audit prompt --role hunter|verifier|critic --agent <ID> [--group <N>|--units <ID,..>|--fingerprint <지문>]');
+  log.plain('  dcheck audit merge --agent <ID> --in <JSON>      찾은 결과·범위 비평을 범위표에 넣기');
+  log.plain('  dcheck audit record --agent <ID> --in <JSON>     반박 검증·최종 확인 기록');
+  log.plain('  dcheck audit promote --agent <ID> --file <경로>   scratch 산출물을 증거로 옮기기');
+  log.plain('  dcheck audit check | report [--run <폴더>]');
   log.plain('');
   log.plain('  이전 버전 정리: dcheck hooks status|uninstall [--agents ' + ALL_AGENTS.join(',') + '] [--json]');
   log.plain('  status는 기존 설정을 읽고, uninstall은 백업 후 도름스가 넣은 항목만 제거합니다.');
@@ -278,7 +288,19 @@ function runStatus() {
     if (item.observed) log.plain('      ' + item.observed);
     if (item.status === 'fail' && catalog?.aiFix) log.plain('      AI에게: ' + catalog.aiFix.replaceAll('{stack}', stack));
   }
+  printAuditSummary();
   honesty();
+}
+
+function printAuditSummary() {
+  let summary = null;
+  try { summary = latestAuditSummary(root); } catch { summary = null; }
+  if (!summary) return;
+  log.title(`심층 점검(${summary.profile}, ${summary.run_status === 'complete' ? '완료' : '미완료'})`);
+  for (const f of summary.confirmed) log.plain(`  [확인한 위험 · ${SEVERITY_LABEL[f.severity] || f.severity}] ${f.title}`);
+  for (const t of summary.needs_validation) log.plain(`  [미확인] ${t}`);
+  if (!summary.confirmed.length && !summary.needs_validation.length) log.plain('  기록된 위험·미확인이 없습니다. 범위와 빈칸은 보고서에서 확인하세요.');
+  log.plain(color.dim('  보고서: ' + path.join(summary.runDir, 'AUDIT.md')));
 }
 
 function runReport() {
@@ -544,6 +566,95 @@ async function runEdzipCmd() {
   log.plain('  에듀집 제출은 하지 않았습니다. 확인 완료 뒤 edzip council에 공식 주소를 넣으면 내부 기안문과 학운위 안건 초안을 만듭니다.');
 }
 
+function auditScanSummary() {
+  const scan = readJsonSafe(path.join(STATE_DIR, 'scan.json'));
+  if (!scan?.results) return null;
+  const pick = st => scan.results.filter(r => r.status === st).map(r => r.id);
+  return { fail: pick('fail'), unknown: pick('unknown'), at: scan.at || scan.scannedAt || null };
+}
+
+function readAuditInput() {
+  const file = opt('in', '');
+  if (!file) throw new Error('--in <JSON 파일> 이 필요합니다.');
+  const text = readFileSync(path.resolve(root, file), 'utf8').trim();
+  if (Buffer.byteLength(text) > 5 * 1024 * 1024) throw new Error('입력 파일이 5MB 를 넘습니다.');
+  try { return JSON.parse(text); } catch { throw new Error('JSON 이 아닙니다. 설명 문장 없이 JSON 만 넣어 주세요.'); }
+}
+
+async function runAuditCmd() {
+  const sub = args[0];
+  const runOpt = opt('run', '');
+  try {
+    if (sub === 'plan') {
+      const budgetRaw = opt('budget', '');
+      const budget = budgetRaw ? Number(budgetRaw) : null;
+      if (budgetRaw && (!Number.isInteger(budget) || budget < 1)) throw new Error('--budget 은 1 이상의 정수입니다.');
+      const scope = opt('scope', '') ? opt('scope', '').split(',').map(x => x.trim()).filter(Boolean) : [];
+      const { runDir, meta, ledger } = planRun(root, { profile: opt('profile', 'standard'), scope, out: opt('out', '') || null, budget, scanSummary: auditScanSummary() });
+      const planned = ledger.filter(u => u.status === 'planned').length;
+      log.ok(`심층 점검 계획을 만들었습니다: ${runDir}`);
+      log.plain(`  ${meta.output_reason}`);
+      log.plain(`  범위표 ${ledger.length}단위(예정 ${planned}) · 찾기 묶음 ${meta.hunter_groups.length}개 · 예상 에이전트 ${meta.budget_estimate.planned}회`);
+      if (meta.prior.prior_run) log.plain(`  이전 회차 ${meta.prior.prior_run} 이어받음: 그대로인 확인 ${meta.prior.carried.length}건, 다시 볼 것 ${meta.prior.revalidate.length}건`);
+      if (meta.run_status === 'incomplete') log.warn('  예산이 정찰과 필수 비평·검증도 못 채웁니다. 범위를 좁히거나 깊이를 낮추세요.');
+      log.plain('  다음: architecture.md 를 채우고 AUDIT-PLAN.md 의 순서를 따르세요.');
+      return;
+    }
+    if (sub === 'prompt') {
+      const runDir = resolveRunDir(root, runOpt);
+      const role = opt('role', '');
+      const agentId = opt('agent', '');
+      let text;
+      if (role === 'hunter') text = huntPrompt(runDir, { agentId, group: opt('group', '') || null, unitIds: opt('units', '') ? opt('units', '').split(',').map(x => x.trim()).filter(Boolean) : [] });
+      else if (role === 'verifier') text = verifierPrompt(runDir, { agentId, fingerprint: opt('fingerprint', '') });
+      else if (role === 'critic') text = criticPrompt(runDir, { agentId });
+      else throw new Error('--role 은 hunter·verifier·critic 중 하나입니다.');
+      process.stdout.write(text);
+      return;
+    }
+    if (sub === 'merge') {
+      const r = mergeResult(resolveRunDir(root, runOpt), { agentId: opt('agent', ''), input: readAuditInput() });
+      if (r.kind === 'critic') log.ok(`범위 비평 반영: 새 단위 ${r.added}개, 다시 맡김 ${r.reassigned}개`);
+      else log.ok(`찾기 결과 반영: 받아들인 단위 ${r.accepted.length}개, 다시 맡길 단위 ${r.reopened.length}개, 후보 ${r.candidates}건, 새 경계 ${r.uncovered}개`);
+      for (const e of r.errors.slice(0, 20)) log.warn('  ' + e);
+      if (r.errors.length) process.exitCode = 2;
+      return;
+    }
+    if (sub === 'record') {
+      const r = recordDecision(resolveRunDir(root, runOpt), { agentId: opt('agent', ''), input: readAuditInput() });
+      log.ok(`검증 기록: 반영 ${r.applied.length}건, 새 담당자 확인 대기 ${r.pending.length}건`);
+      for (const e of r.errors.slice(0, 20)) log.warn('  ' + e);
+      if (r.errors.length) process.exitCode = 2;
+      return;
+    }
+    if (sub === 'promote') {
+      const rel = promoteArtifact(resolveRunDir(root, runOpt), { agentId: opt('agent', ''), file: opt('file', '') });
+      log.ok(`산출물 승격: ${rel}`);
+      return;
+    }
+    if (sub === 'check') {
+      const r = checkRun(resolveRunDir(root, runOpt));
+      if (r.errors.length) { log.err(`형식 오류 ${r.errors.length}건`); for (const e of r.errors.slice(0, 30)) log.plain('  - ' + e); process.exitCode = 1; }
+      else log.ok('범위표와 결과 기록의 형식이 맞습니다.');
+      if (r.reasons.length) { log.warn('아직 완료가 아닙니다:'); for (const x of r.reasons) log.plain('  - ' + x); }
+      return;
+    }
+    if (sub === 'report') {
+      const runDir = resolveRunDir(root, runOpt);
+      const { chk } = reportRun(root, runDir);
+      log.ok(`보고서: ${path.join(runDir, 'AUDIT.md')} (${chk.complete ? '완료' : '미완료'})`);
+      if (chk.errors.length) { log.err(`형식 오류 ${chk.errors.length}건이 있어 보고서를 믿기 어렵습니다. dcheck audit check 로 확인하세요.`); process.exitCode = 1; }
+      printAuditSummary();
+      return;
+    }
+    log.err('사용법: dcheck audit plan|prompt|merge|record|promote|check|report (dcheck help 참고)');
+    process.exitCode = 1;
+  } catch (error) {
+    log.err(String(error?.message || error));
+    process.exitCode = 1;
+  }
+}
+
 function outputMachineResult(result, { json = false, success = '' } = {}) {
   process.exitCode = result.exitCode ?? (result.ok ? 0 : 2);
   if (json) console.log(JSON.stringify(result, null, 2));
@@ -594,6 +705,7 @@ async function main() {
     case 'interview': runInterview(); break;
     case 'protect': await runProtectCmd(); break;
     case 'edzip': await runEdzipCmd(); break;
+    case 'audit': await runAuditCmd(); break;
     case 'hooks': runHooksCmd(); break;
     case 'verify': runVerify(); break;
     case 'status': runStatus(); break;

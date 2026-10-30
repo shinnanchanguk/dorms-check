@@ -4,10 +4,10 @@
 
 Node.js 18 이상이 필요합니다. 명령을 실행하면 점검 도구와 문서 생성에 필요한 패키지를 내려받습니다. 점검 대상 프로젝트의 의존성은 바꾸지 않습니다.
 
-아래 예시는 GitHub 릴리스 `v0.3.2`을 지정합니다. 검토한 커밋이 따로 있으면 릴리스 태그 대신 그 커밋을 쓰세요. 이름이 같은 다른 패키지를 대신 설치하거나 움직이는 기본 브랜치를 강제하지 않습니다.
+아래 예시는 GitHub 릴리스 `v0.4.0`을 지정합니다. 검토한 커밋이 따로 있으면 릴리스 태그 대신 그 커밋을 쓰세요. 이름이 같은 다른 패키지를 대신 설치하거나 움직이는 기본 브랜치를 강제하지 않습니다.
 
 ~~~bash
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz detect
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.4.0.tar.gz detect
 ~~~
 
 소스를 직접 확인하며 사용하려면 릴리스를 내려받아 의존성을 설치한 뒤 실행합니다.
@@ -25,7 +25,7 @@ node bin/dcheck.js help
 
 ## 기본 명령
 
-아래 표의 `dcheck`는 `npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.3.2.tar.gz`의 짧은 표기입니다.
+아래 표의 `dcheck`는 `npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.4.0.tar.gz`의 짧은 표기입니다.
 
 | 명령 | 하는 일 |
 | --- | --- |
@@ -36,6 +36,7 @@ node bin/dcheck.js help
 | `dcheck status` | 확인한 문제·권고·미확인을 보여줍니다 |
 | `dcheck report` | 저장한 보고서를 보여줍니다 |
 | `dcheck submit` | 보관용 증빙팩과 신청 안내를 만듭니다 |
+| `dcheck audit plan --profile quick` | 요청할 때만: 심층 점검 계획과 범위표를 만듭니다. 이후 순서는 [ai/prompts/audit.md](./ai/prompts/audit.md) |
 
 `--track edzip`과 `--track protection`은 필요할 때 선택합니다. 계획·답변 저장, 서류 생성, 앱 보호 적용은 [README.ko.md](./README.ko.md)에 안내된 별도 절차를 따릅니다.
 
