@@ -616,7 +616,7 @@ async function runAuditCmd() {
     if (sub === 'merge') {
       const r = mergeResult(resolveRunDir(root, runOpt), { agentId: opt('agent', ''), input: readAuditInput() });
       if (r.kind === 'critic') log.ok(`범위 비평 반영: 새 단위 ${r.added}개, 다시 맡김 ${r.reassigned}개`);
-      else log.ok(`찾기 결과 반영: 받아들인 단위 ${r.accepted.length}개, 다시 맡길 단위 ${r.reopened.length}개, 후보 ${r.candidates}건, 새 경계 ${r.uncovered}개`);
+      else log.ok(`찾기 결과 반영: 받아들인 단위 ${r.accepted.length}개, 다시 맡길 단위 ${r.reopened.length}개, 후보 ${r.candidates}건, 새 경계 ${r.uncovered}개${r.normalized ? `, 읽은 경로를 확인 기록 기준으로 맞춘 단위 ${r.normalized}개` : ''}`);
       for (const e of r.errors.slice(0, 20)) log.warn('  ' + e);
       if (r.errors.length) process.exitCode = 2;
       return;

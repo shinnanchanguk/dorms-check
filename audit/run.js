@@ -508,7 +508,12 @@ export function mergeResult(runDir, { agentId, input, dryRun = false }) {
     if (!u) { report.errors.push(`맡지 않은 단위의 결과: ${r?.coverage_id}`); continue; }
     if (seen.has(u.coverage_id)) { report.errors.push(`같은 단위가 두 번 있습니다: ${u.coverage_id}`); continue; }
     seen.add(u.coverage_id);
-    const trial = { ...u, status: r.disposition, reviewed_paths: r.reviewed_paths || [], local_checks: r.checks || [], result_fingerprints: r.candidate_fingerprints || [], unresolved: r.unresolved || [] };
+    const checks = Array.isArray(r.checks) ? r.checks : [];
+    // 단위의 읽은 경로는 확인 기록이 뒷받침하는 만큼만 인정한다(주장을 줄이는 쪽으로만 맞춘다).
+    const backed = [...new Set(checks.flatMap(c => (Array.isArray(c?.reviewed_paths) ? c.reviewed_paths : [])))].sort();
+    const claimed = [...new Set(Array.isArray(r.reviewed_paths) ? r.reviewed_paths : [])].sort();
+    if (backed.length && backed.join('\n') !== claimed.join('\n')) report.normalized = (report.normalized || 0) + 1;
+    const trial = { ...u, status: r.disposition, reviewed_paths: backed.length ? backed : claimed, local_checks: checks, result_fingerprints: r.candidate_fingerprints || [], unresolved: r.unresolved || [] };
     const errs = ['covered', 'candidate', 'blocked'].includes(r.disposition) ? validateLedger([trial]) : ['disposition 은 covered·candidate·blocked 중 하나여야 합니다.'];
     for (const c of trial.local_checks) if (c?.method === 'local' && !artifactOk(runDir, c.artifact, c.agent_id)) errs.push(`승격되지 않은 로컬 산출물: ${c.artifact}`);
     if (errs.length) { report.errors.push(`${u.coverage_id}: ${errs.slice(0, 3).join(' / ')}`); report.reopened.push(u.coverage_id); continue; }

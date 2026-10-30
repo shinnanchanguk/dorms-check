@@ -145,7 +145,7 @@ async function run() {
   const { verdict, ...cand } = goodConfirmed('notes.idor');
   const badUnits = JSON.parse(JSON.stringify(units)); badUnits[0].reviewed_paths = ['other.ts'];
   const dry = mergeResult(runDir, { agentId: 'h1', dryRun: true, input: { units: badUnits, candidates: [], hardening: [], uncovered: [] } });
-  ok('lint(dryRun): 읽은 경로 합 불일치를 알려 준다', dry.errors.some(e => /읽은 경로 합/.test(e)));
+  ok('lint(dryRun): 확인 기록보다 넓게 적은 읽은 경로는 기록 기준으로 줄여 받는다', dry.errors.length === 0 && dry.normalized === 1);
   ok('lint(dryRun): 범위표는 그대로', loadRun(runDir)['coverage-ledger.json'].filter(u => u.agent_id === 'h1' && u.status === 'in_progress').length === planned.length);
   const m = mergeResult(runDir, { agentId: 'h1', input: { units, candidates: [{ proposed_verdict: 'confirmed', ...cand }], hardening: ['CSP 에 unsafe-eval 이 남음'], uncovered: [] } });
   ok('찾기 결과 병합', m.accepted.length === units.length && m.candidates === 1 && m.errors.length === 0);
