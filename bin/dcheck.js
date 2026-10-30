@@ -65,6 +65,7 @@ function help() {
   log.plain('  심층 점검(정밀 보안 감사, 요청할 때만):');
   log.plain('  dcheck audit plan [--profile quick|standard|deep] [--scope <경로,경로>] [--budget <N>]');
   log.plain('  dcheck audit prompt --role hunter|verifier|critic --agent <ID> [--group <N>|--units <ID,..>|--fingerprint <지문>]');
+  log.plain('  dcheck audit lint --agent <ID> --in <JSON>       돌려주기 전 형식만 확인(바꾸지 않음)');
   log.plain('  dcheck audit merge --agent <ID> --in <JSON>      찾은 결과·범위 비평을 범위표에 넣기');
   log.plain('  dcheck audit record --agent <ID> --in <JSON>     반박 검증·최종 확인 기록');
   log.plain('  dcheck audit promote --agent <ID> --file <경로>   scratch 산출물을 증거로 옮기기');
@@ -620,6 +621,13 @@ async function runAuditCmd() {
       if (r.errors.length) process.exitCode = 2;
       return;
     }
+    if (sub === 'lint') {
+      // 찾는 사람이 돌려주기 전에 스스로 형식을 확인한다. 범위표·결과는 바꾸지 않는다.
+      const r = mergeResult(resolveRunDir(root, runOpt), { agentId: opt('agent', ''), input: readAuditInput(), dryRun: true });
+      if (r.errors.length) { log.err(`형식 오류 ${r.errors.length}건`); for (const e of r.errors.slice(0, 40)) log.plain('  - ' + e); process.exitCode = 2; }
+      else log.ok(`형식이 맞습니다. 받아들일 단위 ${r.accepted?.length ?? 0}개, 후보 ${r.candidates ?? 0}건`);
+      return;
+    }
     if (sub === 'record') {
       const r = recordDecision(resolveRunDir(root, runOpt), { agentId: opt('agent', ''), input: readAuditInput() });
       log.ok(`검증 기록: 반영 ${r.applied.length}건, 새 담당자 확인 대기 ${r.pending.length}건`);
@@ -647,7 +655,7 @@ async function runAuditCmd() {
       printAuditSummary();
       return;
     }
-    log.err('사용법: dcheck audit plan|prompt|merge|record|promote|check|report (dcheck help 참고)');
+    log.err('사용법: dcheck audit plan|prompt|lint|merge|record|promote|check|report (dcheck help 참고)');
     process.exitCode = 1;
   } catch (error) {
     log.err(String(error?.message || error));

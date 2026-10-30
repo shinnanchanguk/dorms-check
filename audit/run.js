@@ -462,7 +462,7 @@ function newUnitFromProposal(x, wave, status, unresolved = []) {
   };
 }
 
-export function mergeResult(runDir, { agentId, input }) {
+export function mergeResult(runDir, { agentId, input, dryRun = false }) {
   if (!isSafeAgentId(agentId)) throw new Error('담당자 ID 형식이 맞지 않습니다.');
   const st = loadRun(runDir);
   const meta = st['run-metadata.json'];
@@ -491,6 +491,7 @@ export function mergeResult(runDir, { agentId, input }) {
       reassigned++;
     }
     ledger.sort((a, b) => a.coverage_id.localeCompare(b.coverage_id));
+    if (dryRun) return { kind: 'critic', added, reassigned, errors: report.errors, dryRun: true };
     saveLedger(runDir, ledger);
     meta.critic_passes = [...(meta.critic_passes || []), { agent_id: agentId, at: new Date().toISOString(), added, reassigned, stop: input.stop === true,
       clean: added === 0 && reassigned === 0, resolved_prior_leads: (input.resolved_prior_leads || []).slice(0, 200) }];
@@ -540,6 +541,7 @@ export function mergeResult(runDir, { agentId, input }) {
     } catch (e) { report.errors.push(`uncovered: ${e.message}`); }
   }
   ledger.sort((a, b) => a.coverage_id.localeCompare(b.coverage_id));
+  if (dryRun) return { kind: 'hunter', ...report, dryRun: true };
   saveLedger(runDir, ledger);
   cands.sort((a, b) => a.fingerprint.localeCompare(b.fingerprint));
   writeJsonAtomic(path.join(runDir, 'candidates.json'), cands);

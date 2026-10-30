@@ -116,6 +116,13 @@ export function renderHunterPrompt({ agentId, units, architecture, runDir, exclu
   out.push('', '돌려줄 JSON 모양(설명 없이 객체 하나):', '', fence('json', JSON.stringify(HUNTER_RESULT, null, 2)));
   out.push('', 'candidates 항목 모양(confirmed 제안):', '', fence('json', JSON.stringify(CONFIRMED_SHAPE, null, 2)));
   out.push('', 'candidates 항목 모양(needs_validation 제안, 심각도·실행·수정 필드 없음):', '', fence('json', JSON.stringify(NEEDS_SHAPE, null, 2)));
+  out.push('', '형식 규칙(어기면 결과 전체가 다시 맡겨진다):',
+    '- 단위의 reviewed_paths 는 그 단위 checks 들의 reviewed_paths 를 모두 합친 것과 정확히 같아야 한다(빠지거나 더 있으면 안 됨).',
+    '- candidate 단위의 candidate_fingerprints 와 candidates 의 fingerprint 는 서로 빠짐없이 맞아야 한다. 후보마다 그 지문을 가진 candidate 단위가 하나 이상 있어야 한다.',
+    '- evidence 항목은 file·line·description 만, trace 항목은 kind·file·line·scope·description 만 쓴다.',
+    '- conditions[].kind 는 authentication_level·authorization_role·user_interaction·system_configuration·network_routing·environmental_dependency·data_state·timing_dependency·third_party_dependency 중 하나.',
+    '- severity 는 likelihood·impact({score, reason})와 overall_severity, overall_severity 는 impact.score 보다 높을 수 없다.',
+    `- 돌려주기 전에 \`dcheck audit lint --agent ${agentId} --in <scratch 의 result.json> --run ${runDir}\` 로 형식을 확인하고 오류가 0 이 될 때까지 고친다(범위표는 바뀌지 않는다).`);
   out.push('', '규칙: 맡은 coverage_id 는 units 에 정확히 한 번씩. covered 는 읽은 경로·확인 기록이 있고 남은 질문·후보가 없다. candidate 만 후보 지문을 가진다. blocked 는 읽은 경로·확인 기록·남은 질문이 있고 지문이 없다. 경로는 모두 저장소 기준 상대 경로. 여러 단계 경로는 entrypoint 로 시작해 sink 로 끝나고 중간은 propagation.');
   return out.join('\n') + '\n';
 }
