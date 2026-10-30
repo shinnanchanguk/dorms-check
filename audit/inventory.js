@@ -41,6 +41,9 @@ function lineOf(text, re) {
 }
 
 function firstSeg(rel) { return rel.split('/')[0]; }
+function countNewlines(text, from, to) { let n = 0; for (let i = from; i < to; i++) if (text.charCodeAt(i) === 10) n++; return n; }
+function sizeOk(full, max) { try { const st = fs.lstatSync(full); return st.isFile() && st.size <= max; } catch { return false; } }
+const INVISIBLE_PATH = /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202E\u2060-\u206F\uFEFF]/u;
 
 // 경로에서 하위 영역(subsystem)을 정한다. API 는 api/ 다음 한 칸까지, 그 밖은 앞쪽 세 칸 폴더.
 export function subsystemOf(rel) {
@@ -68,7 +71,7 @@ const RULES = [
   { kind: 'outbound-fetch', serverOnly: true, text: /\bfetch\(\s*(?!['"`]https?:\/\/|['"`]\/)[A-Za-z_$`]|axios\.(get|post)\(\s*(?!['"`]https?:)[A-Za-z_$]|\bgot\(\s*[A-Za-z_$]/ },
   { kind: 'html-sink', text: /dangerouslySetInnerHTML|\.innerHTML\s*[+]?=|insertAdjacentHTML\(|document\.write\(|\bv-html\b|\{@html\b|\bmarked\(|markdown-it|rehype-raw/ },
   { kind: 'client-message', text: /addEventListener\(\s*['"]message['"]|\.onmessage\s*=|\.postMessage\(/ },
-  { kind: 'redirect', text: /(redirect\(|NextResponse\.redirect|location\.(href|assign|replace)|router\.(push|replace)\()[^\n]*(next|returnTo|return_to|redirect_to|redirectTo|callbackUrl|continue|goto)\b|searchParams\.get\(\s*['"](next|returnTo|return_to|redirect|redirect_to|redirectTo|callbackUrl|continue|goto)['"]/ },
+  { kind: 'redirect', text: /(redirect\(|NextResponse\.redirect|location\.(href|assign|replace)|router\.(push|replace)\()[^\n]{0,200}?(next|returnTo|return_to|redirect_to|redirectTo|callbackUrl|continue|goto)\b|searchParams\.get\(\s*['"](next|returnTo|return_to|redirect|redirect_to|redirectTo|callbackUrl|continue|goto)['"]/ },
   { kind: 'service-worker', text: /serviceWorker\.register\(|self\.addEventListener\(\s*['"]fetch['"]/ },
   { kind: 'browser-storage', text: /\b(localStorage|sessionStorage|indexedDB)\b/ },
 ];
@@ -81,13 +84,15 @@ function isServerFile(rel, text) {
 // SQL 파일에서 함수 정의(마지막 정의가 이긴다)와 정책·뷰·저장소 표면을 뽑는다.
 function sqlSurfaces(rel, text, functions) {
   const out = [];
-  const fnRe = /create\s+(?:or\s+replace\s+)?function\s+([\w."]+)\s*\(/ig;
-  let m;
-  while ((m = fnRe.exec(text))) {
-    const tail = text.slice(m.index, m.index + 6000);
-    const body = tail.split(/;\s*\n\s*(?:create|alter|grant|revoke|drop|comment)\b/i)[0];
+  const fnRe = /create\s+(?:or\s+replace\s+)?function\s+([\w."]{1,200})\s*\(/ig;
+  let m, count = 0, lastIdx = 0, lastLine = 1;
+  // 줄 번호는 앞에서부터 이어 세고(매번 처음부터 자르지 않음), 한 파일의 함수 수도 묶는다.
+  while ((m = fnRe.exec(text)) && count++ < 3000) {
+    lastLine += countNewlines(text, lastIdx, m.index); lastIdx = m.index;
+    const end = text.slice(m.index, m.index + 6000).search(/;\s*\n\s*(?:create|alter|grant|revoke|drop|comment)\b/i);
+    const body = text.slice(m.index, m.index + (end < 0 ? 6000 : end));
     const name = m[1].replaceAll('"', '').replace(/^public\./, '');
-    functions.set(name, { file: rel, line: text.slice(0, m.index).split('\n').length, definer: /\bsecurity\s+definer\b/i.test(body) });
+    functions.set(name, { file: rel, line: lastLine, definer: /\bsecurity\s+definer\b/i.test(body) });
   }
   for (const d of text.matchAll(/drop\s+function\s+(?:if\s+exists\s+)?([\w."]+)/ig)) functions.delete(d[1].replaceAll('"', '').replace(/^public\./, ''));
   if (/create\s+(?:or\s+replace\s+)?view\b/i.test(text) || /\bpolicy\b|\bgrant\b|row\s+level\s+security/i.test(text)) {
@@ -106,7 +111,10 @@ export function buildInventory(root, { scope = [] } = {}) {
   let nativeCode = false;
   const functions = new Map();
 
-  for (const rel of files) {
+  for (const rawRel of files) {
+    // 보이지 않는 문자가 든 경로는 건너뛰고, 한글 경로는 NFC 로 맞춘다(맥 NFD 이름도 같은 ID 가 되게).
+    if (INVISIBLE_PATH.test(rawRel)) { outOfScope.set('invisible-name', (outOfScope.get('invisible-name') || 0) + 1); continue; }
+    const rel = rawRel.normalize('NFC');
     const top = firstSeg(rel);
     const ext = path.extname(rel).toLowerCase();
     if (OPERATOR_DIRS.has(top) && !rel.startsWith('.github/workflows/')) {
@@ -126,25 +134,25 @@ export function buildInventory(root, { scope = [] } = {}) {
       continue;
     }
     if (rel === 'vercel.json') {
-      const v = readJsonSafe(path.join(root, rel)) || {};
+      const v = sizeOk(path.join(root, rawRel), 1024 * 1024) ? (readJsonSafe(path.join(root, rawRel)) || {}) : {};
       for (const c of v.crons || []) if (c?.path) add({ kind: 'cron-route', file: rel, line: 1, scope: String(c.path).slice(0, 200) });
       continue;
     }
     if (ext === '.sql') {
-      const text = readTextSafe(path.join(root, rel));
-      if (text && text.length <= MAX_BYTES * 4) surfaces.push(...sqlSurfaces(rel, text, functions));
+      const text = sizeOk(path.join(root, rawRel), MAX_BYTES * 2) ? readTextSafe(path.join(root, rawRel)) : null;
+      if (text) surfaces.push(...sqlSurfaces(rel, text, functions));
       continue;
     }
     if (ext === '.html' && rel.split('/').length <= 2) {
-      const text = readTextSafe(path.join(root, rel)) || '';
+      const text = sizeOk(path.join(root, rawRel), MAX_BYTES) ? (readTextSafe(path.join(root, rawRel)) || '') : '';
       if (/<script\b/i.test(text)) add({ kind: 'static-html', file: rel, line: lineOf(text, /<script\b/i) || 1, scope: 'inline-script' });
       continue;
     }
     if (!CODE_EXT.has(ext)) continue;
     let stat;
-    try { stat = fs.statSync(path.join(root, rel)); } catch { continue; }
+    try { stat = fs.statSync(path.join(root, rawRel)); } catch { continue; }
     if (stat.size > MAX_BYTES) continue;
-    const text = readTextSafe(path.join(root, rel));
+    const text = readTextSafe(path.join(root, rawRel));
     if (!text) continue;
     // 묶어 낸(minified) 외부 라이브러리는 앱이 쓴 코드가 아니다.
     if (text.length > 20000 && text.split('\n').length < text.length / 400) continue;

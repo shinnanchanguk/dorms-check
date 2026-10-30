@@ -72,9 +72,21 @@ function checkScore(obj, label, errors, enumList = SCORES) {
 }
 
 // mode 'final' 은 verdict, 'candidate' 는 찾는 사람이 내는 proposed_verdict 를 본다.
+// 에이전트 글이 터미널·보고서를 위장하지 못하게 제어 문자와 방향·보이지 않는 문자를 받지 않는다.
+const CONTROL_ANY = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u;
+function controlPaths(v, at, out, depth = 0) {
+  if (depth > 8 || out.length > 5) return out;
+  if (typeof v === 'string') { if (CONTROL_ANY.test(v)) out.push(at); }
+  else if (Array.isArray(v)) v.forEach((x, i) => controlPaths(x, `${at}[${i}]`, out, depth + 1));
+  else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) controlPaths(x, `${at}.${k}`, out, depth + 1);
+  return out;
+}
+
 export function validateFinding(f, label = 'finding', { mode = 'final' } = {}) {
   const errors = [];
   if (!f || typeof f !== 'object' || Array.isArray(f)) return [`${label}: 객체가 아닙니다.`];
+  for (const at of controlPaths(f, label, [])) errors.push(`${at}: 제어 문자·보이지 않는 문자는 받지 않습니다.`);
+  if (typeof f.title === 'string' && /\n/.test(f.title)) errors.push(`${label}.title: 제목은 한 줄이어야 합니다.`);
   const key = mode === 'candidate' ? 'proposed_verdict' : 'verdict';
   const verdict = f[key];
   const allowed = mode === 'candidate' ? ['confirmed', 'needs_validation'] : VERDICTS;
@@ -86,6 +98,7 @@ export function validateFinding(f, label = 'finding', { mode = 'final' } = {}) {
   const known = new Set([...required]);
   const extra = Object.keys(f).filter(k => !known.has(k));
   if (extra.length) errors.push(`${label}: 이 판정에 없는 필드 ${extra.join(', ')}`);
+  if (typeof f.fingerprint === 'string' && f.fingerprint in Object.prototype) errors.push(`${label}.fingerprint: 예약된 이름(${f.fingerprint})은 지문으로 쓸 수 없습니다.`);
   if (typeof f.fingerprint !== 'string' || !FINGERPRINT_RE.test(f.fingerprint)) errors.push(`${label}.fingerprint: 형식이 맞지 않습니다(영문·숫자·._:/@+- , 줄 번호·담당자·판정 넣지 않기).`);
   for (const k of ['title', 'description', 'root_cause', 'intended_behavior', 'claimed_root_cause', 'reason']) {
     if (f[k] !== undefined && !visible(f[k])) errors.push(`${label}.${k}: 비었습니다.`);

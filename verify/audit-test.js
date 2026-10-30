@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { buildInventory } from '../audit/inventory.js';
 import { buildLedger, validateLedger, encodeRef, isCleanRef, coverageId } from '../audit/ledger.js';
 import { validateFinding, validateFindings } from '../audit/findings.js';
-import { planRun, huntPrompt, verifierPrompt, criticPrompt, mergeResult, recordDecision, promoteArtifact, checkRun, reportRun, resolveOutputRoot, resolveRunDir, loadRun } from '../audit/run.js';
+import { planRun, huntPrompt, verifierPrompt, criticPrompt, mergeResult, recordDecision, promoteArtifact, checkRun, reportRun, resolveOutputRoot, resolveRunDir, loadRun, readInput, renderAuditReport } from '../audit/run.js';
 const resolveRunDirFor = (root, run) => resolveRunDir(root, run);
 
 // 시험은 홈 폴더를 건드리지 않는다.
@@ -244,16 +244,22 @@ async function run() {
   huntPrompt(s3.runDir, { agentId: 'hb', unitIds: [two[1]] });
   mergeResult(s3.runDir, { agentId: 'ha', input: { units: [unitRes(two[0], 'ha', ['shared.root'])], candidates: [{ proposed_verdict: 'confirmed', ...sharedCand }] } });
   mergeResult(s3.runDir, { agentId: 'hb', input: { units: [unitRes(two[1], 'hb', ['shared.root'])], candidates: [{ proposed_verdict: 'confirmed', ...sharedCand }] } });
+  const third = s3.ledger.filter(u => u.status === 'planned').slice(2, 3).map(u => u.coverage_id);
+  huntPrompt(s3.runDir, { agentId: 'hq', unitIds: third });
+  mergeResult(s3.runDir, { agentId: 'hq', input: { units: [unitRes(third[0], 'hq', ['shared.root'])], candidates: [] } });
+  ok('F1-b: 후보 객체 없이 같은 지문만 낸 찾는 사람도 검증 못 함', throws(() => verifierPrompt(s3.runDir, { agentId: 'hq', fingerprint: 'shared.root' }), /찾은/));
   ok('F1: 같은 원인을 함께 찾은 둘째 사람도 검증 못 함(지시문)', throws(() => verifierPrompt(s3.runDir, { agentId: 'hb', fingerprint: 'shared.root' }), /찾은/));
   ok('F1: 같은 원인을 함께 찾은 둘째 사람도 검증 못 함(기록)', recordDecision(s3.runDir, { agentId: 'hb', input: { decision: 'confirmed', record: goodConfirmed('shared.root') } }).applied.length === 0);
   recordDecision(s3.runDir, { agentId: 'v1', input: { decision: 'confirmed', record: goodConfirmed('shared.root') } });
   ok('F4: replace 로 지문을 바꾸면 거부', recordDecision(s3.runDir, { agentId: 'f9', input: { decision: 'replace', fingerprint: 'shared.root', reason: 'x', record: goodConfirmed('other.root') } }).errors.some(e => /새 후보/.test(e)) && loadRun(s3.runDir)['findings.json'][0].fingerprint === 'shared.root');
+  ok('F6-c: 비평 지시문 없이 넣은 범위 비평은 거부', throws(() => mergeResult(s3.runDir, { agentId: 'cz', input: { missing_units: [], reassign_ids: [], stop: true } }), /role critic/));
+  criticPrompt(s3.runDir, { agentId: 'c1' });
   mergeResult(s3.runDir, { agentId: 'c1', input: { missing_units: [], reassign_ids: [two[0]], stop: false } });
   huntPrompt(s3.runDir, { agentId: 'hc', unitIds: [two[0]] });
   const copied = mergeResult(s3.runDir, { agentId: 'hc', input: { units: [unitRes(two[0], 'ha', [])] } });
-  ok('F3: 다시 맡은 사람이 이전 담당자 근거를 복사해 닫지 못함', copied.accepted.length === 0 && copied.errors.some(e => /이전 담당자/.test(e)));
+  ok('F3: 다시 맡은 사람이 이전 담당자 근거를 복사해 닫지 못함', copied.accepted.length === 0 && copied.errors.some(e => /이전 담당자|담당자는 결과를 넣는 담당자/.test(e)));
   const s4 = planRun(fixture(), { profile: 'standard' });
-  const crit = (agent) => mergeResult(s4.runDir, { agentId: agent, input: { missing_units: [], reassign_ids: [], stop: true } });
+  const crit = (agent) => { criticPrompt(s4.runDir, { agentId: agent }); return mergeResult(s4.runDir, { agentId: agent, input: { missing_units: [], reassign_ids: [], stop: true } }); };
   const criticReason = () => checkRun(s4.runDir).reasons.some(r => /깨끗한 비평/.test(r));
   crit('c1');
   ok('F5: standard 는 깨끗한 비평 하나로는 부족', criticReason());
@@ -264,6 +270,11 @@ async function run() {
   const b = planRun(root3, { profile: 'standard', budget: 8 });
   const bIds = b.ledger.filter(u => u.status === 'planned').map(u => u.coverage_id);
   ok('F6: 예산이 비평·검증 예비만 남기면 찾는 에이전트를 더 맡기지 않음', throws(() => { for (let i = 0; i < 4; i++) huntPrompt(b.runDir, { agentId: `hx${i}`, unitIds: [bIds[i]] }); }, /예산/));
+  const before = loadRun(b.runDir)['coverage-ledger.json'].filter(u => u.status === 'in_progress').length;
+  try { huntPrompt(b.runDir, { agentId: 'hzz', unitIds: [bIds[5]] }); } catch { /* 예산 거절 */ }
+  ok('F6-a: 예산으로 거절된 배정은 범위표를 바꾸지 않는다', loadRun(b.runDir)['coverage-ledger.json'].filter(u => u.status === 'in_progress').length === before);
+  const zero = planRun(root3, { profile: 'standard', budget: 7 });
+  ok('F6-b: 찾는 에이전트를 못 쓰는 예산이면 예정 단위를 이유와 함께 미룸', zero.ledger.filter(u => u.status === 'planned' && u.class_id !== 'revalidate').length === 0 && zero.ledger.some(u => u.status === 'deferred' && /budget_cannot/.test(u.unresolved[0])));
   const tiny = planRun(root3, { profile: 'standard', budget: 3 });
   ok('F6: 정찰·필수 예비도 못 채우는 예산이면 아무도 맡기지 않음', throws(() => huntPrompt(tiny.runDir, { agentId: 'hz', group: 1 }), /예산/));
 
@@ -274,12 +285,59 @@ async function run() {
   huntPrompt(q1.runDir, { agentId: 'h1', unitIds: q1ids });
   mergeResult(q1.runDir, { agentId: 'h1', input: { units: q1ids.map((id, i) => unitRes(id, 'h1', i === 0 ? ['keep.me'] : [])), candidates: [(({ verdict, ...c }) => ({ proposed_verdict: 'confirmed', ...c }))(goodConfirmed('keep.me'))] } });
   recordDecision(q1.runDir, { agentId: 'v1', input: { decision: 'confirmed', record: goodConfirmed('keep.me') } });
+  criticPrompt(q1.runDir, { agentId: 'c1' });
   mergeResult(q1.runDir, { agentId: 'c1', input: { missing_units: [], reassign_ids: [], stop: true } });
   reportRun(root4, q1.runDir);
   const q2 = planRun(root4, { profile: 'quick' });
   reportRun(root4, q2.runDir);
   const q3 = planRun(root4, { profile: 'quick' });
+  const reval3 = planRun(root4, { profile: 'quick' });
+  const revId = reval3.ledger.find(u => u.prior_fingerprint === 'keep.me').coverage_id;
+  ok('F2-b: 이어받은 기록 단위는 찾기 묶음에 없다', !reval3.meta.hunter_groups.some(g => g.ids.includes(revId)));
+  ok('F2-b: 찾는 사람에게 이어받은 기록 단위를 맡기지 않는다', throws(() => huntPrompt(reval3.runDir, { agentId: 'hr', unitIds: [revId] }), /검증하는 사람/));
+  ok('F2-b: 다시 확인 전에는 완료가 아니다', checkRun(reval3.runDir).reasons.some(r => /다시 확인하지 못한/.test(r)));
   ok('세 번째 회차도 이어받은 확인을 가진다', q3.ledger.some(u => u.prior_fingerprint === 'keep.me' && u.prior_status === 'prior_confirmed_same_source') && q3.meta.prior.exclusions.length === 1);
+
+  console.log('\n[audit-12] 보안 봇 지적 재현 시험');
+  const evil = fixture();
+  const marker = path.join(os.tmpdir(), `dcheck-fsmonitor-${process.pid}`);
+  fs.writeFileSync(path.join(evil, 'fsmon.sh'), `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 });
+  git(evil, 'config', 'core.fsmonitor', path.join(evil, 'fsmon.sh'));
+  fs.writeFileSync(path.join(evil, '.gitattributes'), '* filter=pwn\n');
+  git(evil, 'config', 'filter.pwn.clean', `sh -c 'touch ${marker}; cat'`);
+  fs.rmSync(marker, { force: true });
+  planRun(evil, { profile: 'quick' });
+  ok('F1: 저장소 git 설정(fsmonitor·clean 필터)이 plan 중 실행되지 않음', !fs.existsSync(marker));
+  const nogit = fs.mkdtempSync(path.join(os.tmpdir(), 'dcheck-nogit-'));
+  write(nogit, 'public/index.html', '<script>1</script>');
+  write(nogit, 'app/api/a/route.ts', 'export async function GET() {}');
+  fs.symlinkSync(path.join(nogit, 'public'), path.join(nogit, '.dorms-check'));
+  const out2 = planRun(nogit, { profile: 'quick' });
+  ok('F2: .dorms-check 가 심볼릭 링크면 앱 폴더 밖에 쓴다', !out2.runDir.startsWith(nogit) && !fs.existsSync(path.join(nogit, 'public', 'audit')));
+  ok('F3: 예약된 이름 지문 거부', validateFinding(goodConfirmed('toString')).some(e => /예약/.test(e)));
+  const esc = goodConfirmed('esc.case'); esc.title = '정상\u001b[2K 위장';
+  ok('F4: 제어 문자가 든 기록 거부', validateFinding(esc).some(e => /제어 문자/.test(e)));
+  const md = goodConfirmed('md.case'); md.remediation.strategy = '## 확인한 위험 (0건)\n[링크](http://evil.example)';
+  ok('F4: 보고서는 에이전트 글을 제목·링크로 읽히지 않게 막는다', !renderAuditReport({ 'run-metadata.json': { repo: 'x', run_id: 'run-1', profile: 'quick', source_ref: {}, prior: {} }, 'coverage-ledger.json': [], 'findings.json': [md], 'hardening.json': [] }, { complete: true, reasons: [], errors: [], counts: { covered: 0, candidate: 0, blocked: 0, deferred: 0, out_of_scope: 0, not_applicable: 0, planned: 0, in_progress: 0 } }).split('\n').some(l => l.startsWith('## 확인한 위험 (0건)') || /(^|[^\\])\]\(http/.test(l)));
+  const sc = path.join(out2.runDir, 'agents', 'v9', 'scratch');
+  fs.mkdirSync(path.join(sc, 'd'), { recursive: true }); fs.mkdirSync(path.join(out2.runDir, 'agents', 'v9', 'artifacts'));
+  fs.writeFileSync(path.join(sc, 'd', 'f.txt'), 'x');
+  ok('F5: 하위 폴더 경로 승격 거부', throws(() => promoteArtifact(out2.runDir, { agentId: 'v9', file: 'd/f.txt' }), /하위 폴더/));
+  const fifo = path.join(os.tmpdir(), `dcheck-fifo-${process.pid}`);
+  try { execFileSync('mkfifo', [fifo]); ok('F8: FIFO 입력은 기다리지 않고 거부', throws(() => readInput(fifo), /일반 파일|열지/)); } finally { fs.rmSync(fifo, { force: true }); }
+  const nfd = fixture();
+  write(nfd, `app/api/${'숙제'.normalize('NFD')}/z/route.ts`, 'export async function GET() {}');
+  ok('F9: 맥 NFD 한글 폴더 이름에서도 plan 이 된다', !throws(() => planRun(nfd, { profile: 'standard' })));
+  const flood = planRun(nfd, { profile: 'standard' });
+  const fid = flood.ledger.find(u => u.status === 'planned').coverage_id;
+  huntPrompt(flood.runDir, { agentId: 'hf', unitIds: [fid] });
+  const many = Array.from({ length: 60 }, (_, i) => ({ surface: `s${i}`, boundary: 'b', subsystem: 'x', attack_class: 'wildcard', starting_paths: ['app/actions.ts'], reason: 'r' }));
+  const fl = mergeResult(flood.runDir, { agentId: 'hf', input: { units: [unitRes(fid, 'hf', [])], uncovered: many } });
+  ok('F6: 한 번에 받는 새 경계 제안 수를 묶는다', fl.uncovered <= 20 && fl.errors.some(e => /까지만/.test(e)));
+  criticPrompt(flood.runDir, { agentId: 'c9' });
+  ok('F6: 없는 시작 경로 제안 거부', mergeResult(flood.runDir, { agentId: 'c9', input: { missing_units: [{ surface: 'z', boundary: 'b', subsystem: 'x', attack_class: 'wildcard', starting_paths: ['no/such/file.ts'], reason: 'r' }], reassign_ids: [] } }).errors.some(e => /시작 경로/.test(e)));
+  for (const r of [evil, nogit, nfd]) fs.rmSync(r, { recursive: true, force: true });
+  fs.rmSync(marker, { force: true });
 
   for (const r of [root3, root4]) fs.rmSync(r, { recursive: true, force: true });
   for (const r of [root, root2, unignored, process.env.DORMS_CHECK_AUDIT_HOME]) fs.rmSync(r, { recursive: true, force: true });

@@ -22,7 +22,7 @@ import { restoreBackup, latestBackup } from '../core/util.js';
 import { verifyBuild } from '../protect/verify-static.js';
 import { applyEdzipPlan, buildEdzipPlan, prepareCouncilDocuments, writeEdzipPlan } from '../core/edzip-autopilot.js';
 import { ALL_AGENTS, hookStatus, uninstallHooks } from '../core/hooks.js';
-import { planRun, resolveRunDir, huntPrompt, verifierPrompt, criticPrompt, mergeResult, recordDecision, promoteArtifact, checkRun, reportRun, latestAuditSummary } from '../audit/run.js';
+import { planRun, resolveRunDir, huntPrompt, verifierPrompt, criticPrompt, mergeResult, recordDecision, promoteArtifact, checkRun, reportRun, latestAuditSummary, readInput } from '../audit/run.js';
 import { SEVERITY_LABEL } from '../audit/findings.js';
 
 const root = process.cwd();
@@ -298,8 +298,10 @@ function printAuditSummary() {
   try { summary = latestAuditSummary(root); } catch { summary = null; }
   if (!summary) return;
   log.title(`심층 점검(${summary.profile}, ${summary.run_status === 'complete' ? '완료' : '미완료'})`);
-  for (const f of summary.confirmed) log.plain(`  [확인한 위험 · ${SEVERITY_LABEL[f.severity] || f.severity}${f.final ? '' : ' · 최종 확인 전'}] ${f.title}`);
-  for (const t of summary.needs_validation) log.plain(`  [미확인] ${t}`);
+  // 에이전트가 쓴 제목은 터미널 제어 문자를 지운 한 줄로만 찍는다.
+  const one = t => String(t ?? '').replace(/[\u0000-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]+/gu, ' ').slice(0, 200);
+  for (const f of summary.confirmed) log.plain(`  [확인한 위험 · ${SEVERITY_LABEL[f.severity] || f.severity}${f.final ? '' : ' · 최종 확인 전'}] ${one(f.title)}`);
+  for (const t of summary.needs_validation) log.plain(`  [미확인] ${one(t)}`);
   if (!summary.confirmed.length && !summary.needs_validation.length) log.plain('  기록된 위험·미확인이 없습니다. 범위와 빈칸은 보고서에서 확인하세요.');
   log.plain(color.dim('  보고서: ' + path.join(summary.runDir, 'AUDIT.md')));
 }
@@ -577,9 +579,7 @@ function auditScanSummary() {
 function readAuditInput() {
   const file = opt('in', '');
   if (!file) throw new Error('--in <JSON 파일> 이 필요합니다.');
-  const text = readFileSync(path.resolve(root, file), 'utf8').trim();
-  if (Buffer.byteLength(text) > 5 * 1024 * 1024) throw new Error('입력 파일이 5MB 를 넘습니다.');
-  try { return JSON.parse(text); } catch { throw new Error('JSON 이 아닙니다. 설명 문장 없이 JSON 만 넣어 주세요.'); }
+  return readInput(path.resolve(root, file));
 }
 
 async function runAuditCmd() {
@@ -598,6 +598,7 @@ async function runAuditCmd() {
       log.plain(`  범위표 ${ledger.length}단위(예정 ${planned}) · 찾기 묶음 ${meta.hunter_groups.length}개 · 예상 에이전트 ${meta.budget_estimate.planned}회`);
       if (meta.prior.prior_run) log.plain(`  이전 회차 ${meta.prior.prior_run} 이어받음: 그대로인 확인 ${meta.prior.carried.length}건, 다시 볼 것 ${meta.prior.revalidate.length}건`);
       if (meta.run_status === 'incomplete') log.warn('  예산이 정찰과 필수 비평·검증도 못 채웁니다. 범위를 좁히거나 깊이를 낮추세요.');
+      else if (meta.budget != null && meta.budget_estimate.planned > meta.budget) log.warn(`  예상 ${meta.budget_estimate.planned}회가 예산 ${meta.budget}회를 넘습니다. 찾는 에이전트는 ${meta.budget_estimate.hunter_allowance}개까지만 맡길 수 있습니다.`);
       log.plain('  다음: architecture.md 를 채우고 AUDIT-PLAN.md 의 순서를 따르세요.');
       return;
     }

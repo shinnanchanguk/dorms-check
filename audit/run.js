@@ -30,33 +30,59 @@ function writeTextAtomic(file, text) {
   fs.writeFileSync(tmp, text, { mode: 0o600, flag: 'wx' });
   fs.renameSync(tmp, file);
 }
-function readInput(file) {
-  const stat = fs.lstatSync(file);
-  if (!stat.isFile()) throw new Error('입력 파일이 일반 파일이 아닙니다.');
-  if (stat.size > 5 * 1024 * 1024) throw new Error('입력 파일이 5MB 를 넘습니다.');
-  const text = fs.readFileSync(file, 'utf8').trim();
-  try { return JSON.parse(text); } catch { throw new Error('JSON 이 아닙니다. 설명 문장 없이 JSON 만 넣어 주세요.'); }
+// 에이전트가 만든 입력 파일. 링크·FIFO·장치 파일을 따라가지 않고, 크기를 먼저 확인한 뒤 읽는다.
+export function readInput(file) {
+  const O = fs.constants;
+  let fd;
+  try { fd = fs.openSync(file, O.O_RDONLY | (O.O_NOFOLLOW || 0) | (O.O_NONBLOCK || 0)); }
+  catch (e) { throw new Error(e.code === 'ELOOP' ? '입력 파일이 심볼릭 링크입니다.' : '입력 파일을 열지 못했습니다.'); }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) throw new Error('입력 파일이 일반 파일이 아닙니다.');
+    if (st.size > 5 * 1024 * 1024) throw new Error('입력 파일이 5MB 를 넘습니다.');
+    const buf = Buffer.alloc(st.size);
+    let off = 0;
+    while (off < st.size) { const n = fs.readSync(fd, buf, off, st.size - off, off); if (n <= 0) break; off += n; }
+    const text = buf.subarray(0, off).toString('utf8').trim();
+    try { return JSON.parse(text); } catch { throw new Error('JSON 이 아닙니다. 설명 문장 없이 JSON 만 넣어 주세요.'); }
+  } finally { fs.closeSync(fd); }
 }
 
+// 점검 대상 저장소는 믿을 수 없다. 그 저장소의 .git/config 가 core.fsmonitor·clean 필터로 명령을 실행하지 못하게
+// fsmonitor 를 끄고, 필터를 부르는 명령(status 등)은 쓰지 않는다.
+const GIT_SAFE = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.hooksPath=/dev/null'];
+const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' };
 function git(root, args) {
-  try { return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 4 * 1024 * 1024 }).trim(); }
+  try { return execFileSync('git', ['-C', root, ...GIT_SAFE, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: GIT_ENV, maxBuffer: 4 * 1024 * 1024 }).trim(); }
   catch { return null; }
 }
 function isGitRepo(root) { return git(root, ['rev-parse', '--is-inside-work-tree']) === 'true'; }
 function gitIgnored(root, rel) {
-  try { execFileSync('git', ['-C', root, 'check-ignore', '-q', rel], { stdio: 'ignore' }); return true; } catch { return false; }
+  try { execFileSync('git', ['-C', root, ...GIT_SAFE, 'check-ignore', '-q', '--', rel], { stdio: 'ignore', env: GIT_ENV }); return true; } catch { return false; }
 }
 function sourceRef(root) {
   const head = git(root, ['rev-parse', 'HEAD']);
-  if (!head) return { commit: null, dirty: null };
-  const status = git(root, ['status', '--porcelain', '--untracked-files=no']);
-  return { commit: head, dirty: Boolean(status) };
+  // '작업 중 변경 있음' 판정은 git 이 파일을 다시 해시하며 저장소의 clean 필터를 실행할 수 있어 하지 않는다(null = 확인 안 함).
+  return { commit: head || null, dirty: null };
+}
+// 저장소 안 경로를 한 칸씩 lstat 하며 내려간다. 중간에 심볼릭 링크가 있으면 따라가지 않는다.
+function safeRepoFile(root, rel) {
+  let cur = root;
+  for (const seg of rel.split('/')) {
+    cur = path.join(cur, seg);
+    const st = fs.lstatSync(cur);
+    if (st.isSymbolicLink()) return null;
+  }
+  return cur;
 }
 function digestFile(root, rel) {
   try {
-    const full = path.join(root, rel);
+    if (!isRepoRelative(rel)) return 'invalid-path';
+    const full = safeRepoFile(root, rel);
+    if (!full) return 'symlink';
     const st = fs.lstatSync(full);
     if (!st.isFile()) return 'not-a-file';
+    if (st.size > 5 * 1024 * 1024) return 'too-large';
     return crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
   } catch { return 'missing'; }
 }
@@ -92,7 +118,7 @@ function sealOf(runDir) {
 }
 // 출생 증표: plan 이 이 컴퓨터의 열쇠로 만든 회차인지. 증표 없는 회차는 찾지도, 봉인하지도, 이어받지도 않는다.
 function originToken(runDir, nonce) {
-  return crypto.createHmac('sha256', sealKey()).update('origin\0' + path.resolve(runDir) + '\0' + nonce).digest('hex');
+  return crypto.createHmac('sha256', sealKey()).update('origin\0' + realOrResolved(runDir) + '\0' + nonce).digest('hex');
 }
 function writeOrigin(runDir) {
   const nonce = crypto.randomBytes(16).toString('hex');
@@ -118,9 +144,21 @@ function gitTracks(root, rel) {
   return Boolean(out && out.trim());
 }
 
+function realOrResolved(p) { try { return fs.realpathSync(p); } catch { return path.resolve(p); } }
 function repoKey(root) {
   const name = path.basename(root).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 40) || 'app';
-  return `${name}-${crypto.createHash('sha256').update(path.resolve(root)).digest('hex').slice(0, 8)}`;
+  return `${name}-${crypto.createHash('sha256').update(realOrResolved(root)).digest('hex').slice(0, 8)}`;
+}
+// 앱 폴더 안의 결과 경로에 심볼릭 링크가 끼어 있으면(예: .dorms-check -> public) 쓰지 않는다.
+function hasSymlinkUnder(root, abs) {
+  const rel = path.relative(root, abs);
+  if (!rel || rel.startsWith('..')) return false;
+  let cur = root;
+  for (const seg of rel.split(path.sep)) {
+    cur = path.join(cur, seg);
+    try { if (fs.lstatSync(cur).isSymbolicLink()) return true; } catch { return false; }
+  }
+  return false;
 }
 export function auditRoots(root) {
   return { inRepo: path.join(root, '.dorms-check', 'audit'), external: path.join(auditHome(), repoKey(root)) };
@@ -135,10 +173,12 @@ export function resolveOutputRoot(root, out) {
   if (out) {
     const abs = path.resolve(root, out);
     if (!isInside(root, abs)) return { dir: abs, why: '지정한 앱 폴더 밖 경로' };
+    if (hasSymlinkUnder(root, abs)) throw new Error('지정한 경로에 심볼릭 링크가 있어 쓰지 않습니다.');
     const rel = path.relative(root, abs);
     if (isGitRepo(root) && gitIgnored(root, rel + '/probe')) return { dir: abs, why: '지정한 경로(git 이 무시함)' };
     throw new Error('앱 폴더 안에 쓰려면 그 경로가 .gitignore 에 들어 있어야 합니다. 점검 결과에는 약점 설명이 담깁니다.');
   }
+  if (hasSymlinkUnder(root, roots.inRepo)) return { dir: roots.external, why: '.dorms-check 가 심볼릭 링크라 앱 폴더 밖(홈 폴더)에 둡니다' };
   if (!isGitRepo(root)) return { dir: roots.inRepo, why: 'git 저장소가 아니라 .dorms-check/audit 에 둡니다' };
   // 무시 규칙이 있어도 이미 추적 중인 파일은 무시되지 않는다. 추적 중이면 앱 폴더 밖으로 피한다.
   if (gitIgnored(root, '.dorms-check/audit/probe') && !gitTracks(root, '.dorms-check/audit')) return { dir: roots.inRepo, why: '.dorms-check 가 .gitignore 에 있어 앱 폴더 안에 둡니다' };
@@ -155,9 +195,27 @@ export function latestRunDir(root) {
   const nums = runNumbers(dir);
   for (let i = nums.length - 1; i >= 0; i--) {
     const run = path.join(dir, `run-${nums[i]}`);
-    try { const st = fs.lstatSync(run); if (st.isDirectory() && !st.isSymbolicLink() && originIsValid(run)) return run; } catch { /* 다음 회차 */ }
+    try { const st = fs.lstatSync(run); if (st.isDirectory() && !st.isSymbolicLink() && fs.existsSync(path.join(run, 'run-metadata.json')) && originIsValid(run)) return run; } catch { /* 다음 회차 */ }
   }
   return null;
+}
+// status 처럼 가벼운 명령은 git 을 부르지 않는다. 두 위치를 모두 보고 증표가 맞는 가장 최근 회차를 고른다.
+function latestRunDirNoGit(root) {
+  const roots = auditRoots(root);
+  let best = null, bestAt = '';
+  for (const dir of [hasSymlinkUnder(root, roots.inRepo) ? null : roots.inRepo, roots.external].filter(Boolean)) {
+    for (const n of runNumbers(dir).reverse()) {
+      const run = path.join(dir, `run-${n}`);
+      try {
+        const st = fs.lstatSync(run);
+        if (!st.isDirectory() || st.isSymbolicLink() || !originIsValid(run)) continue;
+        const at = readJson(path.join(run, 'run-metadata.json'), {}).created_at || '';
+        if (at && at > bestAt) { best = run; bestAt = at; }
+        break;
+      } catch { /* 다음 */ }
+    }
+  }
+  return best;
 }
 export function resolveRunDir(root, runOpt) {
   const dir = runOpt ? path.resolve(root, runOpt) : latestRunDir(root);
@@ -213,7 +271,12 @@ function applyPrior(root, ledger, priorDirs, profile, ignored = []) {
   for (const dir of priorDirs) {
     const run = loadRun(dir);
     const digests = readJson(path.join(dir, 'source-digests.json'), {});
-    for (const f of run['findings.json'] || []) if (!latest.has(f.fingerprint)) latest.set(f.fingerprint, { record: f, digests });
+    const complete = run['run-metadata.json']?.run_status === 'complete';
+    for (const f of run['findings.json'] || []) {
+      // 미완료 회차의 기각은 더 오래된 확인을 지우지 못한다.
+      if (f.verdict === 'rejected' && !complete) continue;
+      if (!latest.has(f.fingerprint)) latest.set(f.fingerprint, { record: f, digests });
+    }
     for (const u of run['coverage-ledger.json'] || []) {
       if (u.class_id !== 'revalidate' || !u.prior_record || !['planned', 'in_progress', 'deferred'].includes(u.status)) continue;
       if (!latest.has(u.prior_fingerprint)) latest.set(u.prior_fingerprint, { record: u.prior_record, digests: u.prior_digests || {} });
@@ -221,7 +284,7 @@ function applyPrior(root, ledger, priorDirs, profile, ignored = []) {
   }
   for (const [fp, { record: f, digests }] of [...latest.entries()].sort()) {
     const files = filesOf(f);
-    const same = files.length > 0 && files.every(p => digests[p] && digests[p] === digestFile(root, p));
+    const same = files.length > 0 && files.every(p => Object.hasOwn(digests, p) && digests[p] === digestFile(root, p));
     if (f.verdict === 'confirmed') {
       const u = revalidationUnit(f, same ? 'prior_confirmed_same_source' : 'prior_confirmed_changed_source', files, subsystem, digests);
       if (!byId.has(u.coverage_id)) { ledger.push(u); byId.set(u.coverage_id, u); }
@@ -237,7 +300,7 @@ function applyPrior(root, ledger, priorDirs, profile, ignored = []) {
   }
   const newest = loadRun(priorDirs[0]);
   const newestDigests = readJson(path.join(priorDirs[0], 'source-digests.json'), {});
-  const sameNewest = files => files.length > 0 && files.every(p => newestDigests[p] && newestDigests[p] === digestFile(root, p));
+  const sameNewest = files => files.length > 0 && files.every(p => Object.hasOwn(newestDigests, p) && newestDigests[p] === digestFile(root, p));
   const priorUnits = new Map((newest['coverage-ledger.json'] || []).map(u => [u.coverage_id, u]));
   for (const u of ledger) {
     if (u.class_id === 'revalidate') continue;
@@ -284,7 +347,8 @@ function architectureSkeleton(meta, inventory) {
 }
 
 function hunterGroups(ledger, profile) {
-  const planned = sortByPriority(ledger.filter(u => u.status === 'planned'));
+  // 이어받은 이전 기록 다시 확인 단위는 찾는 사람이 아니라 검증하는 사람이 닫는다.
+  const planned = sortByPriority(ledger.filter(u => u.status === 'planned' && u.class_id !== 'revalidate'));
   const byClass = new Map();
   for (const u of planned) {
     if (!byClass.has(u.class_id)) byClass.set(u.class_id, []);
@@ -301,9 +365,11 @@ function hunterGroups(ledger, profile) {
 function budgetEstimate(profile, hunters, budget) {
   const recon = 4;
   const critics = profile === 'quick' ? 1 : 2;
-  const verifierReserve = Math.max(1, Math.ceil(hunters * (profile === 'quick' ? 0.5 : 1)));
+  // 검증 예비: 예산이 있으면 정찰·비평을 뺀 나머지의 30%(최소 1), 없으면 찾기 묶음 수에 맞춘다.
+  const verifierReserve = budget != null ? Math.max(1, Math.ceil(Math.max(0, budget - recon - critics) * 0.3)) : Math.max(1, Math.ceil(hunters * (profile === 'quick' ? 0.5 : 1)));
   const planned = recon + hunters + critics + verifierReserve;
-  return { recon, hunters, critics, verifier_reserve: verifierReserve, planned, budget: budget ?? null, fits: budget == null ? null : budget >= recon + critics + 1 };
+  const hunterAllowance = budget != null ? Math.max(0, budget - recon - critics - verifierReserve) : null;
+  return { recon, hunters, critics, verifier_reserve: verifierReserve, hunter_allowance: hunterAllowance, planned, budget: budget ?? null, fits: budget == null ? null : budget >= recon + critics + 1 };
 }
 
 function renderPlanMd(meta, ledger, groups) {
@@ -343,17 +409,16 @@ export function planRun(root, { profile = 'standard', scope = [], out = null, bu
   for (const k of [...nums].reverse()) {
     const dir = path.join(output.dir, `run-${k}`);
     if (sealIsValid(dir)) priorDirs.push(dir);
-    else if (fs.existsSync(path.join(dir, 'run-seal.json')) || fs.existsSync(path.join(dir, 'findings.json'))) ignored.push(`run-${k}`);
+    else if (fs.existsSync(path.join(dir, 'run-seal.json'))) ignored.push(`run-${k}`);
   }
   const n = (nums[nums.length - 1] || 0) + 1;
   const runDir = path.join(output.dir, `run-${n}`);
-  fs.mkdirSync(runDir, { mode: 0o700 });
-  fs.mkdirSync(path.join(runDir, 'agents'), { mode: 0o700 });
-  writeOrigin(runDir);
-
+  // 범위표를 먼저 다 만든 뒤에 회차 폴더를 만든다. 중간에 실패해도 빈 회차가 남아 이전 회차를 가리지 않게.
   const inventory = buildInventory(root, { scope: scope.map(s => s.replace(/\/$/, '')) });
   const ledger = buildLedger(inventory, { profile });
   const prior = applyPrior(root, ledger, priorDirs, profile, ignored);
+  fs.mkdirSync(runDir, { mode: 0o700 });
+  fs.mkdirSync(path.join(runDir, 'agents'), { mode: 0o700 });
   ledger.sort((a, b) => a.coverage_id.localeCompare(b.coverage_id));
   const groups = hunterGroups(ledger, profile);
   const meta = {
@@ -365,6 +430,10 @@ export function planRun(root, { profile = 'standard', scope = [], out = null, bu
     excluded_classes: excludedClassesSummary(),
   };
   if (budget != null && !meta.budget_estimate.fits) { meta.run_status = 'incomplete'; meta.incomplete_reason = 'budget_cannot_fund_reconnaissance_and_reserves'; }
+  else if (budget != null && meta.budget_estimate.hunter_allowance === 0) {
+    // 찾는 에이전트를 한 명도 못 쓰면 예정 단위를 이유와 함께 미룸으로 둔다(막다른 회차가 되지 않게).
+    for (const u of ledger) if (u.status === 'planned' && u.class_id !== 'revalidate') Object.assign(u, { status: 'deferred', unresolved: ['budget_cannot_reserve_critics_and_validation: 예산이 비평·검증 예비만 겨우 채워 찾기를 미뤘습니다.'] });
+  }
   saveLedger(runDir, ledger);
   writeJsonAtomic(path.join(runDir, 'run-metadata.json'), meta);
   writeJsonAtomic(path.join(runDir, 'inventory.json'), inventory);
@@ -372,6 +441,7 @@ export function planRun(root, { profile = 'standard', scope = [], out = null, bu
   writeJsonAtomic(path.join(runDir, 'verification.json'), {});
   writeTextAtomic(path.join(runDir, 'architecture.md'), architectureSkeleton(meta, inventory));
   writeTextAtomic(path.join(runDir, 'AUDIT-PLAN.md'), renderPlanMd(meta, ledger, groups));
+  writeOrigin(runDir);
   return { runDir, meta, ledger, inventory };
 }
 
@@ -398,10 +468,12 @@ export function huntPrompt(runDir, { agentId, unitIds = [], group = null }) {
   }
   if (!ids.length) throw new Error('--units 또는 --group 이 필요합니다.');
   const byId = new Map(ledger.map(u => [u.coverage_id, u]));
+  checkBudget(meta, agentId, 'hunter');
   const units = [];
   for (const id of ids) {
     const u = byId.get(id);
     if (!u) throw new Error(`범위표에 없는 단위: ${id}`);
+    if (u.class_id === 'revalidate') throw new Error(`이전 결과 다시 확인 단위는 검증하는 사람이 닫습니다: dcheck audit prompt --role verifier --fingerprint ${u.prior_fingerprint}`);
     if (u.status === 'in_progress' && u.agent_id === agentId) { units.push(u); continue; }
     if (u.status !== 'planned') { if (group != null) continue; throw new Error(`예정(planned) 상태가 아닌 단위는 맡길 수 없습니다: ${id} (${u.status})`); }
     if ((u.attempts || []).some(a => a.agent_id === agentId)) throw new Error(`다시 맡긴 단위는 이전과 다른 담당자여야 합니다: ${id}`);
@@ -430,10 +502,10 @@ export function verifierPrompt(runDir, { agentId, fingerprint }) {
     if (!reval) throw new Error(`후보 지문을 찾지 못했습니다: ${fingerprint}`);
     cand = { fingerprint, finders: [], proposed: reval.prior_record || { fingerprint } };
   }
-  if (findersOf(cand).includes(agentId)) throw new Error('후보를 찾은 담당자는 그 후보를 검증할 수 없습니다. 새 담당자 ID 를 쓰세요.');
+  if (huntersOf(cand, ledger, fingerprint).includes(agentId)) throw new Error('후보를 찾은 담당자는 그 후보를 검증할 수 없습니다. 새 담당자 ID 를 쓰세요.');
   if (findings.some(f => f.fingerprint === fingerprint) && st['run-metadata.json'].profile !== 'quick') {
     // 최종 기록 확인(5단계)은 찾은 사람·3단계 검증자·교체 제안자와 다른 사람이 해야 한다.
-    const v = verification[fingerprint] || {};
+    const v = Object.hasOwn(verification, fingerprint) ? verification[fingerprint] : {};
     const used = [v.phase3?.agent_id, ...(v.phase5 || []).map(x => x.agent_id), v.pending_replacement?.proposed_by].filter(Boolean);
     if (used.includes(agentId)) throw new Error('최종 기록 확인은 앞서 검증한 담당자와 다른 새 담당자가 해야 합니다.');
   }
@@ -454,12 +526,27 @@ export function criticPrompt(runDir, { agentId }) {
 }
 
 // 같은 원인을 여러 찾는 사람이 냈을 수 있다. 그중 누구도 그 후보를 검증할 수 없다.
+function huntersOf(c, ledger, fp) {
+  const set = new Set(findersOf(c));
+  for (const u of ledger || []) {
+    if (u.class_id === 'revalidate') continue;
+    if ((u.result_fingerprints || []).includes(fp) && u.agent_id) set.add(u.agent_id);
+    for (const a of u.attempts || []) if ((a.result_fingerprints || []).includes(fp) && a.agent_id) set.add(a.agent_id);
+  }
+  return [...set];
+}
 function findersOf(c) {
   return [...new Set([c?.found_by, ...(Array.isArray(c?.finders) ? c.finders : [])].filter(Boolean))];
 }
 
 // ── 예산(사용자가 정한 에이전트 호출 상한) ──
 function recordAssignment(runDir, meta, agentId, role, items) {
+  checkBudget(meta, agentId, role);
+  meta.assignments = [...(meta.assignments || []), { agent_id: agentId, role, items, at: new Date().toISOString() }];
+  writeJsonAtomic(path.join(runDir, 'run-metadata.json'), meta);
+}
+// 배정 전에 먼저 예산을 확인한다(거절되면 범위표를 바꾸지 않는다).
+function checkBudget(meta, agentId, role) {
   if (meta.budget != null) {
     const est = meta.budget_estimate || {};
     const agents = new Set((meta.assignments || []).map(a => a.agent_id));
@@ -472,11 +559,31 @@ function recordAssignment(runDir, meta, agentId, role, items) {
       if (total > meta.budget) throw new Error(`예산(${meta.budget})을 넘습니다. 회차를 미완료로 두고 남은 후보를 보고서에 밝히세요.`);
     }
   }
-  meta.assignments = [...(meta.assignments || []), { agent_id: agentId, role, items, at: new Date().toISOString() }];
-  writeJsonAtomic(path.join(runDir, 'run-metadata.json'), meta);
 }
 
 // ── 병합 ──
+const MAX_PROPOSALS_PER_MERGE = 20;
+const MAX_PROPOSALS_PER_AGENT = 40;
+const CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u;
+export function hasControl(s) { return CONTROL.test(String(s)); }
+function cleanNotes(list) {
+  if (!Array.isArray(list)) return [];
+  return list.filter(h => typeof h === 'string' && h.trim() && !hasControl(h)).map(h => h.slice(0, 1000)).slice(0, 30);
+}
+// 한 담당자가 범위표를 부풀리지 못하게 제안 수를 묶고, 시작 경로는 실제로 있는 파일만 받는다.
+function proposalAllowed(meta, agentId, x, report) {
+  meta.proposals = meta.proposals || {};
+  const used = meta.proposals[agentId] || 0;
+  if (used >= MAX_PROPOSALS_PER_AGENT) { report.errors.push(`${agentId} 의 새 단위 제안이 ${MAX_PROPOSALS_PER_AGENT}개를 넘었습니다.`); return false; }
+  const paths = Array.isArray(x?.starting_paths) ? x.starting_paths : [];
+  if (!paths.length || paths.some(p => !isRepoRelative(p) || !safeExists(meta.target, p))) { report.errors.push('새 단위 제안의 시작 경로가 저장소에 없습니다.'); return false; }
+  if ([x?.surface, x?.boundary, x?.subsystem, x?.reason].some(v => typeof v === 'string' && hasControl(v))) { report.errors.push('새 단위 제안에 제어 문자가 있습니다.'); return false; }
+  meta.proposals[agentId] = used + 1;
+  return true;
+}
+function safeExists(root, rel) {
+  try { return Boolean(root) && Boolean(safeRepoFile(root, rel)); } catch { return false; }
+}
 function artifactOk(runDir, rel, agentId) {
   if (typeof rel !== 'string' || !rel.startsWith(`agents/${agentId}/artifacts/`) || !isRepoRelative(rel)) return false;
   let cur = runDir;
@@ -514,9 +621,12 @@ export function mergeResult(runDir, { agentId, input, dryRun = false }) {
   const quick = meta.profile === 'quick';
 
   if (input && Array.isArray(input.missing_units)) {
+    if (!(meta.assignments || []).some(a => a.agent_id === agentId && a.role === 'critic')) throw new Error(`범위 비평은 먼저 dcheck audit prompt --role critic --agent ${agentId} 로 맡긴 담당자만 넣을 수 있습니다.`);
     // 범위 비평 결과
     let added = 0, reassigned = 0;
-    for (const x of input.missing_units) {
+    if (input.missing_units.length > MAX_PROPOSALS_PER_MERGE) report.errors.push(`빈칸 제안은 한 번에 ${MAX_PROPOSALS_PER_MERGE}개까지만 받습니다.`);
+    for (const x of input.missing_units.slice(0, MAX_PROPOSALS_PER_MERGE)) {
+      if (!proposalAllowed(meta, agentId, x, report)) continue;
       try {
         const u = newUnitFromProposal(x, maxWave + 1, quick ? 'deferred' : 'planned', quick ? ['quick 점검: 범위 비평이 찾은 빈칸을 다음 점검으로 미룸'] : []);
         if (ledger.some(v => v.coverage_id === u.coverage_id)) continue;
@@ -551,6 +661,8 @@ export function mergeResult(runDir, { agentId, input, dryRun = false }) {
     if (seen.has(u.coverage_id)) { report.errors.push(`같은 단위가 두 번 있습니다: ${u.coverage_id}`); continue; }
     seen.add(u.coverage_id);
     const checks = Array.isArray(r.checks) ? r.checks : [];
+    if (checks.some(c => c?.agent_id !== agentId)) { report.errors.push(`${u.coverage_id}: 확인 기록의 담당자는 결과를 넣는 담당자(${agentId})와 같아야 합니다.`); report.reopened.push(u.coverage_id); continue; }
+    if ([...(r.unresolved || []), ...checks.flatMap(c => [c?.invariant, c?.result])].some(x => typeof x === 'string' && hasControl(x))) { report.errors.push(`${u.coverage_id}: 제어 문자·보이지 않는 문자가 든 문장은 받지 않습니다.`); report.reopened.push(u.coverage_id); continue; }
     // 단위의 읽은 경로는 확인 기록이 뒷받침하는 만큼만 인정한다(주장을 줄이는 쪽으로만 맞춘다).
     const backed = [...new Set(checks.flatMap(c => (Array.isArray(c?.reviewed_paths) ? c.reviewed_paths : [])))].sort();
     const claimed = [...new Set(Array.isArray(r.reviewed_paths) ? r.reviewed_paths : [])].sort();
@@ -560,7 +672,8 @@ export function mergeResult(runDir, { agentId, input, dryRun = false }) {
     for (const c of trial.local_checks) if (c?.method === 'local' && !artifactOk(runDir, c.artifact, c.agent_id)) errs.push(`승격되지 않은 로컬 산출물: ${c.artifact}`);
     if (errs.length) { report.errors.push(`${u.coverage_id}: ${errs.slice(0, 3).join(' / ')}`); report.reopened.push(u.coverage_id); continue; }
     Object.assign(u, trial);
-    if (Array.isArray(input.hardening) && input.hardening.length) u.hardening = [...new Set([...(u.hardening || []), ...input.hardening.map(String).slice(0, 50)])];
+    const notes = cleanNotes(input.hardening);
+    if (notes.length) u.hardening = [...new Set([...(u.hardening || []), ...notes])];
     for (const f of u.result_fingerprints) fpsInUnits.add(f);
     report.accepted.push(u.coverage_id);
   }
@@ -584,7 +697,10 @@ export function mergeResult(runDir, { agentId, input, dryRun = false }) {
     } else cands.push({ fingerprint: c.fingerprint, state: 'unvalidated', found_by: agentId, finders: [agentId], units: unitIds, proposed: c, verifiers: [] });
     report.candidates++;
   }
-  for (const x of input.uncovered || []) {
+  const uncoveredIn = Array.isArray(input.uncovered) ? input.uncovered : [];
+  if (uncoveredIn.length > MAX_PROPOSALS_PER_MERGE) report.errors.push(`새 경계 제안은 한 번에 ${MAX_PROPOSALS_PER_MERGE}개까지만 받습니다(${uncoveredIn.length}개 중 앞쪽만).`);
+  for (const x of uncoveredIn.slice(0, MAX_PROPOSALS_PER_MERGE)) {
+    if (!proposalAllowed(meta, agentId, x, report)) continue;
     try {
       const u = newUnitFromProposal(x, maxWave + 1, quick ? 'deferred' : 'planned', quick ? ['quick 점검: 찾는 중 발견한 새 경계를 다음 점검으로 미룸'] : []);
       if (!ledger.some(v => v.coverage_id === u.coverage_id)) { ledger.push(u); report.uncovered++; }
@@ -596,8 +712,9 @@ export function mergeResult(runDir, { agentId, input, dryRun = false }) {
   cands.sort((a, b) => a.fingerprint.localeCompare(b.fingerprint));
   writeJsonAtomic(path.join(runDir, 'candidates.json'), cands);
   const hard = st['hardening.json'];
-  for (const h of input.hardening || []) if (typeof h === 'string' && h.trim()) hard.push({ agent_id: agentId, note: h.slice(0, 1000), units: report.accepted });
+  for (const h of cleanNotes(input.hardening)) hard.push({ agent_id: agentId, note: h, units: report.accepted });
   writeJsonAtomic(path.join(runDir, 'hardening.json'), hard);
+  writeJsonAtomic(path.join(runDir, 'run-metadata.json'), meta);
   return { kind: 'hunter', ...report };
 }
 
@@ -626,8 +743,8 @@ export function recordDecision(runDir, { agentId, input }) {
     const cand = cands.find(c => c.fingerprint === fp);
     const reval = ledger.find(u => u.prior_fingerprint === fp);
     if (!cand && !reval) { out.errors.push(`${label}: 이 회차의 후보·이어받은 기록이 아닌 지문입니다(${fp}).`); continue; }
-    if (cand && findersOf(cand).includes(agentId)) { out.errors.push(`${label}: 찾은 담당자는 자기 후보를 검증할 수 없습니다.`); continue; }
-    const v = verification[fp] || { phase3: null, phase5: [], pending_replacement: null };
+    if (huntersOf(cand, ledger, fp).includes(agentId)) { out.errors.push(`${label}: 찾은 담당자는 자기 후보를 검증할 수 없습니다.`); continue; }
+    const v = Object.hasOwn(verification, fp) ? verification[fp] : { phase3: null, phase5: [], pending_replacement: null };
 
     if (['confirmed', 'needs_validation', 'rejected'].includes(d.decision)) {
       const rec = d.record;
@@ -650,7 +767,7 @@ export function recordDecision(runDir, { agentId, input }) {
     } else if (d.decision === 'verified' || d.decision === 'replace') {
       const current = findings.find(f => f.fingerprint === fp);
       if (!current) { out.errors.push(`${label}: 최종 기록이 아직 없습니다. 먼저 반박 검증을 기록하세요.`); continue; }
-      const used = new Set([...findersOf(cand), v.phase3?.agent_id, ...(v.phase5 || []).map(x => x.agent_id), v.pending_replacement?.proposed_by].filter(Boolean));
+      const used = new Set([...huntersOf(cand, ledger, fp), v.phase3?.agent_id, ...(v.phase5 || []).map(x => x.agent_id), v.pending_replacement?.proposed_by].filter(Boolean));
       if (meta.profile !== 'quick' && used.has(agentId)) { out.errors.push(`${label}: 최종 확인은 앞서 찾거나 검증한 적 없는 새 담당자가 해야 합니다.`); continue; }
       if (d.decision === 'verified') {
         if (v.pending_replacement) {
@@ -694,7 +811,7 @@ export function recordDecision(runDir, { agentId, input }) {
 // ── 산출물 승격(부모만) ──
 export function promoteArtifact(runDir, { agentId, file }) {
   if (!isSafeAgentId(agentId)) throw new Error('담당자 ID 형식이 맞지 않습니다.');
-  if (!isRepoRelative(file)) throw new Error('scratch 기준 상대 경로만 승격합니다.');
+  if (!isRepoRelative(file) || file.includes('/')) throw new Error('작업 폴더 바로 아래 파일 이름 하나만 승격합니다(하위 폴더는 받지 않음).');
   const scratch = path.join(runDir, 'agents', agentId, 'scratch');
   const artifacts = path.join(runDir, 'agents', agentId, 'artifacts');
   for (const d of [scratch, artifacts]) { const s = fs.lstatSync(d); if (!s.isDirectory() || s.isSymbolicLink()) throw new Error('담당자 폴더가 올바르지 않습니다.'); }
@@ -756,10 +873,10 @@ export function checkRun(runDir) {
   for (const f of findings) if (!cands.some(c => c.fingerprint === f.fingerprint) && !ledger.some(u => u.prior_fingerprint === f.fingerprint)) errors.push(`기록 ${f.fingerprint} 이 이 회차 후보가 아닙니다.`);
   const unvalidated = cands.filter(c => c.state === 'unvalidated').map(c => c.fingerprint);
   if (unvalidated.length) reasons.push(`반박 검증을 받지 못한 후보 ${unvalidated.length}건: ${unvalidated.join(', ')}`);
-  const carried = ledger.filter(u => u.class_id === 'revalidate' && ['planned', 'in_progress'].includes(u.status)).map(u => u.prior_fingerprint);
+  const carried = ledger.filter(u => u.class_id === 'revalidate' && !(Object.hasOwn(verification, u.prior_fingerprint) && verification[u.prior_fingerprint].phase3)).map(u => u.prior_fingerprint);
   if (carried.length) reasons.push(`이어받은 이전 기록 중 다시 확인하지 못한 것 ${carried.length}건: ${carried.join(', ')}`);
   if (meta.profile !== 'quick') {
-    const missing5 = findings.filter(f => f.verdict !== 'rejected' && !(verification[f.fingerprint]?.phase5 || []).some(x => x.decision !== 'minor-correction')).map(f => f.fingerprint);
+    const missing5 = findings.filter(f => !((Object.hasOwn(verification, f.fingerprint) ? verification[f.fingerprint].phase5 : null) || []).some(x => x.decision !== 'minor-correction')).map(f => f.fingerprint);
     if (missing5.length) reasons.push(`최종 기록 확인이 없는 기록 ${missing5.length}건: ${missing5.join(', ')}`);
   }
   const pending = Object.entries(verification).filter(([, v]) => v.pending_replacement).map(([fp]) => fp);
@@ -780,7 +897,10 @@ export function checkRun(runDir) {
 }
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, informational: 4 };
-const cell = s => String(s ?? '').replace(/\|/g, '\\|').replace(/\s*\n\s*/g, ' ').slice(0, 300);
+const strip = s => String(s ?? '').replace(/[\u0000-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]+/gu, ' ');
+const cell = s => strip(s).replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim().slice(0, 300);
+// 에이전트가 쓴 문장을 한 줄로 만들고 마크다운 구조(제목·인용·목록·링크)로 읽히지 않게 막는다.
+const line = (s, n = 600) => strip(s).replace(/\s+/g, ' ').trim().slice(0, n).replace(/^[#>\-*+\d.\s]+/, m => m.replace(/[#>*+-]/g, c => '\\' + c)).replace(/[\[\]<>`]/g, c => '\\' + c);
 
 export function renderAuditReport(st, chk) {
   const meta = st['run-metadata.json'];
@@ -795,10 +915,13 @@ export function renderAuditReport(st, chk) {
   L.push(`- 점검 깊이: ${meta.profile}${meta.scope_paths?.length ? ` · 범위 ${meta.scope_paths.join(', ')}` : ' · 저장소 전체'}`);
   L.push(`- 코드 기준: ${meta.source_ref?.commit || '(git 아님)'}${meta.source_ref?.dirty ? ' · 커밋 안 된 변경 포함' : ''}`);
   L.push('- 실행 방식: 코드 읽기와 내 컴퓨터 안의 작은 확인만 했습니다. 배포된 서버에 공격 요청을 보내지 않았습니다.');
+  const ignoredNote = meta.prior?.ignored_prior ? ` · 봉인이 맞지 않아 건너뛴 회차: ${meta.prior.ignored_prior.runs.join('·')}(폴더를 옮겼거나 다른 컴퓨터·다른 열쇠로 만든 회차일 수 있음)` : '';
   const priorLine = meta.prior?.prior_run
     ? `${(meta.prior.prior_runs || [meta.prior.prior_run]).join('·')} 이어받음 (그대로인 확인 ${meta.prior.carried.length}건, 다시 본 것 ${meta.prior.revalidate.length}건)`
     : (meta.prior?.ignored_prior ? `${meta.prior.ignored_prior.runs.join('·')} 이 있었지만 이 컴퓨터의 봉인이 맞지 않아 이어받지 않았습니다(폴더를 옮겼거나 다른 컴퓨터에서 만든 회차일 수 있음).` : '없음. 첫 점검입니다.');
-  L.push(`- 이전 점검: ${priorLine}`);
+  L.push(`- 이전 점검: ${priorLine}${meta.prior?.prior_run ? ignoredNote : ''}`);
+  const pendingCarry = (st['coverage-ledger.json'] || []).filter(u => u.class_id === 'revalidate' && !findings.some(f => f.fingerprint === u.prior_fingerprint));
+  if (pendingCarry.length) L.push(`- 이전 회차에서 나온 기록 ${pendingCarry.length}건을 이번에 다시 확인하지 못했습니다. 이번 결과에 없다고 사라진 것이 아닙니다: ${pendingCarry.map(u => '\`' + u.prior_fingerprint + '\`').join(', ')}`);
   if (meta.budget != null) L.push(`- 예산: 에이전트 ${meta.budget}회 (계획 ${meta.budget_estimate?.planned}회)`);
   L.push(`- 진행 상태: ${chk.complete ? '완료' : '미완료'}`);
   if (partial) L.push('', '> 이번 점검은 부분 점검입니다. 아래 "범위 요약"의 미룸·범위 밖 항목은 보지 않았거나 덜 봤습니다. 한 번의 점검으로 전체가 안전하다고 말할 수 없고, 같은 저장소를 다시 점검하면 이번 빈칸부터 이어서 봅니다.');
@@ -813,26 +936,26 @@ export function renderAuditReport(st, chk) {
     L.push('| 심각도 | 제목 | 결과 지점 | 관찰한 결과 |', '|---|---|---|---|');
     for (const f of confirmed) { const t = f.trace[f.trace.length - 1]; L.push(`| ${SEVERITY_LABEL[f.severity.overall_severity]} | ${cell(f.title)} | ${cell(`${t.file}:${t.line}`)} | ${cell(f.execution.observed_result)} |`); }
     for (const f of confirmed) {
-      L.push('', `### ${f.title}`, '', `- 지문: \`${f.fingerprint}\``, `- 위치: ${f.trace.map(t => `${t.file}:${t.line}`).join(' → ')}`,
-        `- 누가: ${f.execution.attacker_perspective}`, `- 조건: ${f.conditions.length ? f.conditions.map(c => c.description).join(' / ') : '특별한 조건 없음'}`,
-        `- 로컬 재현: ${f.execution.instructions.join(' → ')}`, `- 관찰한 결과: ${f.execution.observed_result}`,
-        `- 영향: ${f.severity.impact.reason}`, `- 우선순위 이유: 가능성 ${SEVERITY_LABEL[f.severity.likelihood.score]}(${f.severity.likelihood.reason})`,
-        `- 원인: ${f.root_cause}`, `- 가장 작은 수정: ${f.remediation.strategy}`);
+      L.push('', `### ${line(f.title, 200)}`, '', `- 지문: \`${f.fingerprint}\``, `- 위치: ${line(f.trace.map(t => `${t.file}:${t.line}`).join(' → '))}`,
+        `- 누가: ${line(f.execution.attacker_perspective)}`, `- 조건: ${f.conditions.length ? line(f.conditions.map(c => c.description).join(' / ')) : '특별한 조건 없음'}`,
+        `- 로컬 재현: ${line(f.execution.instructions.join(' → '), 1200)}`, `- 관찰한 결과: ${line(f.execution.observed_result)}`,
+        `- 영향: ${line(f.severity.impact.reason)}`, `- 우선순위 이유: 가능성 ${SEVERITY_LABEL[f.severity.likelihood.score]}(${line(f.severity.likelihood.reason)})`,
+        `- 원인: ${line(f.root_cause)}`, `- 가장 작은 수정(에이전트 제안): ${line(f.remediation.strategy, 1200)}`);
     }
   } else L.push('없음.');
   L.push('', `## 확인이 더 필요한 것 (${needs.length}건, 심각도 없음)`, '');
   if (needs.length) {
-    L.push('| 제목 | 코드 경로 | 막힌 사실 | 내 컴퓨터에서 확인 | 운영자가 직접 확인 |', '|---|---|---|---|---|');
+    L.push('| 제목 | 코드 경로 | 막힌 사실 | 내 컴퓨터에서 확인(에이전트 제안) | 운영자가 직접 확인(에이전트 제안) |', '|---|---|---|---|---|');
     for (const f of needs) L.push(`| ${cell(f.title)} | ${cell(f.trace.map(t => `${t.file}:${t.line}`).join(' → '))} | ${cell(f.blockers.join(' / '))} | ${cell(f.validation_plan.local || '-')} | ${cell(f.validation_plan.deployment || '-')} |`);
   } else L.push('없음.');
   const hardening = [...new Set((st['hardening.json'] || []).map(h => h.note))];
-  L.push('', `## 권고 (위험은 아님, ${hardening.length}건)`, '', ...(hardening.length ? hardening.map(h => `- ${h}`) : ['없음.']));
+  L.push('', `## 권고 (위험은 아님, ${hardening.length}건)`, '', ...(hardening.length ? hardening.map(h => `- ${line(h, 1000)}`) : ['없음.']));
   const c = chk.counts;
   L.push('', '## 범위 요약', '', `- 본 단위 ${c.covered} · 후보가 나온 단위 ${c.candidate} · 막힌 단위 ${c.blocked} · 미룸 ${c.deferred} · 범위 밖 ${c.out_of_scope} · 해당 없음 ${c.not_applicable} · 남은 예정·진행 ${c.planned + c.in_progress}`);
   const lastCritic = (meta.critic_passes || []).slice(-1)[0];
   L.push(`- 마지막 범위 비평: ${lastCritic ? (lastCritic.clean ? `${lastCritic.agent_id}, 새 빈칸 없음` : `${lastCritic.agent_id}, 빈칸 ${lastCritic.added}개·다시 맡김 ${lastCritic.reassigned}개`) : '받지 않음'}`);
   const gaps = ledger.filter(u => ['deferred', 'blocked', 'out_of_scope'].includes(u.status)).slice(0, 30);
-  if (gaps.length) L.push('', '못 보거나 막힌 범위(최대 30개):', ...gaps.map(u => `- [${u.status}] ${u.attack_class} · ${u.surface} · ${u.subsystem}: ${(u.unresolved || []).join(' / ')}`));
+  if (gaps.length) L.push('', '못 보거나 막힌 범위(최대 30개):', ...gaps.map(u => `- [${u.status}] ${line(u.attack_class, 80)} · ${line(u.surface, 200)} · ${line(u.subsystem, 200)}: ${line((u.unresolved || []).join(' / '))}`));
   L.push('', '뺀 분류:', ...(meta.excluded_classes || []).map(x => `- ${x.ref}: ${x.reason}`));
   if (rejected.length) L.push('', `## 기각한 주장 (${rejected.length}건)`, '', '다음 점검이 근거 없이 같은 주장을 반복하지 않도록 지문만 남깁니다: ' + rejected.map(f => `\`${f.fingerprint}\``).join(', '));
   L.push('', '---', '이 점검의 흐름과 분류 일부는 cloudflare/security-audit-skill(MIT)을 한국어로 옮겨 교사 앱에 맞게 고친 것입니다.');
@@ -858,18 +981,19 @@ export function reportRun(root, runDir) {
   writeTextAtomic(path.join(runDir, 'AUDIT.md'), md);
   // 다음 회차가 믿고 이어받을 수 있게 이 컴퓨터의 열쇠로 봉인한다.
   try { fs.rmSync(path.join(runDir, 'run-seal.json'), { force: true }); } catch { /* 없음 */ }
-  writeJsonAtomic(path.join(runDir, 'run-seal.json'), { hmac: sealOf(runDir), at: new Date().toISOString() });
+  // 형식 오류가 있는 회차는 봉인하지 않는다(다음 회차가 이어받지 않음).
+  if (!chk.errors.length) writeJsonAtomic(path.join(runDir, 'run-seal.json'), { hmac: sealOf(runDir), at: new Date().toISOString() });
   return { chk, md, meta };
 }
 
 export function latestAuditSummary(root) {
-  const dir = latestRunDir(root);
+  const dir = latestRunDirNoGit(root);
   if (!dir) return null;
   const st = loadRun(dir);
   const f = st['findings.json'] || [];
   const profile = st['run-metadata.json'].profile;
   const v = st['verification.json'] || {};
-  const finalChecked = fp => profile === 'quick' || (v[fp]?.phase5 || []).some(x => x.decision !== 'minor-correction');
+  const finalChecked = fp => profile === 'quick' || ((Object.hasOwn(v, fp) ? v[fp].phase5 : null) || []).some(x => x.decision !== 'minor-correction');
   return {
     runDir: dir, run_status: st['run-metadata.json'].run_status, profile,
     confirmed: f.filter(x => x.verdict === 'confirmed').map(x => ({ title: x.title, severity: x.severity.overall_severity, final: finalChecked(x.fingerprint) })),

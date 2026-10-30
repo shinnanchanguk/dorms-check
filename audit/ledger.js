@@ -42,6 +42,8 @@ const BOUNDARY = {
   repo: '저장소 전체',
 };
 
+const CONTROL_TEXT = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u;
+
 export function isSafeAgentId(id) {
   return typeof id === 'string' && AGENT_ID_RE.test(id) && !WINDOWS_DEVICES.has(id);
 }
@@ -234,6 +236,7 @@ function checkEvidenceState(u, label, errors, { archived = false } = {}) {
     if (!Array.isArray(c.reviewed_paths) || !c.reviewed_paths.length) errors.push(`${cl}.reviewed_paths: 비어 있으면 안 됩니다.`);
     else for (const p of c.reviewed_paths) { if (!isRepoRelative(p)) errors.push(`${cl}.reviewed_paths: 상대 경로가 아닙니다.`); union.add(p); }
     if (!c.invariant || !String(c.invariant).trim()) errors.push(`${cl}.invariant: 확인한 규칙이 비었습니다.`);
+    if ([c.invariant, c.result].some(x => typeof x === 'string' && CONTROL_TEXT.test(x))) errors.push(`${cl}: 제어 문자·보이지 않는 문자는 받지 않습니다.`);
     if (!c.result || !String(c.result).trim()) errors.push(`${cl}.result: 확인 결과가 비었습니다.`);
     if (c.method === 'source') { if (c.artifact !== null) errors.push(`${cl}.artifact: 코드 읽기 확인에는 산출물이 없어야 합니다(null).`); }
     else if (c.method === 'local') {
