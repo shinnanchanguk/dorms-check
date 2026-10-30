@@ -164,6 +164,12 @@ export function buildLedger(inventory, { profile = 'standard' } = {}) {
       if (!units.has(u.coverage_id)) units.set(u.coverage_id, u);
     }
   }
+  if (inventory.invisible_path_count) {
+    const cls = { id: 'wildcard', title: '분류 밖 이상한 코드', cf: 'ATTACK-CLASSES.md#Wildcard' };
+    const u = makeUnit({ kind: 'repo', subsystem: profile === 'quick' ? QUICK_SUBSYSTEM : '.', cls, surfaceRef: 'repo/invisible-names', paths: [] });
+    u.escaped_paths = inventory.invisible_paths;
+    put(u);
+  }
   if (inventory.native_code) {
     const cls = { id: 'memory-safety', title: '메모리 안전(네이티브 코드)', cf: 'MEMORY-SAFETY-AND-BINARY.md' };
     put(makeUnit({ kind: 'repo', subsystem: '.', cls, surfaceRef: 'repo/native-code', paths: [], status: 'out_of_scope',

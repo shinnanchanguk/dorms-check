@@ -341,7 +341,13 @@ async function run() {
   ok('F6: 한 번에 받는 새 경계 제안 수를 묶는다', fl.uncovered <= 20 && fl.errors.some(e => /까지만/.test(e)));
   criticPrompt(flood.runDir, { agentId: 'c9' });
   ok('F6: 없는 시작 경로 제안 거부', mergeResult(flood.runDir, { agentId: 'c9', input: { missing_units: [{ surface: 'z', boundary: 'b', subsystem: 'x', attack_class: 'wildcard', starting_paths: ['no/such/file.ts'], reason: 'r' }], reassign_ids: [] } }).errors.some(e => /시작 경로/.test(e)));
-  for (const r of [evil, nogit, nfd]) fs.rmSync(r, { recursive: true, force: true });
+  const hidden = fixture();
+  write(hidden, 'app/api/a\u200Bb/route.ts', 'export async function POST() {}');
+  const hp = planRun(hidden, { profile: 'quick' });
+  ok('보이지 않는 문자 경로는 숨기지 않고 우선 확인 단위로', hp.ledger.some(u => u.surface === 'repo/invisible-names' && u.status === 'planned' && u.escaped_paths.length === 1));
+  const sentinel = goodConfirmed('sentinel.case'); sentinel.trace = sentinel.trace.map(t => ({ ...t, file: 'gone/missing.ts' })); sentinel.evidence = [{ file: 'gone/missing.ts', line: 1, description: 'x' }];
+  ok('보고서 이스케이프는 역슬래시부터', renderAuditReport({ 'run-metadata.json': { repo: 'x', run_id: 'run-1', profile: 'quick', source_ref: {}, prior: {} }, 'coverage-ledger.json': [], 'findings.json': [{ ...md, fingerprint: 'bs.case', remediation: { strategy: '\\](http://evil.example)' } }], 'hardening.json': [] }, { complete: true, reasons: [], errors: [], counts: { covered: 0, candidate: 0, blocked: 0, deferred: 0, out_of_scope: 0, not_applicable: 0, planned: 0, in_progress: 0 } }).includes('\\\\\\]\\(http'));
+  for (const r of [evil, nogit, nfd, hidden]) fs.rmSync(r, { recursive: true, force: true });
   fs.rmSync(marker, { force: true });
 
   for (const r of [root3, root4]) fs.rmSync(r, { recursive: true, force: true });

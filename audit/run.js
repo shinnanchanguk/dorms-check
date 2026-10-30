@@ -75,6 +75,8 @@ function safeRepoFile(root, rel) {
   }
   return cur;
 }
+// 'missing'·'symlink' 같은 표식끼리 같다고 '코드 그대로'로 보지 않는다. 진짜 해시일 때만 비교한다.
+const isHash = d => typeof d === 'string' && /^[0-9a-f]{64}$/.test(d);
 function digestFile(root, rel) {
   try {
     if (!isRepoRelative(rel)) return 'invalid-path';
@@ -284,7 +286,7 @@ function applyPrior(root, ledger, priorDirs, profile, ignored = []) {
   }
   for (const [fp, { record: f, digests }] of [...latest.entries()].sort()) {
     const files = filesOf(f);
-    const same = files.length > 0 && files.every(p => Object.hasOwn(digests, p) && digests[p] === digestFile(root, p));
+    const same = files.length > 0 && files.every(p => Object.hasOwn(digests, p) && isHash(digests[p]) && digests[p] === digestFile(root, p));
     if (f.verdict === 'confirmed') {
       const u = revalidationUnit(f, same ? 'prior_confirmed_same_source' : 'prior_confirmed_changed_source', files, subsystem, digests);
       if (!byId.has(u.coverage_id)) { ledger.push(u); byId.set(u.coverage_id, u); }
@@ -300,7 +302,7 @@ function applyPrior(root, ledger, priorDirs, profile, ignored = []) {
   }
   const newest = loadRun(priorDirs[0]);
   const newestDigests = readJson(path.join(priorDirs[0], 'source-digests.json'), {});
-  const sameNewest = files => files.length > 0 && files.every(p => Object.hasOwn(newestDigests, p) && newestDigests[p] === digestFile(root, p));
+  const sameNewest = files => files.length > 0 && files.every(p => Object.hasOwn(newestDigests, p) && isHash(newestDigests[p]) && newestDigests[p] === digestFile(root, p));
   const priorUnits = new Map((newest['coverage-ledger.json'] || []).map(u => [u.coverage_id, u]));
   for (const u of ledger) {
     if (u.class_id === 'revalidate') continue;
@@ -898,9 +900,11 @@ export function checkRun(runDir) {
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, informational: 4 };
 const strip = s => String(s ?? '').replace(/[\u0000-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]+/gu, ' ');
-const cell = s => strip(s).replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim().slice(0, 300);
+// 마크다운 특수 문자는 역슬래시부터 먼저 이스케이프한다(그래야 '\]' 같은 입력으로 이스케이프를 풀 수 없다).
+const mdEscape = t => t.replace(/\\/g, '\\\\').replace(/[\[\]()<>`!*_|]/g, c => '\\' + c);
+const cell = s => mdEscape(strip(s).replace(/\s+/g, ' ').trim().slice(0, 300));
 // 에이전트가 쓴 문장을 한 줄로 만들고 마크다운 구조(제목·인용·목록·링크)로 읽히지 않게 막는다.
-const line = (s, n = 600) => strip(s).replace(/\s+/g, ' ').trim().slice(0, n).replace(/^[#>\-*+\d.\s]+/, m => m.replace(/[#>*+-]/g, c => '\\' + c)).replace(/[\[\]<>`]/g, c => '\\' + c);
+const line = (s, n = 600) => mdEscape(strip(s).replace(/\s+/g, ' ').trim().slice(0, n)).replace(/^[#>\-+\d.\s]+/, m => m.replace(/[#>+-]/g, c => '\\' + c));
 
 export function renderAuditReport(st, chk) {
   const meta = st['run-metadata.json'];

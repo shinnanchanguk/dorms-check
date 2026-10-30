@@ -98,6 +98,7 @@ export function renderHunterPrompt({ agentId, units, architecture, runDir, exclu
   out.push('', fence('json', JSON.stringify(units.map(u => ({
     coverage_id: u.coverage_id, surface: u.surface, boundary: u.boundary, subsystem: u.subsystem, class_id: u.class_id, attack_class: u.attack_class,
     starting_paths: u.starting_paths || [], starting_paths_total: u.starting_paths_total || 0, prior_status: u.prior_status || 'none',
+    ...(u.escaped_paths ? { escaped_paths: u.escaped_paths, escaped_paths_note: '보이지 않는 문자가 든 파일 이름(URL 인코딩). decodeURI 로 풀어 열고, 왜 그런 이름인지부터 본다.' } : {}),
   })), null, 1)));
   out.push('', '## 3. 이번에 볼 분류(내용 그대로)');
   for (const cls of classes) out.push('', classBlock(cls));

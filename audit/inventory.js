@@ -110,10 +110,12 @@ export function buildInventory(root, { scope = [] } = {}) {
   const add = s => surfaces.push(s);
   let nativeCode = false;
   const functions = new Map();
+  const invisible = [];
 
   for (const rawRel of files) {
     // 보이지 않는 문자가 든 경로는 건너뛰고, 한글 경로는 NFC 로 맞춘다(맥 NFD 이름도 같은 ID 가 되게).
-    if (INVISIBLE_PATH.test(rawRel)) { outOfScope.set('invisible-name', (outOfScope.get('invisible-name') || 0) + 1); continue; }
+    // 보이지 않는 문자가 든 경로는 범위표 ID 로 쓸 수 없지만 숨겨 두면 점검을 피하는 길이 된다. 따로 모아 우선 확인 단위로 넘긴다.
+    if (INVISIBLE_PATH.test(rawRel)) { invisible.push(encodeURI(rawRel)); continue; }
     const rel = rawRel.normalize('NFC');
     const top = firstSeg(rel);
     const ext = path.extname(rel).toLowerCase();
@@ -209,5 +211,7 @@ export function buildInventory(root, { scope = [] } = {}) {
     scoped_out: outScoped,
     operator_or_test_files: Object.fromEntries([...outOfScope.entries()].sort()),
     native_code: nativeCode,
+    invisible_paths: invisible.slice(0, 200),
+    invisible_path_count: invisible.length,
   };
 }
