@@ -6,7 +6,11 @@ import { execFileSync } from 'node:child_process';
 import { buildInventory } from '../audit/inventory.js';
 import { buildLedger, validateLedger, encodeRef, isCleanRef, coverageId } from '../audit/ledger.js';
 import { validateFinding, validateFindings } from '../audit/findings.js';
-import { planRun, huntPrompt, verifierPrompt, criticPrompt, mergeResult, recordDecision, promoteArtifact, checkRun, reportRun, resolveOutputRoot, loadRun } from '../audit/run.js';
+import { planRun, huntPrompt, verifierPrompt, criticPrompt, mergeResult, recordDecision, promoteArtifact, checkRun, reportRun, resolveOutputRoot, resolveRunDir, loadRun } from '../audit/run.js';
+const resolveRunDirFor = (root, run) => resolveRunDir(root, run);
+
+// 시험은 홈 폴더를 건드리지 않는다.
+process.env.DORMS_CHECK_AUDIT_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dcheck-audit-home-'));
 
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) { pass++; console.log('  v', name); } else { fail++; console.error('  x', name); } }
@@ -120,7 +124,7 @@ async function run() {
   console.log('\n[audit-5] 결과 폴더는 버전 관리 밖');
   const unignored = fixture({ ignore: false });
   const out = resolveOutputRoot(unignored, null);
-  ok('.dorms-check 를 무시하지 않는 저장소면 홈 폴더 밖으로', !out.dir.startsWith(unignored) && out.dir.includes('.dorms-check-audit'));
+  ok('.dorms-check 를 무시하지 않는 저장소면 앱 폴더 밖(홈 쪽)으로', !out.dir.startsWith(unignored) && out.dir.startsWith(process.env.DORMS_CHECK_AUDIT_HOME));
   ok('무시되지 않는 앱 안 경로 --out 거부', throws(() => resolveOutputRoot(unignored, 'audit-out'), /gitignore/));
   ok('무시하는 저장소면 .dorms-check/audit', resolveOutputRoot(root, null).dir === path.join(root, '.dorms-check', 'audit'));
 
@@ -180,6 +184,30 @@ async function run() {
   const run3 = planRun(root, { profile: 'quick' });
   ok('코드가 바뀌면 다시 확인 대상', run3.ledger.find(u => u.prior_fingerprint === 'notes.idor')?.prior_status === 'prior_confirmed_changed_source' && run3.meta.prior.exclusions.length === 0);
 
+  console.log('\n[audit-8b] 심어 둔·손댄 이전 회차는 믿지 않는다');
+  const planted = fixture();
+  const fake = path.join(planted, '.dorms-check', 'audit', 'run-1');
+  fs.mkdirSync(fake, { recursive: true });
+  write(planted, '.dorms-check/audit/run-1/findings.json', JSON.stringify([goodConfirmed('notes.idor')]));
+  write(planted, '.dorms-check/audit/run-1/source-digests.json', '{}');
+  write(planted, '.dorms-check/audit/run-1/run-seal.json', JSON.stringify({ hmac: '00'.repeat(32) }));
+  write(planted, '.dorms-check/audit/run-1/run-metadata.json', '{}');
+  const p1 = planRun(planted, { profile: 'quick' });
+  ok('봉인이 맞지 않는 회차는 이어받지 않음', p1.meta.prior.prior_run === null && p1.meta.prior.ignored_prior && p1.meta.prior.exclusions.length === 0);
+  const tampered = path.join(path.dirname(runDir), 'run-1', 'findings.json');
+  const saved = fs.readFileSync(tampered, 'utf8');
+  fs.writeFileSync(tampered, saved.replace('노트 남의 것 읽기', '아무 문제 없음'));
+  const p2 = planRun(root, { profile: 'quick' });
+  ok('보고서 뒤 손댄 회차는 이어받지 않음', p2.meta.prior.prior_run === null || p2.meta.prior.prior_run !== 'run-1');
+  fs.writeFileSync(tampered, saved);
+  const tracked = fixture({ ignore: false });
+  write(tracked, '.dorms-check/audit/run-1/run-metadata.json', '{}');
+  git(tracked, 'add', '-A');
+  write(tracked, '.gitignore', '.dorms-check/\nnode_modules/\n');
+  ok('git 이 추적하는 결과 폴더는 피한다', !resolveOutputRoot(tracked, null).dir.startsWith(tracked));
+  ok('추적 중인 회차를 --run 으로 지정해도 거부', throws(() => checkRun(resolveRunDirFor(tracked, '.dorms-check/audit/run-1')), /추적/));
+  for (const r of [planted, tracked]) fs.rmSync(r, { recursive: true, force: true });
+
   console.log('\n[audit-9] standard: 최종 확인과 뜻이 바뀌는 교체');
   const root2 = fixture();
   const s = planRun(root2, { profile: 'standard' });
@@ -197,7 +225,7 @@ async function run() {
   ok('새 담당자 확인 뒤 교체 적용', loadRun(s.runDir)['findings.json'][0].verdict === 'confirmed');
   ok('standard 는 남은 단위·깨끗한 비평 전 미완료', !checkRun(s.runDir).complete);
 
-  for (const r of [root, root2, unignored]) fs.rmSync(r, { recursive: true, force: true });
+  for (const r of [root, root2, unignored, process.env.DORMS_CHECK_AUDIT_HOME]) fs.rmSync(r, { recursive: true, force: true });
   console.log(`\naudit: ${pass} 통과 · ${fail} 실패`);
   if (fail) process.exit(1);
 }

@@ -62,12 +62,52 @@ function digestFile(root, rel) {
 }
 
 // ── 결과 폴더 ──
+// 홈 쪽 저장 위치. 시험에서는 DORMS_CHECK_AUDIT_HOME 으로 바꾼다.
+function auditHome() { return process.env.DORMS_CHECK_AUDIT_HOME || path.join(os.homedir(), '.dorms-check-audit'); }
+
+// 이전 회차 봉인용 열쇠. 앱 폴더 밖(홈)에만 두어, 저장소에 심어 둔 가짜 회차를 믿지 않게 한다.
+function sealKey() {
+  const dir = auditHome();
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, '.seal-key');
+  try {
+    const st = fs.lstatSync(file);
+    if (!st.isFile() || st.isSymbolicLink()) throw new Error('봉인 열쇠 파일이 올바르지 않습니다.');
+    return fs.readFileSync(file);
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    const key = crypto.randomBytes(32);
+    fs.writeFileSync(file, key, { mode: 0o600, flag: 'wx' });
+    return key;
+  }
+}
+function sealOf(runDir) {
+  const mac = crypto.createHmac('sha256', sealKey());
+  for (const f of ['findings.json', 'coverage-ledger.json', 'source-digests.json']) {
+    mac.update(f + '\0');
+    try { mac.update(fs.readFileSync(path.join(runDir, f))); } catch { mac.update('missing'); }
+    mac.update('\0');
+  }
+  return mac.digest('hex');
+}
+function sealIsValid(runDir) {
+  const seal = readJson(path.join(runDir, 'run-seal.json'), null);
+  if (!seal || typeof seal.hmac !== 'string') return false;
+  const want = Buffer.from(sealOf(runDir), 'hex');
+  const got = Buffer.from(seal.hmac, 'hex');
+  return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+function gitTracks(root, rel) {
+  const out = git(root, ['ls-files', '--', rel]);
+  return Boolean(out && out.trim());
+}
+
 function repoKey(root) {
   const name = path.basename(root).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 40) || 'app';
   return `${name}-${crypto.createHash('sha256').update(path.resolve(root)).digest('hex').slice(0, 8)}`;
 }
 export function auditRoots(root) {
-  return { inRepo: path.join(root, '.dorms-check', 'audit'), external: path.join(os.homedir(), '.dorms-check-audit', repoKey(root)) };
+  return { inRepo: path.join(root, '.dorms-check', 'audit'), external: path.join(auditHome(), repoKey(root)) };
 }
 function isInside(parent, child) {
   const rel = path.relative(parent, child);
@@ -84,23 +124,31 @@ export function resolveOutputRoot(root, out) {
     throw new Error('앱 폴더 안에 쓰려면 그 경로가 .gitignore 에 들어 있어야 합니다. 점검 결과에는 약점 설명이 담깁니다.');
   }
   if (!isGitRepo(root)) return { dir: roots.inRepo, why: 'git 저장소가 아니라 .dorms-check/audit 에 둡니다' };
-  if (gitIgnored(root, '.dorms-check/audit/probe')) return { dir: roots.inRepo, why: '.dorms-check 가 .gitignore 에 있어 앱 폴더 안에 둡니다' };
+  // 무시 규칙이 있어도 이미 추적 중인 파일은 무시되지 않는다. 추적 중이면 앱 폴더 밖으로 피한다.
+  if (gitIgnored(root, '.dorms-check/audit/probe') && !gitTracks(root, '.dorms-check/audit')) return { dir: roots.inRepo, why: '.dorms-check 가 .gitignore 에 있어 앱 폴더 안에 둡니다' };
   return { dir: roots.external, why: '.dorms-check 가 .gitignore 에 없어 앱 폴더 밖(홈 폴더)에 둡니다' };
 }
 function runNumbers(dir) {
   try { return fs.readdirSync(dir).map(n => /^run-(\d+)$/.exec(n)).filter(Boolean).map(m => Number(m[1])).sort((a, b) => a - b); }
   catch { return []; }
 }
+// 이 저장소의 결과 위치(resolveOutputRoot 가 고르는 곳)만 본다. 심볼릭 링크 회차는 쓰지 않는다.
 export function latestRunDir(root) {
-  for (const dir of [auditRoots(root).inRepo, auditRoots(root).external]) {
-    const nums = runNumbers(dir);
-    if (nums.length) return path.join(dir, `run-${nums[nums.length - 1]}`);
+  let dir;
+  try { dir = resolveOutputRoot(root, null).dir; } catch { return null; }
+  const nums = runNumbers(dir);
+  for (let i = nums.length - 1; i >= 0; i--) {
+    const run = path.join(dir, `run-${nums[i]}`);
+    try { const st = fs.lstatSync(run); if (st.isDirectory() && !st.isSymbolicLink()) return run; } catch { /* 다음 회차 */ }
   }
   return null;
 }
 export function resolveRunDir(root, runOpt) {
   const dir = runOpt ? path.resolve(root, runOpt) : latestRunDir(root);
   if (!dir || !fs.existsSync(path.join(dir, 'run-metadata.json'))) throw new Error('점검 회차를 찾지 못했습니다. 먼저 dcheck audit plan 을 실행하세요.');
+  const st = fs.lstatSync(dir);
+  if (!st.isDirectory() || st.isSymbolicLink()) throw new Error('점검 회차 폴더가 일반 폴더가 아닙니다.');
+  if (isInside(root, dir) && isGitRepo(root) && gitTracks(root, path.relative(root, dir))) throw new Error('git 이 추적하는 점검 회차는 쓰지 않습니다. 결과 폴더를 버전 관리 밖으로 옮기세요.');
   return dir;
 }
 
@@ -127,11 +175,17 @@ function revalidationUnit(f, priorStatus, files, subsystem) {
     prior_fingerprint: f.fingerprint,
   };
 }
+const clip = v => String(v ?? '').replace(/\s+/g, ' ').slice(0, 200);
 function filesOf(f) {
   return [...new Set([...(f.trace || []), ...(f.evidence || [])].map(x => x.file).filter(isRepoRelative))].sort();
 }
 function applyPrior(root, ledger, priorDir, profile) {
   const info = { prior_run: null, carried: [], revalidate: [], exclusions: [], rejected_claims: [] };
+  if (priorDir && !sealIsValid(priorDir)) {
+    // 이 컴퓨터의 열쇠로 봉인되지 않은 회차는 남이 심었거나 손댄 것일 수 있다. 이어받지 않는다.
+    info.ignored_prior = { run: path.basename(priorDir), reason: '봉인이 없거나 맞지 않아 이어받지 않았습니다.' };
+    priorDir = null;
+  }
   if (!priorDir) { for (const u of ledger) u.prior_status = 'none'; return info; }
   const prior = loadRun(priorDir);
   const digests = readJson(path.join(priorDir, 'source-digests.json'), {});
@@ -145,14 +199,14 @@ function applyPrior(root, ledger, priorDir, profile) {
       const unchanged = same(files);
       const u = revalidationUnit(f, unchanged ? 'prior_confirmed_same_source' : 'prior_confirmed_changed_source', files, subsystem);
       if (!byId.has(u.coverage_id)) { ledger.push(u); byId.set(u.coverage_id, u); }
-      if (unchanged) { info.carried.push(f.fingerprint); info.exclusions.push(`${f.fingerprint}: ${f.title} (원인: ${f.root_cause})`); }
+      if (unchanged) { info.carried.push(f.fingerprint); info.exclusions.push(`${f.fingerprint}: ${clip(f.title)} (원인: ${clip(f.root_cause)})`); }
       else info.revalidate.push(f.fingerprint);
     } else if (f.verdict === 'needs_validation') {
       const u = revalidationUnit(f, 'prior_needs_validation', files, subsystem);
       if (!byId.has(u.coverage_id)) { ledger.push(u); byId.set(u.coverage_id, u); }
       info.revalidate.push(f.fingerprint);
     } else if (f.verdict === 'rejected' && same(files)) {
-      info.rejected_claims.push(`${f.fingerprint}: ${f.title}`);
+      info.rejected_claims.push(`${f.fingerprint}: ${clip(f.title)}`);
     }
   }
   const priorUnits = new Map((prior['coverage-ledger.json'] || []).map(u => [u.coverage_id, u]));
@@ -256,7 +310,7 @@ export function planRun(root, { profile = 'standard', scope = [], out = null, bu
   fs.mkdirSync(output.dir, { recursive: true, mode: 0o700 });
   const nums = runNumbers(output.dir);
   // 이어받는 기준은 보고서까지 마친(코드 지문을 남긴) 가장 최근 회차다. 중간에 멈춘 회차는 건너뛴다.
-  const reported = nums.filter(k => fs.existsSync(path.join(output.dir, `run-${k}`, 'source-digests.json')));
+  const reported = nums.filter(k => fs.existsSync(path.join(output.dir, `run-${k}`, 'run-seal.json')));
   const priorDir = reported.length ? path.join(output.dir, `run-${reported[reported.length - 1]}`) : null;
   const n = (nums[nums.length - 1] || 0) + 1;
   const runDir = path.join(output.dir, `run-${n}`);
@@ -721,6 +775,9 @@ export function reportRun(root, runDir) {
   writeJsonAtomic(path.join(runDir, 'run-metadata.json'), meta);
   const md = renderAuditReport(st, chk);
   writeTextAtomic(path.join(runDir, 'AUDIT.md'), md);
+  // 다음 회차가 믿고 이어받을 수 있게 이 컴퓨터의 열쇠로 봉인한다.
+  try { fs.rmSync(path.join(runDir, 'run-seal.json'), { force: true }); } catch { /* 없음 */ }
+  writeJsonAtomic(path.join(runDir, 'run-seal.json'), { hmac: sealOf(runDir), at: new Date().toISOString() });
   return { chk, md, meta };
 }
 
