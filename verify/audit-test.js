@@ -193,7 +193,12 @@ async function run() {
   write(planted, '.dorms-check/audit/run-1/run-seal.json', JSON.stringify({ hmac: '00'.repeat(32) }));
   write(planted, '.dorms-check/audit/run-1/run-metadata.json', '{}');
   const p1 = planRun(planted, { profile: 'quick' });
-  ok('봉인이 맞지 않는 회차는 이어받지 않음', p1.meta.prior.prior_run === null && p1.meta.prior.ignored_prior && p1.meta.prior.exclusions.length === 0);
+  ok('봉인·증표가 없는 회차는 이어받지 않음', p1.meta.prior.prior_run === null && p1.meta.prior.exclusions.length === 0);
+  write(planted, '.dorms-check/audit/run-9/run-metadata.json', '{}');
+  write(planted, '.dorms-check/audit/run-9/findings.json', '[]');
+  ok('증표 없는 심은 회차는 찾지 않는다', !throws(() => resolveRunDir(planted)) && !resolveRunDir(planted).endsWith('run-9'));
+  ok('증표 없는 회차를 지정해 보고서·봉인 거부', throws(() => reportRun(planted, path.join(planted, '.dorms-check/audit/run-9')), /증표|이 컴퓨터/));
+  ok('증표 없는 회차를 --run 으로 지정해도 거부', throws(() => resolveRunDir(planted, '.dorms-check/audit/run-9'), /증표/));
   const tampered = path.join(path.dirname(runDir), 'run-1', 'findings.json');
   const saved = fs.readFileSync(tampered, 'utf8');
   fs.writeFileSync(tampered, saved.replace('노트 남의 것 읽기', '아무 문제 없음'));

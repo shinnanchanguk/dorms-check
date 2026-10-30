@@ -90,7 +90,23 @@ function sealOf(runDir) {
   }
   return mac.digest('hex');
 }
+// 출생 증표: plan 이 이 컴퓨터의 열쇠로 만든 회차인지. 증표 없는 회차는 찾지도, 봉인하지도, 이어받지도 않는다.
+function originToken(runDir, nonce) {
+  return crypto.createHmac('sha256', sealKey()).update('origin\0' + path.resolve(runDir) + '\0' + nonce).digest('hex');
+}
+function writeOrigin(runDir) {
+  const nonce = crypto.randomBytes(16).toString('hex');
+  writeJsonAtomic(path.join(runDir, 'run-origin.json'), { nonce, token: originToken(runDir, nonce) });
+}
+export function originIsValid(runDir) {
+  const o = readJson(path.join(runDir, 'run-origin.json'), null);
+  if (!o || typeof o.nonce !== 'string' || typeof o.token !== 'string' || !/^[0-9a-f]{32}$/.test(o.nonce)) return false;
+  const want = Buffer.from(originToken(runDir, o.nonce), 'hex');
+  const got = Buffer.from(o.token, 'hex');
+  return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
 function sealIsValid(runDir) {
+  if (!originIsValid(runDir)) return false;
   const seal = readJson(path.join(runDir, 'run-seal.json'), null);
   if (!seal || typeof seal.hmac !== 'string') return false;
   const want = Buffer.from(sealOf(runDir), 'hex');
@@ -139,7 +155,7 @@ export function latestRunDir(root) {
   const nums = runNumbers(dir);
   for (let i = nums.length - 1; i >= 0; i--) {
     const run = path.join(dir, `run-${nums[i]}`);
-    try { const st = fs.lstatSync(run); if (st.isDirectory() && !st.isSymbolicLink()) return run; } catch { /* 다음 회차 */ }
+    try { const st = fs.lstatSync(run); if (st.isDirectory() && !st.isSymbolicLink() && originIsValid(run)) return run; } catch { /* 다음 회차 */ }
   }
   return null;
 }
@@ -149,6 +165,7 @@ export function resolveRunDir(root, runOpt) {
   const st = fs.lstatSync(dir);
   if (!st.isDirectory() || st.isSymbolicLink()) throw new Error('점검 회차 폴더가 일반 폴더가 아닙니다.');
   if (isInside(root, dir) && isGitRepo(root) && gitTracks(root, path.relative(root, dir))) throw new Error('git 이 추적하는 점검 회차는 쓰지 않습니다. 결과 폴더를 버전 관리 밖으로 옮기세요.');
+  if (!originIsValid(dir)) throw new Error('이 컴퓨터에서 dcheck audit plan 으로 만든 회차가 아닙니다(출생 증표 없음). 새로 plan 하세요.');
   return dir;
 }
 
@@ -310,12 +327,13 @@ export function planRun(root, { profile = 'standard', scope = [], out = null, bu
   fs.mkdirSync(output.dir, { recursive: true, mode: 0o700 });
   const nums = runNumbers(output.dir);
   // 이어받는 기준은 보고서까지 마친(코드 지문을 남긴) 가장 최근 회차다. 중간에 멈춘 회차는 건너뛴다.
-  const reported = nums.filter(k => fs.existsSync(path.join(output.dir, `run-${k}`, 'run-seal.json')));
+  const reported = nums.filter(k => sealIsValid(path.join(output.dir, `run-${k}`)));
   const priorDir = reported.length ? path.join(output.dir, `run-${reported[reported.length - 1]}`) : null;
   const n = (nums[nums.length - 1] || 0) + 1;
   const runDir = path.join(output.dir, `run-${n}`);
   fs.mkdirSync(runDir, { mode: 0o700 });
   fs.mkdirSync(path.join(runDir, 'agents'), { mode: 0o700 });
+  writeOrigin(runDir);
 
   const inventory = buildInventory(root, { scope: scope.map(s => s.replace(/\/$/, '')) });
   const ledger = buildLedger(inventory, { profile });
@@ -760,6 +778,7 @@ export function renderAuditReport(st, chk) {
 }
 
 export function reportRun(root, runDir) {
+  if (!originIsValid(runDir)) throw new Error('이 컴퓨터에서 만든 회차가 아니라 보고서를 쓰지 않습니다.');
   const chk = checkRun(runDir);
   const st = loadRun(runDir);
   const meta = st['run-metadata.json'];
