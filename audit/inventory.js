@@ -43,7 +43,8 @@ function lineOf(text, re) {
 function firstSeg(rel) { return rel.split('/')[0]; }
 function countNewlines(text, from, to) { let n = 0; for (let i = from; i < to; i++) if (text.charCodeAt(i) === 10) n++; return n; }
 function sizeOk(full, max) { try { const st = fs.lstatSync(full); return st.isFile() && st.size <= max; } catch { return false; } }
-const INVISIBLE_PATH = /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202E\u2060-\u206F\uFEFF]/u;
+// 보이지 않는 문자, 또는 앞뒤 공백(NBSP·전각 공백 포함)이 붙은 폴더·파일 이름.
+const INVISIBLE_PATH = /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202E\u2060-\u206F\uFEFF]|(^|\/)[\s\u00A0\u3000]|[\s\u00A0\u3000](\/|$)/u;
 
 // 경로에서 하위 영역(subsystem)을 정한다. API 는 api/ 다음 한 칸까지, 그 밖은 앞쪽 세 칸 폴더.
 export function subsystemOf(rel) {
@@ -56,13 +57,13 @@ export function subsystemOf(rel) {
 
 const RULES = [
   { kind: 'api-route', path: /(^|\/)app\/(.+\/)?route\.[cm]?[jt]sx?$|(^|\/)pages\/api\/.+\.[cm]?[jt]sx?$|^api\/.+\.[cm]?[jt]s$|(^|\/)server\/(api|routes)\/.+\.[cm]?[jt]s$/ },
-  { kind: 'server-action', text: /^\s*['"]use server['"]/m },
+  { kind: 'server-action', text: /^[ \t]*['"]use server['"]/m },
   { kind: 'edge-function', path: /(^|\/)supabase\/functions\/[^/]+\/index\.[cm]?[jt]s$|(^|\/)netlify\/functions\/.+\.[cm]?[jt]s$|(^|\/)functions\/src\/.+\.[cm]?[jt]s$/ },
   { kind: 'auth-flow', path: /(^|\/)(auth|login|logout|signin|signup|sign-in|sign-up|callback|oauth|reset-password|password|verify-email)(\/|\.|-|_)/i, codeOnly: true },
   { kind: 'auth-flow', text: /\b(exchangeCodeForSession|signInWith(OAuth|Password|Otp|IdToken)|resetPasswordForEmail|verifyOtp|updateUser\(\s*\{\s*password|signInWithPopup|getRedirectResult)\b/ },
   { kind: 'webhook', path: /(^|\/)(webhooks?|hooks?)(\/|\.)/i, codeOnly: true },
   { kind: 'webhook', text: /\b(webhooks\.constructEvent|x-hub-signature|svix-signature|x-signature|createHmac\(\s*['"]sha256)/ },
-  { kind: 'service-client', text: /\b(SUPABASE_SERVICE_ROLE_KEY|SUPABASE_SECRET_KEY|service_role|createAdminClient|createServiceClient|supabaseAdmin|firebase-admin)\b|from\s+['"][^'"]*\/supabase\/(service|admin)['"]/ },
+  { kind: 'service-client', text: /\b(SUPABASE_SERVICE_ROLE_KEY|SUPABASE_SECRET_KEY|service_role|createAdminClient|createServiceClient|supabaseAdmin|firebase-admin)\b|(?:from\s+|require\(\s*)['"][^'"]*\/supabase\/(service|admin)(\.[cm]?[jt]s)?['"]/ },
   { kind: 'storage', text: /\.storage\s*\.from\(|storage\.buckets|getSignedUrl|createSignedUrl|createSignedUploadUrl|putObject\(|PutObjectCommand/ },
   { kind: 'upload', text: /\.upload\(|request\.formData\(\)|req\.formData\(\)|multer\(|busboy|type=["']file["']|createSignedUploadUrl/ },
   { kind: 'export', path: /(export|download|backup|csv|xlsx)/i, codeOnly: true },
@@ -77,8 +78,8 @@ const RULES = [
 ];
 
 function isServerFile(rel, text) {
-  if (/^\s*['"]use client['"]/m.test(text)) return false;
-  return /(^|\/)(api|server|actions?|lib\/server|supabase\/functions|functions|middleware)(\/|\.|$)/.test(rel) || /^\s*['"]use server['"]/m.test(text) || /\broute\.[cm]?[jt]s$/.test(rel);
+  if (/^[ \t]*['"]use client['"]/m.test(text)) return false;
+  return /(^|\/)(api|server|actions?|lib\/server|supabase\/functions|functions|middleware)(\/|\.|$)/.test(rel) || /^[ \t]*['"]use server['"]/m.test(text) || /\broute\.[cm]?[jt]s$/.test(rel);
 }
 
 // SQL 파일에서 함수 정의(마지막 정의가 이긴다)와 정책·뷰·저장소 표면을 뽑는다.

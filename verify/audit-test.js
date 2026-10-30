@@ -18,8 +18,10 @@ function throws(fn, re) { try { fn(); return false; } catch (e) { return re ? re
 const write = (root, rel, text) => { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), text); };
 const git = (root, ...a) => execFileSync('git', ['-C', root, ...a], { stdio: 'ignore' });
 
+const ALL_FIXTURES = [];
 function fixture({ ignore = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dcheck-audit-'));
+  ALL_FIXTURES.push(root);
   write(root, 'package.json', JSON.stringify({ name: 'demo', dependencies: { next: '15.0.0', '@supabase/supabase-js': '2.0.0', openai: '4.0.0' } }));
   write(root, 'package-lock.json', '{}');
   write(root, 'app/api/notes/[id]/route.ts', "import { createClient } from '@/lib/s';\nexport async function GET(req) {\n  const id = req.nextUrl.searchParams.get('id');\n  return Response.json(await db(id));\n}\n");
@@ -229,12 +231,15 @@ async function run() {
   huntPrompt(s.runDir, { agentId: 'h1', unitIds: [sid] });
   const { verdict: _v, ...needsCand } = goodNeeds('bucket.public');
   mergeResult(s.runDir, { agentId: 'h1', input: { units: [{ coverage_id: sid, disposition: 'candidate', reviewed_paths: ['supabase/migrations/0001.sql'], checks: [{ agent_id: 'h1', reviewed_paths: ['supabase/migrations/0001.sql'], invariant: 'x', method: 'source', result: 'y', artifact: null }], candidate_fingerprints: ['bucket.public'], unresolved: [] }], candidates: [{ proposed_verdict: 'needs_validation', ...needsCand }] } });
+  verifierPrompt(s.runDir, { agentId: 'v1', fingerprint: 'bucket.public' });
   recordDecision(s.runDir, { agentId: 'v1', input: { decision: 'needs_validation', record: goodNeeds('bucket.public') } });
   ok('3단계 검증자는 최종 확인 못 함', recordDecision(s.runDir, { agentId: 'v1', input: { decision: 'verified', fingerprint: 'bucket.public' } }).errors.length === 1);
   const stronger = goodConfirmed('bucket.public');
+  verifierPrompt(s.runDir, { agentId: 'v2', fingerprint: 'bucket.public' });
   const rp = recordDecision(s.runDir, { agentId: 'v2', input: { decision: 'replace', reason: '로컬 재현됨', record: stronger } });
   ok('더 센 판정으로 교체는 대기', rp.pending.includes('bucket.public') && loadRun(s.runDir)['findings.json'][0].verdict === 'needs_validation');
   ok('제안자는 자기 교체를 확인 못 함', recordDecision(s.runDir, { agentId: 'v2', input: { decision: 'verified', fingerprint: 'bucket.public' } }).errors.length === 1);
+  verifierPrompt(s.runDir, { agentId: 'v3', fingerprint: 'bucket.public' });
   recordDecision(s.runDir, { agentId: 'v3', input: { decision: 'verified', fingerprint: 'bucket.public' } });
   ok('새 담당자 확인 뒤 교체 적용', loadRun(s.runDir)['findings.json'][0].verdict === 'confirmed');
   ok('standard 는 남은 단위·깨끗한 비평 전 미완료', !checkRun(s.runDir).complete);
@@ -255,7 +260,9 @@ async function run() {
   ok('F1-b: 후보 객체 없이 같은 지문만 낸 찾는 사람도 검증 못 함', throws(() => verifierPrompt(s3.runDir, { agentId: 'hq', fingerprint: 'shared.root' }), /찾은/));
   ok('F1: 같은 원인을 함께 찾은 둘째 사람도 검증 못 함(지시문)', throws(() => verifierPrompt(s3.runDir, { agentId: 'hb', fingerprint: 'shared.root' }), /찾은/));
   ok('F1: 같은 원인을 함께 찾은 둘째 사람도 검증 못 함(기록)', recordDecision(s3.runDir, { agentId: 'hb', input: { decision: 'confirmed', record: goodConfirmed('shared.root') } }).applied.length === 0);
+  verifierPrompt(s3.runDir, { agentId: 'v1', fingerprint: 'shared.root' });
   recordDecision(s3.runDir, { agentId: 'v1', input: { decision: 'confirmed', record: goodConfirmed('shared.root') } });
+  verifierPrompt(s3.runDir, { agentId: 'f9', fingerprint: 'shared.root' });
   ok('F4: replace 로 지문을 바꾸면 거부', recordDecision(s3.runDir, { agentId: 'f9', input: { decision: 'replace', fingerprint: 'shared.root', reason: 'x', record: goodConfirmed('other.root') } }).errors.some(e => /새 후보/.test(e)) && loadRun(s3.runDir)['findings.json'][0].fingerprint === 'shared.root');
   ok('F6-c: 비평 지시문 없이 넣은 범위 비평은 거부', throws(() => mergeResult(s3.runDir, { agentId: 'cz', input: { missing_units: [], reassign_ids: [], stop: true } }), /role critic/));
   criticPrompt(s3.runDir, { agentId: 'c1' });
@@ -289,6 +296,7 @@ async function run() {
   const q1ids = q1.ledger.filter(u => u.status === 'planned').map(u => u.coverage_id);
   huntPrompt(q1.runDir, { agentId: 'h1', unitIds: q1ids });
   mergeResult(q1.runDir, { agentId: 'h1', input: { units: q1ids.map((id, i) => unitRes(id, 'h1', i === 0 ? ['keep.me'] : [])), candidates: [(({ verdict, ...c }) => ({ proposed_verdict: 'confirmed', ...c }))(goodConfirmed('keep.me'))] } });
+  verifierPrompt(q1.runDir, { agentId: 'v1', fingerprint: 'keep.me' });
   recordDecision(q1.runDir, { agentId: 'v1', input: { decision: 'confirmed', record: goodConfirmed('keep.me') } });
   criticPrompt(q1.runDir, { agentId: 'c1' });
   mergeResult(q1.runDir, { agentId: 'c1', input: { missing_units: [], reassign_ids: [], stop: true } });
@@ -347,11 +355,41 @@ async function run() {
   ok('보이지 않는 문자 경로는 숨기지 않고 우선 확인 단위로', hp.ledger.some(u => u.surface === 'repo/invisible-names' && u.status === 'planned' && u.escaped_paths.length === 1));
   const sentinel = goodConfirmed('sentinel.case'); sentinel.trace = sentinel.trace.map(t => ({ ...t, file: 'gone/missing.ts' })); sentinel.evidence = [{ file: 'gone/missing.ts', line: 1, description: 'x' }];
   ok('보고서 이스케이프는 역슬래시부터', renderAuditReport({ 'run-metadata.json': { repo: 'x', run_id: 'run-1', profile: 'quick', source_ref: {}, prior: {} }, 'coverage-ledger.json': [], 'findings.json': [{ ...md, fingerprint: 'bs.case', remediation: { strategy: '\\](http://evil.example)' } }], 'hardening.json': [] }, { complete: true, reasons: [], errors: [], counts: { covered: 0, candidate: 0, blocked: 0, deferred: 0, out_of_scope: 0, not_applicable: 0, planned: 0, in_progress: 0 } }).includes('\\\\\\]\\(http'));
-  for (const r of [evil, nogit, nfd, hidden]) fs.rmSync(r, { recursive: true, force: true });
+  // N1: 검증자는 맡은 지문만 기록한다.
+  const n1 = fixture();
+  const n1r = planRun(n1, { profile: 'quick' });
+  const n1ids = n1r.ledger.filter(u => u.status === 'planned').map(u => u.coverage_id);
+  huntPrompt(n1r.runDir, { agentId: 'h1', unitIds: n1ids });
+  const pick = (({ verdict, ...c }) => c);
+  mergeResult(n1r.runDir, { agentId: 'h1', input: { units: n1ids.map((id, i) => unitRes(id, 'h1', i === 0 ? ['a.fp', 'b.fp'] : [])), candidates: [{ proposed_verdict: 'confirmed', ...pick(goodConfirmed('a.fp')) }, { proposed_verdict: 'confirmed', ...pick(goodConfirmed('b.fp')) }] } });
+  verifierPrompt(n1r.runDir, { agentId: 'v1', fingerprint: 'a.fp' });
+  const cross = recordDecision(n1r.runDir, { agentId: 'v1', input: [{ decision: 'confirmed', record: goodConfirmed('a.fp') }, { decision: 'rejected', record: { verdict: 'rejected', fingerprint: 'b.fp', title: 't', description: 'd', claimed_root_cause: 'c', trace: goodNeeds('x').trace, evidence: goodNeeds('x').evidence, reason: 'r' } }] });
+  ok('N1: 맡은 지문만 기록되고 남의 후보는 거부', cross.applied.join() === 'a.fp' && cross.errors.some(e => /맡긴 지문/.test(e)));
+  ok('N1: 한 번도 맡지 않은 담당자의 기록 거부', recordDecision(n1r.runDir, { agentId: 'vz', input: { decision: 'confirmed', record: goodConfirmed('b.fp') } }).applied.length === 0);
+  // F1-c: 검증한 사람이 나중에 같은 지문을 찾은 것으로 낼 수 없다.
+  const c1r = planRun(fixture(), { profile: 'standard' });
+  const [ua, ub] = c1r.ledger.filter(u => u.status === 'planned').slice(0, 2).map(u => u.coverage_id);
+  huntPrompt(c1r.runDir, { agentId: 'ha', unitIds: [ua] });
+  mergeResult(c1r.runDir, { agentId: 'ha', input: { units: [unitRes(ua, 'ha', ['c.fp'])], candidates: [{ proposed_verdict: 'confirmed', ...pick(goodConfirmed('c.fp')) }] } });
+  verifierPrompt(c1r.runDir, { agentId: 'hz', fingerprint: 'c.fp' });
+  recordDecision(c1r.runDir, { agentId: 'hz', input: { decision: 'confirmed', record: goodConfirmed('c.fp') } });
+  huntPrompt(c1r.runDir, { agentId: 'hz', unitIds: [ub] });
+  const late = mergeResult(c1r.runDir, { agentId: 'hz', input: { units: [unitRes(ub, 'hz', ['c.fp'])], candidates: [] } });
+  ok('F1-c: 먼저 검증한 사람이 나중에 같은 지문을 찾은 것으로 내면 거부', late.accepted.length === 0 && late.errors.some(e => /이미 검증한 지문/.test(e)));
+  const blank = fixture();
+  write(blank, 'lib/blank.ts', ' \n'.repeat(100000));
+  const t0 = Date.now(); buildInventory(blank); ok('L2: 빈 줄 많은 파일도 빨리 훑는다', Date.now() - t0 < 3000);
+  write(blank, 'app/api/notes /q/route.ts', 'export async function GET() {}');
+  ok('L3: 끝에 공백이 붙은 폴더 이름에서도 plan 이 된다', !throws(() => planRun(blank, { profile: 'standard' })));
+  const bq = planRun(fixture(), { profile: 'quick', budget: 9 });
+  ok('F6-b2: 예산이 닿지 않는 찾기 묶음은 계획 때 미룸', bq.meta.hunter_groups.length === bq.meta.budget_estimate.hunter_allowance && bq.ledger.some(u => u.status === 'deferred' && /budget_cannot/.test(u.unresolved[0])));
+  ok('NEW-B: 미룬 단위가 있으면 보고서가 부분 점검이라고 밝힌다', renderAuditReport(loadRun(bq.runDir), checkRun(bq.runDir)).includes('부분 점검') && renderAuditReport(loadRun(bq.runDir), checkRun(bq.runDir)).includes('예산 때문에'));
+  for (const r of [evil, nogit, nfd, hidden, n1, blank]) fs.rmSync(r, { recursive: true, force: true });
   fs.rmSync(marker, { force: true });
 
   for (const r of [root3, root4]) fs.rmSync(r, { recursive: true, force: true });
   for (const r of [root, root2, unignored, process.env.DORMS_CHECK_AUDIT_HOME]) fs.rmSync(r, { recursive: true, force: true });
+  for (const r of ALL_FIXTURES) fs.rmSync(r, { recursive: true, force: true });
   console.log(`\naudit: ${pass} 통과 · ${fail} 실패`);
   if (fail) process.exit(1);
 }

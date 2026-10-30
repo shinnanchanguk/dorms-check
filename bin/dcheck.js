@@ -4,7 +4,7 @@
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
+import { readFileSync, lstatSync } from 'node:fs';
 import { color, log, exists, readJsonSafe, writeText, ensureDir } from '../core/util.js';
 import { detectStack } from '../core/detect.js';
 import { loadConfig, writeConfig, defaultConfig, unknownTracks, trackMenu, parseTrackSelection } from '../core/config.js';
@@ -88,8 +88,14 @@ function printDetect() {
   return d;
 }
 
+// .dorms-check 가 심볼릭 링크면(예: public 을 가리킴) 점검 결과를 쓰지 않는다.
+function stateDirIsSafe() {
+  try { return !lstatSync(STATE_DIR).isSymbolicLink(); } catch { return true; }
+}
+
 async function runScan() {
   const json = flag('json');
+  if (!stateDirIsSafe()) { outputMachineResult({ ok: false, code: 'UNSAFE_STATE_DIR', exitCode: 2, reason: '.dorms-check 가 심볼릭 링크라 점검 결과를 쓰지 않습니다. 링크를 지우고 다시 실행하세요.' }, { json }); return; }
   const cfg = loadConfig(root);
   if (cfg._parseError) {
     outputMachineResult({ ok: false, code: 'INVALID_CONFIG', exitCode: 2, reason: 'dorms-check.config.json을 읽지 못했습니다. JSON 형식을 확인하세요.' }, { json });
@@ -247,6 +253,7 @@ async function runInit() {
 }
 
 function runJudge() {
+  if (!stateDirIsSafe()) { log.err('.dorms-check 가 심볼릭 링크라 쓰지 않습니다.'); process.exitCode = 2; return; }
   const inFile = opt('in', '');
   if (!inFile || !exists(path.resolve(root, inFile))) { log.err('--in <answers.json> 필요'); process.exitCode = 1; return; }
   const answers = readJsonSafe(path.resolve(root, inFile));
@@ -569,6 +576,9 @@ async function runEdzipCmd() {
   log.plain('  에듀집 제출은 하지 않았습니다. 확인 완료 뒤 edzip council에 공식 주소를 넣으면 내부 기안문과 학운위 안건 초안을 만듭니다.');
 }
 
+// 에이전트 글이 섞인 오류 문장은 터미널 제어 문자를 지운 한 줄로만 찍는다.
+function safeLine(t) { return String(t ?? '').replace(/[\u0000-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]+/gu, ' ').slice(0, 400); }
+
 function auditScanSummary() {
   const scan = readJsonSafe(path.join(STATE_DIR, 'scan.json'));
   if (!scan?.results) return null;
@@ -619,14 +629,14 @@ async function runAuditCmd() {
       if (r.kind === 'critic') log.ok(`범위 비평 반영: 새 단위 ${r.added}개, 다시 맡김 ${r.reassigned}개`);
       else if (!r.accepted.length && r.errors.length) log.warn(`받아들인 단위가 없습니다. 아래 오류를 고쳐 다시 넣어 주세요.`);
       else log.ok(`찾기 결과 반영: 받아들인 단위 ${r.accepted.length}개, 다시 맡길 단위 ${r.reopened.length}개, 후보 ${r.candidates}건, 새 경계 ${r.uncovered}개${r.normalized ? `, 읽은 경로를 확인 기록 기준으로 맞춘 단위 ${r.normalized}개` : ''}`);
-      for (const e of r.errors.slice(0, 20)) log.warn('  ' + e);
+      for (const e of r.errors.slice(0, 20)) log.warn('  ' + safeLine(e));
       if (r.errors.length) process.exitCode = 2;
       return;
     }
     if (sub === 'lint') {
       // 찾는 사람이 돌려주기 전에 스스로 형식을 확인한다. 범위표·결과는 바꾸지 않는다.
       const r = mergeResult(resolveRunDir(root, runOpt), { agentId: opt('agent', ''), input: readAuditInput(), dryRun: true });
-      if (r.errors.length) { log.err(`형식 오류 ${r.errors.length}건`); for (const e of r.errors.slice(0, 40)) log.plain('  - ' + e); process.exitCode = 2; }
+      if (r.errors.length) { log.err(`형식 오류 ${r.errors.length}건`); for (const e of r.errors.slice(0, 40)) log.plain('  - ' + safeLine(e)); process.exitCode = 2; }
       else log.ok(`형식이 맞습니다. 받아들일 단위 ${r.accepted?.length ?? 0}개, 후보 ${r.candidates ?? 0}건`);
       return;
     }
@@ -634,7 +644,7 @@ async function runAuditCmd() {
       const r = recordDecision(resolveRunDir(root, runOpt), { agentId: opt('agent', ''), input: readAuditInput() });
       if (!r.applied.length && !r.pending.length && r.errors.length) log.warn('반영한 기록이 없습니다. 아래 오류를 확인하세요.');
       else log.ok(`검증 기록: 반영 ${r.applied.length}건, 새 담당자 확인 대기 ${r.pending.length}건`);
-      for (const e of r.errors.slice(0, 20)) log.warn('  ' + e);
+      for (const e of r.errors.slice(0, 20)) log.warn('  ' + safeLine(e));
       if (r.errors.length) process.exitCode = 2;
       return;
     }
@@ -645,10 +655,10 @@ async function runAuditCmd() {
     }
     if (sub === 'check') {
       const r = checkRun(resolveRunDir(root, runOpt));
-      if (r.errors.length) { log.err(`형식 오류 ${r.errors.length}건`); for (const e of r.errors.slice(0, 30)) log.plain('  - ' + e); process.exitCode = 1; }
+      if (r.errors.length) { log.err(`형식 오류 ${r.errors.length}건`); for (const e of r.errors.slice(0, 30)) log.plain('  - ' + safeLine(e)); process.exitCode = 1; }
       else log.ok('범위표와 결과 기록의 형식이 맞습니다.');
       if (r.reasons.length) {
-        log.warn('아직 완료가 아닙니다:'); for (const x of r.reasons) log.plain('  - ' + x);
+        log.warn('아직 완료가 아닙니다:'); for (const x of r.reasons) log.plain('  - ' + safeLine(x));
         // 형식 오류(1)와 구분되게 미완료는 3 으로 끝낸다.
         if (!process.exitCode) process.exitCode = 3;
       }
@@ -665,7 +675,7 @@ async function runAuditCmd() {
     log.err('사용법: dcheck audit plan|prompt|lint|merge|record|promote|check|report (dcheck help 참고)');
     process.exitCode = 1;
   } catch (error) {
-    log.err(String(error?.message || error));
+    log.err(safeLine(error?.message || error));
     process.exitCode = 1;
   }
 }

@@ -42,8 +42,11 @@ export const evidenceStep = {
 
     let gitInfo = '(git 저장소가 아니거나 git 미설치)';
     try {
-      const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
-      const lg = execFileSync('git', ['log', '-10', '--pretty=format:%h %ad %s', '--date=iso'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+      // 앱 폴더의 .git/config 가 fsmonitor·서명 확인 프로그램으로 명령을 실행하지 못하게 막고 부른다.
+      const safe = ['-C', root, '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'log.showSignature=false'];
+      const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' };
+      const head = execFileSync('git', [...safe, 'rev-parse', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'], env }).toString().trim();
+      const lg = execFileSync('git', [...safe, 'log', '-10', '--no-show-signature', '--pretty=format:%h %ad %s', '--date=iso'], { stdio: ['ignore', 'pipe', 'ignore'], env }).toString();
       gitInfo = `HEAD: ${head}\n\n${lg}`;
     } catch { /* not a git repo */ }
 
