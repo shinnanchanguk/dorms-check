@@ -5,22 +5,84 @@
 // 표식이 있다고 침해가 확정되는 것도 아니다. 법률 자문이 아니다.
 import path from 'node:path';
 import net from 'node:net';
-import { request } from '../core/http.js';
+import dns from 'node:dns';
+import http from 'node:http';
+import https from 'node:https';
 import { walk, readTextSafe, readJsonSafe, writeText, sha256, exists } from '../core/util.js';
 import { t } from '../core/copy.js';
 import { provenanceFacts } from '../core/usage-policy.js';
 import { JS_HEADER_PREFIX, stripJsHeader } from './provenance-text.js';
 
 const MAX_ASSETS = 25;
+const MAX_REDIRECTS = 5;
+const MAX_BODY = 2 * 1024 * 1024;
+const TIMEOUT_MS = 15000;
 
-export function isLocalHost(hostname) {
-  const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
-  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h === '0.0.0.0') return true;
-  if (net.isIPv4(h)) {
-    const [a, b] = h.split('.').map(Number);
-    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || a === 0;
+// 이름 정리: 소문자, 대괄호·끝 점 제거("localhost." 우회 막기).
+export function normalizeHost(hostname) {
+  return String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+}
+
+function v4ToInt(ip) { return ip.split('.').reduce((n, o) => (n * 256) + Number(o), 0) >>> 0; }
+const V4_BLOCKS = [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
+  ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
+  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
+].map(([b, m]) => [v4ToInt(b), m]);
+function blockedV4(ip) {
+  const n = v4ToInt(ip);
+  return V4_BLOCKS.some(([b, m]) => ((n >>> (32 - m)) === (b >>> (32 - m))));
+}
+
+// IPv6 를 16바이트로 펼친다(::ffff:1.2.3.4 같은 끝 IPv4 표기 포함).
+function v6Bytes(ip) {
+  let s = ip;
+  const v4 = /(\d+\.\d+\.\d+\.\d+)$/.exec(s);
+  let tail = [];
+  if (v4) {
+    tail = v4[1].split('.').map(Number);
+    s = s.slice(0, -v4[1].length) + '0:0';
   }
-  if (net.isIPv6(h)) return h === '::1' || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80');
+  const [head, rest] = s.split('::');
+  const h = head ? head.split(':') : [];
+  const r = rest !== undefined && rest !== '' ? rest.split(':') : [];
+  const fill = s.includes('::') ? 8 - h.length - r.length : 0;
+  const groups = [...h, ...Array(Math.max(0, fill)).fill('0'), ...r].map(g => parseInt(g || '0', 16));
+  const bytes = [];
+  for (const g of groups) bytes.push((g >> 8) & 255, g & 255);
+  if (v4) bytes.splice(12, 4, ...tail);
+  return bytes;
+}
+function blockedV6(ip) {
+  const b = v6Bytes(ip);
+  if (b.length !== 16) return true;
+  const allZero = n => b.slice(0, n).every(x => x === 0);
+  if (allZero(16)) return true;                                   // ::
+  if (allZero(15) && b[15] === 1) return true;                    // ::1
+  if (allZero(10) && b[10] === 255 && b[11] === 255) return blockedV4(b.slice(12).join('.')); // ::ffff:a.b.c.d
+  if (allZero(12)) return blockedV4(b.slice(12).join('.'));      // ::a.b.c.d (옛 표기)
+  if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b) return blockedV4(b.slice(12).join('.')); // 64:ff9b::/96
+  if ((b[0] & 0xfe) === 0xfc) return true;                        // fc00::/7
+  if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;       // fe80::/10
+  if (b[0] === 0xff) return true;                                 // 멀티캐스트
+  if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x0d && b[3] === 0xb8) return true; // 문서용
+  return false;
+}
+
+// 주소(IP) 하나가 내 컴퓨터·내부망·특수 용도면 true.
+export function isBlockedAddress(ip) {
+  const h = normalizeHost(ip);
+  if (net.isIPv4(h)) return blockedV4(h);
+  if (net.isIPv6(h)) return blockedV6(h);
+  return true; // IP 가 아니면 막는다(이 함수는 IP 만 받는다)
+}
+
+// 이름만으로 막을 수 있는 경우(IP 글자이거나 localhost 계열).
+export function isLocalHost(hostname) {
+  const h = normalizeHost(hostname);
+  if (!h) return true;
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true;
+  if (net.isIP(h)) return isBlockedAddress(h);
   return false;
 }
 
@@ -30,6 +92,85 @@ export function parseSuspectUrl(input, { allowLocal = false } = {}) {
   if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) return { ok: false, reason: t('cli.compareBadUrl') };
   if (!allowLocal && isLocalHost(u.hostname)) return { ok: false, reason: t('cli.compareLocalBlocked') };
   return { ok: true, url: u };
+}
+
+// 이름을 풀어 나온 주소가 하나라도 막힌 주소면 거부한다. 통과한 주소 하나를 돌려준다.
+export async function resolveSafe(hostname, { allowLocal = false, lookupImpl = dns.promises.lookup } = {}) {
+  const h = normalizeHost(hostname);
+  if (net.isIP(h)) {
+    if (!allowLocal && isBlockedAddress(h)) return { ok: false, reason: t('cli.compareLocalBlocked') };
+    return { ok: true, address: h, family: net.isIP(h) };
+  }
+  if (!allowLocal && isLocalHost(h)) return { ok: false, reason: t('cli.compareLocalBlocked') };
+  let addrs;
+  try { addrs = await lookupImpl(h, { all: true, verbatim: true }); }
+  catch (e) { return { ok: false, reason: `주소를 찾지 못했어요: ${e.code || e.message}` }; }
+  if (!Array.isArray(addrs) || !addrs.length) return { ok: false, reason: '주소를 찾지 못했어요' };
+  if (!allowLocal && addrs.some(a => isBlockedAddress(a.address))) return { ok: false, reason: t('cli.compareLocalBlocked') };
+  return { ok: true, address: addrs[0].address, family: addrs[0].family || net.isIP(addrs[0].address) };
+}
+
+// 확인한 IP 로만 접속한다(확인과 접속 사이에 DNS 가 바뀌어도 그 IP 로 간다). 크기·시간 상한.
+function pinnedGet(u, pinned) {
+  return new Promise(resolve => {
+    const mod = u.protocol === 'https:' ? https : http;
+    const lookup = (_host, opts, cb) => {
+      if (typeof opts === 'function') cb = opts;
+      if (opts && opts.all) cb(null, [{ address: pinned.address, family: pinned.family }]);
+      else cb(null, pinned.address, pinned.family);
+    };
+    const req = mod.request({
+      protocol: u.protocol, hostname: normalizeHost(u.hostname), port: u.port || undefined,
+      path: u.pathname + u.search, method: 'GET', lookup, servername: net.isIP(normalizeHost(u.hostname)) ? undefined : normalizeHost(u.hostname),
+      headers: { 'user-agent': 'dorms-check-compare', accept: '*/*', host: u.host },
+      timeout: TIMEOUT_MS, agent: false,
+    }, res => {
+      const chunks = []; let total = 0; let truncated = false;
+      res.on('data', c => {
+        if (truncated) return;
+        total += c.length;
+        if (total > MAX_BODY) { truncated = true; chunks.push(c.subarray(0, c.length - (total - MAX_BODY))); res.destroy(); return; }
+        chunks.push(c);
+      });
+      const done = () => resolve({ ok: true, status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8'), truncated });
+      res.on('end', done);
+      res.on('close', done);
+      res.on('error', () => done());
+    });
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.on('error', e => resolve({ ok: false, error: e.code || e.message }));
+    req.end();
+  });
+}
+
+// 테스트용 fetchImpl 이 있으면 그것으로 받되, 주소 검사(이름 풀기 포함)는 똑같이 한다.
+async function fetchOnce(u, pinned, fetchImpl) {
+  if (!fetchImpl) return pinnedGet(u, pinned);
+  try {
+    const res = await fetchImpl(u.href, { redirect: 'manual' });
+    const text = (await res.text()).slice(0, MAX_BODY);
+    return { ok: true, status: res.status, headers: { location: res.headers.get('location') || undefined }, body: text };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// 넘겨주기(redirect)를 한 번씩 직접 따라가며, 매번 주소 글자와 풀린 IP 를 다시 검사한다.
+async function fetchChecked(href, { allowLocal, fetchImpl, lookupImpl }) {
+  let cur = href;
+  for (let i = 0; i <= MAX_REDIRECTS; i++) {
+    const p = parseSuspectUrl(cur, { allowLocal });
+    if (!p.ok) return { ok: false, error: p.reason };
+    const pinned = await resolveSafe(p.url.hostname, { allowLocal, lookupImpl });
+    if (!pinned.ok) return { ok: false, error: pinned.reason };
+    const r = await fetchOnce(p.url, pinned, fetchImpl);
+    if (!r.ok) return r;
+    const loc = r.headers && r.headers.location;
+    if (r.status >= 300 && r.status < 400 && loc) {
+      try { cur = new URL(loc, p.url).href; } catch { return { ok: false, error: 'bad redirect' }; }
+      continue;
+    }
+    return { ...r, finalUrl: p.url.href };
+  }
+  return { ok: false, error: 'too many redirects' };
 }
 
 // HTML 에서 같은 출처 스크립트·스타일 주소만 뽑는다.
@@ -69,36 +210,15 @@ export function localFingerprints(root, buildFull) {
   return { raw, stripped };
 }
 
-// 넘겨주기(redirect)를 한 번씩 직접 따라가며, 매번 내부망 주소가 아닌지 다시 확인한다.
-async function fetchChecked(href, { allowLocal, opts }) {
-  let cur = href;
-  for (let i = 0; i < 5; i++) {
-    const r = await request(cur, { ...opts, redirect: 'manual' });
-    if (!r.ok) return r;
-    const loc = r.headers && r.headers.location;
-    if (r.status >= 300 && r.status < 400 && loc) {
-      const next = parseSuspectUrl(new URL(loc, cur).href, { allowLocal });
-      if (!next.ok) return { ok: false, error: next.reason };
-      cur = next.url.href;
-      continue;
-    }
-    return { ...r, finalUrl: cur };
-  }
-  return { ok: false, error: 'too many redirects' };
-}
-
-export async function compareSuspect(root, { url, buildFull, rightsProfile, allowLocal = false, fetchImpl, now = new Date() } = {}) {
+export async function compareSuspect(root, { url, buildFull, rightsProfile, allowLocal = false, fetchImpl, lookupImpl, now = new Date() } = {}) {
   const parsed = parseSuspectUrl(url, { allowLocal });
   if (!parsed.ok) return { ok: false, reason: parsed.reason };
   const base = parsed.url;
   const f = provenanceFacts(rightsProfile);
-  const opts = fetchImpl ? { fetchImpl } : {};
-
-  const get = h => fetchChecked(h, { allowLocal, opts });
+  const get = h => fetchChecked(h, { allowLocal, fetchImpl, lookupImpl });
   const page = await get(base.href);
-  if (!page.ok) return { ok: false, reason: `주소를 열지 못했어요: ${page.error || 'network'}` };
+  if (!page.ok) return { ok: false, reason: page.error === t('cli.compareLocalBlocked') ? page.error : `주소를 열지 못했어요: ${page.error || 'network'}` };
   const finalBase = (() => { try { return new URL(page.finalUrl || base.href); } catch { return base; } })();
-  if (!allowLocal && isLocalHost(finalBase.hostname)) return { ok: false, reason: t('cli.compareLocalBlocked') };
 
   const texts = [{ where: 'html', url: finalBase.href, body: page.body || '' }];
   for (const extra of ['/llms.txt', '/dorms.json']) {

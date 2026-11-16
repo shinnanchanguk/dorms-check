@@ -10,7 +10,7 @@ import { validateDormsAppUrl, adaptationCase, PRESETS, provenanceFacts } from '.
 import { mergeBlock, agentsBlock, BLOCK_START, BLOCK_END, JS_HEADER_PREFIX, stripJsHeader } from '../protect/provenance-text.js';
 import { noticeText } from '../protect/steps/notice.js';
 import { isVendorFile } from '../protect/steps/provenance.js';
-import { compareSuspect, parseSuspectUrl } from '../protect/compare.js';
+import { compareSuspect, parseSuspectUrl, isBlockedAddress, isLocalHost, resolveSafe } from '../protect/compare.js';
 import { verifyBuild } from '../protect/verify-static.js';
 import { loadCopy } from '../core/copy.js';
 
@@ -196,13 +196,71 @@ async function run() {
       const body = hit ? hit.body : 'nf';
       return new Response(body, { status: hit ? hit.status : 404, headers: { 'content-type': 'text/plain' } });
     };
-    const r = await compareSuspect(root, { url: 'https://copy.example/', buildFull: path.join(root, 'dist'), rightsProfile: JSON.parse(read(root, '.dorms-check/rights-profile.json')), fetchImpl });
+    const publicLookup = async () => [{ address: '93.184.216.34', family: 4 }];
+    const r = await compareSuspect(root, { url: 'https://copy.example/', buildFull: path.join(root, 'dist'), rightsProfile: JSON.parse(read(root, '.dorms-check/rights-profile.json')), fetchImpl, lookupImpl: publicLookup });
     const ids = r.ok ? r.record.signals.map(s => s.id) : [];
     ok('머리 주석만 지운 같은 파일 → 지문 일치로 찾음', ids.includes('bundleStripped'));
     ok('만든 사람 이름 찾음', ids.includes('creator'));
     ok('대조 기록이 증거 폴더에 날짜로 저장', r.ok && r.file.includes(path.join('.dorms-check', 'protect', 'evidence', 'compare-')) && fs.existsSync(r.file));
     ok('내부망 주소는 기본 거부', parseSuspectUrl('http://127.0.0.1:8080/').ok === false && parseSuspectUrl('http://localhost/').ok === false);
     ok('http(s) 밖 주소 거부', parseSuspectUrl('file:///etc/passwd').ok === false);
+
+    // 내부망 우회 막기(보안 검토 지적 반영)
+    for (const u of ['http://localhost./', 'http://LOCALHOST../', 'http://127.1/', 'http://0x7f000001/', 'http://2130706433/', 'http://[::ffff:127.0.0.1]/', 'http://[::ffff:7f00:1]/', 'http://100.64.0.1/', 'http://169.254.169.254/', 'http://0.0.0.0/', 'http://0.1.2.3/', 'http://[::1]/', 'http://[fd00::1]/', 'http://[fe80::1]/', 'http://224.0.0.1/', 'http://[64:ff9b::7f00:1]/', 'http://metadata.google.internal/']) {
+      ok(`거부: ${u}`, parseSuspectUrl(u).ok === false);
+    }
+    ok('공개 IP 는 통과', parseSuspectUrl('http://93.184.216.34/').ok && !isBlockedAddress('93.184.216.34') && !isBlockedAddress('2606:2800:220:1::1'));
+    ok('CGNAT·링크로컬·사설 판정', isBlockedAddress('100.127.255.255') && isBlockedAddress('169.254.0.1') && isBlockedAddress('172.31.0.1') && !isBlockedAddress('172.32.0.1') && !isBlockedAddress('100.128.0.1'));
+    ok('이름 판정 끝 점 정리', isLocalHost('foo.localhost.') && isLocalHost('127.0.0.1.'));
+    const toLoop = async () => [{ address: '127.0.0.1', family: 4 }];
+    const mixed = async () => [{ address: '93.184.216.34', family: 4 }, { address: '10.0.0.5', family: 4 }];
+    const mapped = async () => [{ address: '::ffff:192.168.0.1', family: 6 }];
+    ok('이름이 127.0.0.1 로 풀리면 거부', (await resolveSafe('evil.example', { lookupImpl: toLoop })).ok === false);
+    ok('풀린 주소 중 하나라도 내부망이면 거부', (await resolveSafe('evil.example', { lookupImpl: mixed })).ok === false);
+    ok('::ffff: 사설 주소로 풀리면 거부', (await resolveSafe('evil.example', { lookupImpl: mapped })).ok === false);
+    ok('공개 주소로 풀리면 그 IP 로 고정', (await resolveSafe('ok.example', { lookupImpl: publicLookup })).address === '93.184.216.34');
+    const rebind = await compareSuspect(root, { url: 'https://evil.example/', buildFull: path.join(root, 'dist'), rightsProfile: null, fetchImpl, lookupImpl: toLoop });
+    ok('대조: 내부망으로 풀리는 이름은 요청 전에 거부', rebind.ok === false);
+    const redir = { 'https://copy.example/': { status: 302, location: 'http://169.254.169.254/latest/meta-data/' } };
+    let hitMeta = false;
+    const redirFetch = async (url) => {
+      if (url.startsWith('http://169.254')) hitMeta = true;
+      const h = redir[url];
+      return new Response('', { status: h ? h.status : 404, headers: h ? { location: h.location } : {} });
+    };
+    const rr = await compareSuspect(root, { url: 'https://copy.example/', buildFull: path.join(root, 'dist'), rightsProfile: null, fetchImpl: redirFetch, lookupImpl: publicLookup });
+    ok('대조: 내부망으로 넘겨주기(redirect)는 따라가지 않음', rr.ok === false && !hitMeta);
+    let n = 0;
+    const loopFetch = async () => { n++; return new Response('', { status: 302, headers: { location: 'https://copy.example/next' + n } }); };
+    const lr = await compareSuspect(root, { url: 'https://copy.example/', buildFull: path.join(root, 'dist'), rightsProfile: null, fetchImpl: loopFetch, lookupImpl: publicLookup });
+    ok('대조: 넘겨주기 상한(5번) 넘으면 멈춤', lr.ok === false && n <= 6);
+    let assetHitLocal = false;
+    const assetSite = async (url) => {
+      if (url.includes('internal.example')) assetHitLocal = true;
+      return new Response('<html><body><script src="/a.js"></script></body></html>', { status: 200 });
+    };
+    const splitLookup = async (h) => h === 'copy.example' ? [{ address: '93.184.216.34', family: 4 }] : [{ address: '10.0.0.9', family: 4 }];
+    await compareSuspect(root, { url: 'https://copy.example/', buildFull: path.join(root, 'dist'), rightsProfile: null, fetchImpl: assetSite, lookupImpl: splitLookup });
+    ok('대조: 자산 요청도 매번 다시 검사(같은 출처만)', !assetHitLocal);
+
+    // 실제 접속 경로(고정 IP 접속): 로컬 서버를 띄워 확인
+    const http = await import('node:http');
+    let served = 0;
+    const big = 'a'.repeat(3 * 1024 * 1024);
+    const srv = http.createServer((req, res) => {
+      served++;
+      if (req.url === '/big.js') { res.end(big); return; }
+      res.end('<html><body>홍길동 <script src="/big.js"></script></body></html>');
+    });
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+    const blockedReal = await compareSuspect(root, { url: `http://rebind.example:${port}/`, buildFull: path.join(root, 'dist'), rightsProfile: null, lookupImpl: toLoop });
+    ok('실제 접속: 127.0.0.1 로 풀리는 이름은 접속 전에 거부(서버 요청 0)', blockedReal.ok === false && served === 0);
+    const allowedReal = await compareSuspect(root, { url: `http://pinned.example:${port}/`, buildFull: path.join(root, 'dist'), rightsProfile: JSON.parse(read(root, '.dorms-check/rights-profile.json')), allowLocal: true, lookupImpl: toLoop });
+    const bigRec = allowedReal.ok && allowedReal.record.fetched.find(x => x.url.endsWith('/big.js'));
+    ok('실제 접속: --allow-local 이면 확인한 IP 로 접속해 받음', allowedReal.ok && served >= 2);
+    ok('실제 접속: 응답 크기 상한 2MB', bigRec && bigRec.bytes <= 2 * 1024 * 1024);
+    srv.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
 
