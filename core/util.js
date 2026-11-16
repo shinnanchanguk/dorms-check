@@ -98,6 +98,7 @@ export function createBackup(root) {
   const dir = path.join(root, BACKUP_BASE, ts);
   const manifest = [];
   const createdFiles = [];
+  const keepDirs = {}; // 생성 파일마다 원래 있던 가장 가까운 상위 폴더(복원 때 그 폴더는 비어도 지우지 않는다)
   const seen = new Set();
   return {
     dir,
@@ -113,14 +114,19 @@ export function createBackup(root) {
     },
     markCreated(file) {
       const rel = path.relative(root, file);
-      if (!createdFiles.includes(rel)) createdFiles.push(rel);
+      if (!createdFiles.includes(rel)) {
+        createdFiles.push(rel);
+        let d = path.dirname(path.resolve(file));
+        while (!exists(d) && d !== path.dirname(d)) d = path.dirname(d);
+        keepDirs[rel] = path.relative(root, d);
+      }
     },
     finalize() {
       if (manifest.length || createdFiles.length) {
         ensureDir(dir);
         writeText(
           path.join(dir, '_manifest.json'),
-          JSON.stringify({ at: new Date().toISOString(), files: manifest, createdFiles }, null, 2)
+          JSON.stringify({ at: new Date().toISOString(), files: manifest, createdFiles, keepDirs }, null, 2)
         );
       }
       return { dir, count: manifest.length, created: createdFiles.length };
@@ -138,9 +144,9 @@ export function latestBackup(root) {
 }
 
 // 삭제 후 비게 된 부모 디렉토리를 root 경계까지만 정리
-function cleanupEmptyDirs(dir, rootAbs) {
+function cleanupEmptyDirs(dir, rootAbs, keepAbs = null) {
   let cur = path.resolve(dir);
-  while (cur.startsWith(rootAbs + path.sep) && cur !== rootAbs) {
+  while (cur.startsWith(rootAbs + path.sep) && cur !== rootAbs && cur !== keepAbs) {
     try {
       if (fs.readdirSync(cur).length === 0) { fs.rmdirSync(cur); cur = path.dirname(cur); }
       else break;
@@ -164,7 +170,9 @@ export function restoreBackup(root, backupDir) {
     if (!withinRoot(root, rel)) { skipped++; continue; }
     const p = path.resolve(rootAbs, rel);
     if (exists(p)) {
-      try { fs.unlinkSync(p); removed++; cleanupEmptyDirs(path.dirname(p), rootAbs); } catch { /* ignore */ }
+      const keep = man.keepDirs && typeof man.keepDirs[rel] === 'string' && withinRoot(root, man.keepDirs[rel] || '.')
+        ? path.resolve(rootAbs, man.keepDirs[rel]) : null;
+      try { fs.unlinkSync(p); removed++; cleanupEmptyDirs(path.dirname(p), rootAbs, keep); } catch { /* ignore */ }
     }
   }
   return { restored: n, removed, skipped };

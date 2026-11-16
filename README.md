@@ -4,6 +4,10 @@ English | [한국어](./README.ko.md)
 
 A minimum inspection tool for teacher-built apps. It reports observed risks, recommendations, and checks it could not complete.
 
+## Provenance notices (new)
+
+`protect apply` now also plants the original creator's notice wherever a copier's AI reads: a small visible footer source line and an in-app usage page (`usage.html`), a `/*! ... */` header in built JS/CSS, an `AGENTS.md`/`CLAUDE.md` block between markers, `dorms.json`, and a permission-aware `llms.txt`. The notice follows the app's DoRms usage settings (strictest of modify / sourceReuse / redistribute; unset counts as "ask first") and cites Korean Copyright Act articles. It is a polite, factual request, not an enforcement mechanism. `dcheck protect compare --url <suspect>` records which of this app's markers and bundle fingerprints appear on a suspect public URL. All user-facing copy lives in `templates/copy.ko.json`. This supersedes the ai-clone-shield skill. Feature catalogue: `docs/features.ko.json`.
+
 ## Inspection and app registration
 
 DoRms app registration is independent from its inspection marks. An inaccessible internal database or an undiscovered privacy policy does not prevent registration.

@@ -66,6 +66,8 @@ export async function buildProtectionPlan(root, { config } = {}) {
       '빌드 산출물의 HTML·JS 를 수정하므로, 적용 후 반드시 verify 로 깨짐을 확인해야 합니다.',
       '빌드를 다시 하면 적용이 사라집니다(빌드 후 재적용 필요).',
       'robots.txt 차단·고지는 지키지 않는 수집기에게는 효력이 없습니다(완전 보호 아님).',
+      '출처 안내는 빌드 결과 말고도 프로젝트 맨 위 AGENTS.md·CLAUDE.md·dorms.json, public/usage.html 을 만들거나 고칩니다(표식 사이만 바꾸고 선생님 내용은 보존).',
+      '화면 맨 아래에 작은 출처 줄이 보입니다. 원하지 않으면 interview 에서 끄거나 설정 protection.provenance.visibleFooter 를 false 로 두세요.',
       plan_riskLicense(rightsProfile),
     ].filter(Boolean),
     restore: {

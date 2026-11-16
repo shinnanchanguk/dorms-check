@@ -31,6 +31,8 @@ Claude·Codex·Gemini·Cursor 등에서 같은 점검 흐름을 사용합니다.
 
 에듀집 서류가 필요하면 [edzip-autopilot](./skills/edzip-autopilot/SKILL.md)을 읽습니다. 계획과 개인정보가 아닌 질문을 확인하고, 승인한 계획 해시와 `--confirm-apply`로 제출 서류를 만듭니다. 확인 완료 뒤 `edzip council`로 내부 기안문과 학운위 안건문을 준비합니다. 서류 생성은 외부 제출이나 공식 확인을 대신하지 않습니다.
 
+앱 보호를 적용하면 원작자·이용 범위 안내가 앱 바닥 줄·`usage.html`·JS·CSS 머리 주석·`AGENTS.md`·`CLAUDE.md`·`dorms.json`·`llms.txt`에 들어갑니다(표식 사이만 바꾸고 선생님이 쓴 내용은 보존). 도름스 앱 주소와 이용·보호 안내 값은 선생님이 옮겨 적게 하고 도름스를 긁어 오지 마세요. 복제 의심 주소는 `protect compare --url`로 대조해 기록만 남깁니다.
+
 앱 보호를 요청하면 `interview`로 권리와 이용 범위를 쉬운 질문 1~3개씩 확인합니다. 비밀 원문과 민감한 개인 정보는 답변에 넣지 않습니다. `protect plan`을 보여주고 승인한 계획 해시와 `--confirm-apply`로 적용합니다. 이후 `verify`로 확인하고 문제가 있으면 `protect restore`를 사용합니다.
 
 자세한 설명은 [README.ko.md](./README.ko.md), 사용자용 프롬프트는 [USE-WITH-AI.md](./USE-WITH-AI.md)에 있습니다.

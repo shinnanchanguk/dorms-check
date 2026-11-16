@@ -1,0 +1,117 @@
+{
+  "$comment": "dorms-check 기능 목록. 도름스 메뉴판·슬라이드가 읽는다. 문구는 초안이며 <SHA> 는 공개한 커밋 주소로 바꾼다.",
+  "runTemplate": "npx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz",
+  "features": [
+    {
+      "id": "security-scan",
+      "name": "기본 보안 점검",
+      "when": "앱을 올리기 전이나 도름스 마크를 받기 전, 공개 주소와 코드에 분명한 위험이 있는지 볼 때",
+      "commands": [
+        "detect",
+        "init --track security",
+        "scan --url",
+        "status",
+        "report"
+      ],
+      "prompt": "내 앱을 dorms-check 로 기본 보안 점검해줘. 앱 폴더에서 아래 고정판 주소로 차례로 실행해줘.\n\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz detect\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz init --name \"<내 앱 이름>\" --url \"<공개 주소>\" --track security --confirm-ownership\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz scan --url \"<공개 주소>\"\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz status\n\n확인한 위험, 고치면 좋은 점, 확인하지 못한 것을 나눠 쉬운 말로 알려줘. 고칠 게 있으면 왜 고쳐야 하는지 먼저 설명하고 내 동의를 받아 고쳐줘."
+    },
+    {
+      "id": "security-audit",
+      "name": "심층 보안 점검",
+      "when": "학생 정보를 다루거나 로그인·업로드·AI 기능이 있어 더 깊이 보고 싶을 때(요청할 때만)",
+      "commands": [
+        "audit plan",
+        "audit prompt",
+        "audit merge",
+        "audit record",
+        "audit check",
+        "audit report"
+      ],
+      "prompt": "내 앱을 dorms-check 심층 점검(audit)으로 정밀하게 봐줘. dorms-check 의 ai/prompts/audit.md 를 먼저 읽고 그 순서대로 해줘. 처음이면 아래로 시작해줘.\n\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz audit plan --profile quick\n\n찾는 일과 검증하는 일은 서로 다른 에이전트에게 맡기고, 배포된 서버에 공격 요청은 보내지 마. 결과는 확인한 위험, 더 확인할 것, 권고로 나눠 알려줘."
+    },
+    {
+      "id": "edzip-docs",
+      "name": "에듀집 제출 서류",
+      "when": "학교에서 앱을 쓰려고 에듀집 등록 서류를 준비할 때",
+      "commands": [
+        "init --track security,edzip",
+        "edzip prepare"
+      ],
+      "prompt": "에듀집 제출 서류를 준비해줘. dorms-check 의 skills/edzip-autopilot/SKILL.md 를 읽고 아래로 계획과 질문을 받아줘.\n\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz edzip prepare\n\n개인정보가 아닌 질문만 1~3개씩 물어보고, 계획을 보여준 뒤 내가 승인하면 그 계획 해시와 --confirm-apply 로 서류를 만들어줘. 자동 제출은 하지 마."
+    },
+    {
+      "id": "edzip-council",
+      "name": "학운위 안건·내부 기안문",
+      "when": "에듀집 확인이 끝나 학교 내부 결재와 학운위 심의를 올릴 때",
+      "commands": [
+        "edzip council --approved-url --confirm-apply"
+      ],
+      "prompt": "에듀집 확인이 끝난 내 앱의 내부 기안문과 학운위 안건문을 만들어줘.\n\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz edzip council --approved-url \"<에듀집 확인 완료 주소>\" --confirm-apply\n\n학교명·기안자·결재선은 저장하지 말고 내가 채울 빈칸으로 남겨줘."
+    },
+    {
+      "id": "protect-secrets",
+      "name": "비법 보호 점검",
+      "when": "AI 지시문·채점 규칙·문항 데이터 같은 내 앱의 비법이 브라우저로 새는지 볼 때",
+      "commands": [
+        "init --track protection",
+        "scan",
+        "interview",
+        "protect plan"
+      ],
+      "prompt": "내 앱의 비법이 새지 않는지 dorms-check 로 봐줘.\n\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz init --name \"<내 앱 이름>\" --url \"<공개 주소>\" --track protection --confirm-ownership\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz scan --code-only\n\n비밀 키·AI 지시문·핵심 데이터가 브라우저로 내려가는 파일에 있으면 어디인지 알려주고, 서버로 옮기는 방법을 쉬운 말로 설명한 뒤 내 동의를 받고 고쳐줘."
+    },
+    {
+      "id": "provenance",
+      "name": "AI가 읽는 출처·법적 고지",
+      "when": "다른 사람이 AI에게 내 앱을 베껴 달라고 할 때, 그 AI가 먼저 원작자와 이용 범위를 말하고 허락을 구하게 하고 싶을 때",
+      "commands": [
+        "interview",
+        "protect plan",
+        "protect apply --plan-sha256 --confirm-apply",
+        "verify",
+        "protect restore"
+      ],
+      "prompt": "내 앱에 원작자 안내와 이용 범위를 심어줘. 누가 AI에게 이 앱을 베껴 달라고 하면 그 AI가 먼저 나와 이용 범위를 알려 주고, 허락이 필요하면 도름스 쪽지로 물어보라고 안내하게 하고 싶어.\n\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz interview\n\n위 문항을 쉬운 말로 1~3개씩 물어봐줘. 도름스 앱 주소(https://dorms.school/apps/...)와 도름스 앱 페이지의 '이용·보호 안내' 값은 내가 보고 불러 줄게. 답을 파일로 저장해 npx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz interview --answers <파일> 로 권리 프로필을 만들고, 앱을 빌드한 뒤 아래를 실행해줘.\n\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz protect plan\n\n바뀔 파일을 보여주고 내가 동의하면 그 계획 해시로 protect apply --plan-sha256 <값> --confirm-apply 를 실행하고, verify 로 앱이 깨지지 않았는지 확인해줘. 문제가 있으면 protect restore 로 되돌려줘. 배포는 내가 따로 할게."
+    },
+    {
+      "id": "usage-page",
+      "name": "앱 안 이용 안내 화면",
+      "when": "내 앱 안에서도 도름스처럼 '허용·먼저 허락·허용 안 함' 이용 범위와 저작권 안내를 보여주고 싶을 때",
+      "commands": [
+        "interview",
+        "protect plan",
+        "protect apply --plan-sha256 --confirm-apply"
+      ],
+      "prompt": "내 앱 안에 도름스 이용·보호 안내와 같은 이용 안내 화면(usage.html)을 만들어줘.\n\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz interview\n\n이용 범위 묶음(교육 나눔형·제한 이용형·오픈 협업형·커스텀), 출처 표시 방법, 덧붙일 조건을 나한테 물어보고 권리 프로필을 만든 뒤 protect plan 으로 계획을 보여줘. 내가 동의하면 그 계획 해시로 적용하고, 화면 맨 아래 작은 '이용 안내' 줄이 그 화면으로 이어지는지 확인해줘."
+    },
+    {
+      "id": "compare",
+      "name": "복제 의심 주소 대조",
+      "when": "내 앱을 그대로 베낀 것 같은 사이트를 봤을 때, 내 표식이 그 사이트에 남아 있는지 날짜와 함께 기록하고 싶을 때",
+      "commands": [
+        "protect compare --url"
+      ],
+      "prompt": "이 주소가 내 앱을 베낀 것 같아. dorms-check 로 내 출처 표식과 빌드 파일 지문이 거기 있는지 대조하고 기록을 남겨줘.\n\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz protect compare --url \"<의심 주소>\"\n\n찾은 표식과 못 찾은 표식을 쉬운 말로 알려주고, 이 기록이 침해를 확정하는 게 아니라는 점도 함께 말해줘. 그 사이트에 아무것도 보내거나 바꾸지 마."
+    },
+    {
+      "id": "evidence",
+      "name": "증거팩(지문·만든 기록)",
+      "when": "내가 이 시점에 이 앱을 갖고 있었다는 기록을 남겨 두고 싶을 때",
+      "commands": [
+        "protect apply",
+        "submit"
+      ],
+      "prompt": "내 앱의 증거팩을 만들어줘. 보호 적용(protect plan → 내 동의 → protect apply)을 하면 .dorms-check/protect/evidence/ 에 빌드 지문과 만든 기록이 생겨. 끝나면 어디에 무엇이 생겼는지 알려줘.\n\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz protect plan"
+    },
+    {
+      "id": "legacy-hooks",
+      "name": "예전 설치 정리",
+      "when": "예전 판이 깔아 둔 훅 때문에 명령이 막힐 때",
+      "commands": [
+        "hooks status",
+        "hooks uninstall"
+      ],
+      "prompt": "예전 dorms-check 가 남긴 훅이 있는지 확인하고, 있으면 백업한 뒤 도름스가 넣은 항목만 지워줘.\n\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz hooks status\nnpx -y https://github.com/shinnanchanguk/dorms-check/archive/<SHA>.tar.gz hooks uninstall"
+    }
+  ]
+}

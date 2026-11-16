@@ -3,6 +3,8 @@
 // 의존성 0: 스키마 검증은 수기 검증기로(스키마 파일은 문서·서버 계약용).
 import path from 'node:path';
 import { exists, readJsonSafe, writeText } from './util.js';
+import { t } from './copy.js';
+import { PRESETS, PRESET_IDS, normalizePermissionValue, validateDormsAppUrl } from './usage-policy.js';
 
 const FILE = path.join('.dorms-check', 'rights-profile.json');
 
@@ -10,10 +12,13 @@ export const RIGHTSHOLDER_STATUS = ['sole', 'joint', 'school_work_related', 'thi
 export const WORK_FOR_HIRE_REVIEW = ['not_needed', 'needed', 'done', 'unknown'];
 export const AUDIENCE = ['anyone', 'dorms_members', 'verified_teachers', 'invited'];
 export const PERMISSION_VALUES = ['allowed', 'permission_required', 'prohibited'];
-export const PERMISSION_KEYS = [
+// 예전 키 9개(필수, 하위 호환) + 도름스와 맞춘 새 키(선택). 새 키가 없는 예전 프로필도 그대로 통과한다.
+export const LEGACY_PERMISSION_KEYS = [
   'useAsIs', 'shareOriginalLink', 'shareLockedAccess', 'screenshotsWithAttribution',
   'modify', 'redistribute', 'commercialUse', 'uploadPrivateAssetsToAI', 'aiTrainingOrClone',
 ];
+export const OPTIONAL_PERMISSION_KEYS = ['shareDormsLink', 'downloadPrint', 'sourceReuse', 'research'];
+export const PERMISSION_KEYS = [...LEGACY_PERMISSION_KEYS, ...OPTIONAL_PERMISSION_KEYS];
 export const ASSET_KINDS = ['prompt', 'logic', 'data', 'design', 'content', 'other'];
 export const ASSET_LOCATIONS = ['server', 'client', 'mixed', 'unknown'];
 export const LEGAL_REVIEW = ['not_done', 'recommended', 'done'];
@@ -21,6 +26,7 @@ export const LEGAL_REVIEW = ['not_done', 'recommended', 'done'];
 export function defaultRightsProfile() {
   const permissions = {};
   for (const k of PERMISSION_KEYS) permissions[k] = 'permission_required'; // 기본은 보수적(허락 필요)
+  permissions.shareDormsLink = 'allowed'; // 도름스 링크 공유는 늘 허용(도름스와 같은 잠금 규칙)
   return {
     schemaVersion: 1,
     appId: undefined,
@@ -62,9 +68,13 @@ export function validateRightsProfile(p) {
   const perms = p.permissions;
   if (!perms || typeof perms !== 'object') push('permissions 가 필요합니다');
   else {
-    for (const k of PERMISSION_KEYS) {
+    for (const k of LEGACY_PERMISSION_KEYS) {
       if (!PERMISSION_VALUES.includes(perms[k])) push(`permissions.${k} 는 ${PERMISSION_VALUES.join('|')} 중 하나여야 합니다`);
     }
+    for (const k of OPTIONAL_PERMISSION_KEYS) {
+      if (perms[k] !== undefined && !PERMISSION_VALUES.includes(perms[k])) push(`permissions.${k} 는 ${PERMISSION_VALUES.join('|')} 중 하나여야 합니다`);
+    }
+    if (perms.shareDormsLink !== undefined && perms.shareDormsLink !== 'allowed') push('permissions.shareDormsLink 는 늘 allowed 입니다(도름스 링크 공유는 잠긴 허용)');
     for (const k of Object.keys(perms)) {
       if (!PERMISSION_KEYS.includes(k)) push(`permissions 에 알 수 없는 키: ${k}`);
     }
@@ -82,6 +92,12 @@ export function validateRightsProfile(p) {
   }
   if (p.legalReview !== undefined && !LEGAL_REVIEW.includes(p.legalReview)) push('legalReview 값이 올바르지 않습니다');
   if (p.customClauses !== undefined && !Array.isArray(p.customClauses)) push('customClauses 는 배열이어야 합니다');
+  if (p.userClauses !== undefined && (!Array.isArray(p.userClauses) || p.userClauses.some(c => typeof c !== 'string' || c.length > 300))) push('userClauses 는 300자 이내 문자열 배열이어야 합니다');
+  if (p.dormsAppUrl !== undefined && !validateDormsAppUrl(p.dormsAppUrl).ok) push('dormsAppUrl: ' + t('cli.dormsUrlInvalid'));
+  if (p.appName !== undefined && (typeof p.appName !== 'string' || p.appName.length > 100)) push('appName 은 100자 이내 문자열이어야 합니다');
+  if (p.preset !== undefined && !PRESET_IDS.includes(p.preset)) push(`preset 은 ${PRESET_IDS.join('|')} 중 하나여야 합니다`);
+  if (p.attribution && p.attribution.method !== undefined && (typeof p.attribution.method !== 'string' || p.attribution.method.length > 200)) push('attribution.method 는 200자 이내 문자열이어야 합니다');
+  if (p.provenance !== undefined && (typeof p.provenance !== 'object' || p.provenance === null)) push('provenance 는 객체여야 합니다');
   return { ok: errors.length === 0, errors };
 }
 
@@ -147,7 +163,27 @@ export const INTERVIEW_QUESTIONS = [
       { id: 'aiTraining', ask: 'AI 학습·복제(내 앱을 본떠 만들기)는요?', choices: { prohibited: '금지할래요', permission_required: '허락받으면 돼요', allowed: '허용할래요' } },
     ],
   },
+  dormsSection(),
 ];
+
+// 도름스 연결·이용 안내 문항(문구는 copy.ko.json). 도름스를 긁어 오지 않고 선생님이 앱 페이지 값을 옮겨 적는다.
+function dormsSection() {
+  const presetChoices = {};
+  for (const id of PRESET_IDS) presetChoices[id] = `${t('presets.' + id + '.label')}: ${t('presets.' + id + '.blurb')}`;
+  return {
+    section: t('interview.sectionDorms'),
+    questions: [
+      { id: 'appName', ask: t('interview.appName'), free: true },
+      { id: 'dormsAppUrl', ask: t('interview.dormsAppUrl'), free: true },
+      { id: 'preset', ask: t('interview.preset'), choices: presetChoices },
+      { id: 'permissions', ask: t('interview.permissions'), free: true, object: true },
+      { id: 'attributionRequired', ask: t('interview.attributionRequired'), choices: { yes: t('interview.attributionRequiredYes'), no: t('interview.attributionRequiredNo') } },
+      { id: 'attributionMethod', ask: t('interview.attributionMethod'), free: true },
+      { id: 'customClauses', ask: t('interview.customClauses'), free: true, list: true },
+      { id: 'visibleFooter', ask: t('interview.visibleFooter'), choices: { yes: t('interview.visibleFooterYes'), no: t('interview.visibleFooterNo') } },
+    ],
+  };
+}
 
 // 답 파일(answers) → 프로필. answers 형식: { owner, schoolInvolved, displayName, existingLicense,
 //   thirdPartyAssets, aiContribution, protectedAssets: [{label,kind,location}|문자열], audience, shareLevel, aiTraining }
@@ -180,6 +216,29 @@ export function buildRightsProfileFromAnswers(answers = {}) {
   if (PERMISSION_VALUES.includes(answers.aiTraining)) p.permissions.aiTrainingOrClone = answers.aiTraining;
   if (p.permissions.aiTrainingOrClone === 'prohibited') p.permissions.uploadPrivateAssetsToAI = 'prohibited';
 
+  // 도름스 이용·보호 안내 묶음 → 손으로 옮겨 적은 항목 값 순으로 덮는다(나중 것이 이긴다).
+  if (PRESET_IDS.includes(answers.preset)) {
+    p.preset = answers.preset;
+    Object.assign(p.permissions, PRESETS[answers.preset]);
+  }
+  if (answers.permissions && typeof answers.permissions === 'object' && !Array.isArray(answers.permissions)) {
+    for (const [k, v] of Object.entries(answers.permissions)) {
+      if (!PERMISSION_KEYS.includes(k) || k === 'shareDormsLink') continue;
+      const nv = normalizePermissionValue(v);
+      if (nv) p.permissions[k] = nv;
+    }
+  }
+  p.permissions.shareDormsLink = 'allowed';
+  if (typeof answers.appName === 'string' && answers.appName.trim()) p.appName = answers.appName.trim().slice(0, 100);
+  if (typeof answers.dormsAppUrl === 'string' && answers.dormsAppUrl.trim()) {
+    const v = validateDormsAppUrl(answers.dormsAppUrl);
+    if (!v.ok) throw new Error(t('cli.dormsUrlInvalid'));
+    p.dormsAppUrl = v.url;
+  }
+  if (answers.attributionRequired === 'no') p.attribution.required = false;
+  if (typeof answers.attributionMethod === 'string' && answers.attributionMethod.trim()) p.attribution.method = answers.attributionMethod.trim().slice(0, 200);
+  if (answers.visibleFooter === 'no') p.provenance = { visibleFooter: false };
+
   // 보호 자산(이름만)
   if (Array.isArray(answers.protectedAssets)) {
     p.protectedAssets = answers.protectedAssets.map(a => {
@@ -191,6 +250,10 @@ export function buildRightsProfileFromAnswers(answers = {}) {
   // 기존 공개 조건 메모(충돌 판단은 AI judge 몫 — 프로필엔 사실만)
   if (answers.existingLicense === 'open') p.customClauses.push('이미 공개 라이선스로 배포한 적이 있음(새 조건과의 충돌 검토 필요)');
   if (answers.aiContribution === 'mostly_ai') p.customClauses.push('AI 생성 비중이 큼(권리 주장 범위 검토 필요)');
+  // 선생님이 직접 적은 조건(이용 안내 화면에 그대로 보인다). 내부 메모(위 두 줄)는 화면에 내지 않는다.
+  if (Array.isArray(answers.customClauses)) {
+    p.userClauses = answers.customClauses.map(c => String(c || '').trim().slice(0, 300)).filter(Boolean).slice(0, 10);
+  }
 
   if (p.rightsholder.displayName) p.attribution.text = `만든이 ${p.rightsholder.displayName}`;
   return p;

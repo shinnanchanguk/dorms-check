@@ -8,11 +8,13 @@ import { loadRightsProfile } from '../core/rights-profile.js';
 import { verifyBuild } from './verify-static.js';
 import { sourcemapStep } from './steps/sourcemap.js';
 import { noticeStep } from './steps/notice.js';
+import { provenanceStep } from './steps/provenance.js';
 import { legalStep } from './steps/legal.js';
 import { evidenceStep } from './steps/evidence.js';
 
-// 실행 순서 고정: 산출물 정리 → 고지 주입 → 기계용 안내·무결성 → 증거팩
-export const PROTECT_STEPS = [sourcemapStep, noticeStep, legalStep, evidenceStep];
+// 실행 순서 고정: 산출물 정리 → 고지 주입 → 출처 안내 → 기계용 안내·무결성 → 증거팩
+// (무결성 지문은 출처 안내까지 들어간 최종 산출물 기준이다)
+export const PROTECT_STEPS = [sourcemapStep, noticeStep, provenanceStep, legalStep, evidenceStep];
 
 const STATE_FILE = path.join('.dorms-check', 'protect', 'state.json');
 

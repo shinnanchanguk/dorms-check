@@ -39,6 +39,9 @@ export function verifyBuild(root, buildDir) {
     if (src.includes('data-dorms-check-notice') && !/<aside\b[^>]*data-dorms-check-notice[\s\S]*?<\/aside>/i.test(src)) {
       issues.push({ sev: 'error', file: rel, msg: '권리 고지 <aside>가 닫히지 않음(주입 손상)' });
     }
+    if (src.includes('data-dorms-check-source') && !/<p\b[^>]*data-dorms-check-source[\s\S]*?<\/p>/i.test(src)) {
+      issues.push({ sev: 'error', file: rel, msg: '바닥 출처 줄 <p>가 닫히지 않음(주입 손상)' });
+    }
     if (/<body/i.test(src) && !/<\/body>/i.test(src)) {
       issues.push({ sev: 'warn', file: rel, msg: '<body>가 닫히지 않음' });
     }

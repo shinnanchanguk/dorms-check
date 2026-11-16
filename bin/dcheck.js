@@ -20,6 +20,9 @@ import { buildProtectionPlan, writePlan, loadPlan, planPath, checkPlanApproval }
 import { runProtectSteps, runProtectVerify, resolveBuildDir, saveProtectState, loadProtectState } from '../protect/apply.js';
 import { restoreBackup, latestBackup } from '../core/util.js';
 import { verifyBuild } from '../protect/verify-static.js';
+import { compareSuspect } from '../protect/compare.js';
+import { loadRightsProfile } from '../core/rights-profile.js';
+import { t } from '../core/copy.js';
 import { applyEdzipPlan, buildEdzipPlan, prepareCouncilDocuments, writeEdzipPlan } from '../core/edzip-autopilot.js';
 import { ALL_AGENTS, hookStatus, uninstallHooks } from '../core/hooks.js';
 import { planRun, resolveRunDir, huntPrompt, verifierPrompt, criticPrompt, mergeResult, recordDecision, promoteArtifact, checkRun, reportRun, latestAuditSummary, readInput } from '../audit/run.js';
@@ -56,10 +59,11 @@ function help() {
   log.plain('  dcheck edzip prepare                       에듀집 서류 작성 계획 저장');
   log.plain('  dcheck edzip prepare --apply --plan-sha256 <값> --confirm-apply --answers <JSON>');
   log.plain('  dcheck edzip council --approved-url <주소> --confirm-apply');
-  log.plain('  dcheck interview [--answers <JSON>]         권리·이용 범위 질문 또는 답변 저장');
-  log.plain('  dcheck protect plan                        앱 보호 변경 계획 저장');
+  log.plain('  dcheck interview [--answers <JSON>]         권리·이용 범위·도름스 앱 주소 질문 또는 답변 저장');
+  log.plain('  dcheck protect plan                        앱 보호 변경 계획 저장(출처 안내·이용 안내 화면 포함)');
   log.plain('  dcheck protect apply --plan-sha256 <값> --confirm-apply');
   log.plain('  dcheck protect restore [--from <경로>]      적용 전 백업 복원');
+  log.plain('  dcheck protect compare --url <의심 주소>      복제 의심 주소에서 내 출처 표식·빌드 지문 찾기(기록 저장)');
   log.plain('  dcheck verify                              앱 보호 적용 전후 산출물 비교');
   log.plain('');
   log.plain('  심층 점검(정밀 보안 감사, 요청할 때만):');
@@ -371,7 +375,16 @@ function runInterview() {
         audience: 'anyone | dorms_members | verified_teachers | invited',
         shareLevel: 'open | ask_first | strict',
         aiTraining: 'prohibited | permission_required | allowed',
+        appName: '앱 이름',
+        dormsAppUrl: 'https://dorms.school/apps/<앱 번호> (도름스에 올렸을 때만)',
+        preset: 'edu_share | restricted | open_collab | custom',
+        permissions: { modify: '허용 | 먼저 허락 | 허용 안 함 (도름스 앱 페이지 이용·보호 안내 표를 그대로 옮겨 적기)' },
+        attributionRequired: 'yes | no',
+        attributionMethod: '출처 표시 방법(비우면 기본 문구)',
+        customClauses: ['덧붙이는 조건 한 줄(선택)'],
+        visibleFooter: 'yes | no',
       },
+      dormsNote: '도름스 사이트를 긁어 오지 않습니다. 선생님이 자기 도름스 앱 페이지의 이용·보호 안내 값을 보고 옮겨 적습니다. 도름스 앱 주소는 https://dorms.school/apps/<번호> 또는 /arcade/<번호> 만 받습니다.',
     };
     log.plain(JSON.stringify(out, null, 2));
     return;
@@ -380,7 +393,9 @@ function runInterview() {
   if (!exists(p)) { log.err(`답 파일이 없습니다: ${answersFile}`); process.exitCode = 1; return; }
   const answers = readJsonSafe(p);
   if (!answers) { log.err('답 파일(JSON) 파싱 실패'); process.exitCode = 1; return; }
-  const profile = buildRightsProfileFromAnswers(answers);
+  let profile;
+  try { profile = buildRightsProfileFromAnswers(answers); }
+  catch (e) { log.err(String(e.message || e)); process.exitCode = 1; return; }
   let written;
   try { written = writeRightsProfile(root, profile); }
   catch (e) { log.err(String(e.message || e)); process.exitCode = 1; return; }
@@ -500,6 +515,29 @@ function runVerify() {
   }
 }
 
+// protect compare: 복제 의심 주소의 공개 파일에서 내 출처 표식·빌드 지문을 찾아 기록한다(그 주소를 바꾸지 않음).
+async function runProtectCompare() {
+  const url = opt('url', '');
+  if (!url) { log.err('--url <의심 주소> 가 필요합니다.'); process.exitCode = 1; return; }
+  const cfg = loadConfig(root);
+  const plan = loadPlan(root);
+  const buildDir = resolveBuildDir(root, (plan && plan.buildDir) || cfg?.protection?.buildDir);
+  log.info(t('cli.compareStart', { url }));
+  const r = await compareSuspect(root, {
+    url, buildFull: buildDir ? path.join(root, buildDir) : null,
+    rightsProfile: loadRightsProfile(root), allowLocal: flag('allow-local'),
+  });
+  if (!r.ok) { log.err(r.reason); process.exitCode = 1; return; }
+  if (r.record.signals.length) {
+    log.ok(t('cli.compareFound', { n: r.record.signals.length }));
+    for (const sg of r.record.signals) log.plain(`  - ${sg.label}: ${color.dim(sg.where)}`);
+  } else {
+    log.warn(t('cli.compareNone'));
+  }
+  log.plain('  ' + t('cli.compareSaved', { file: path.relative(root, r.file) }));
+  log.plain(color.dim('  ' + t('compare.honest')));
+}
+
 async function runProtectCmd() {
   const sub = args[0];
   const subArgs = args.slice(1);
@@ -509,8 +547,9 @@ async function runProtectCmd() {
     case 'plan': await runProtectPlan(); break;
     case 'apply': await runProtectApply(); break;
     case 'restore': runProtectRestore(); break;
+    case 'compare': await runProtectCompare(); break;
     default:
-      log.err('사용법: dcheck protect plan | dcheck protect apply --plan-sha256 <값> --confirm-apply | dcheck protect restore [--from <경로>]');
+      log.err('사용법: dcheck protect plan | dcheck protect apply --plan-sha256 <값> --confirm-apply | dcheck protect restore [--from <경로>] | dcheck protect compare --url <의심 주소>');
       process.exitCode = 1;
   }
 }
