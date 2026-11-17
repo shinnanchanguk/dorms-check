@@ -514,6 +514,8 @@ async function run() {
     // 허용 목록
     ok('허용: 루트 안내 파일·public/usage.html·빌드 폴더 아래', ['AGENTS.md', 'CLAUDE.md', 'dorms.json', 'LICENSE', 'public/usage.html', 'dist/index.html', 'dist/.well-known/tdmrep.json'].every(x => restoreTargetAllowed(x, 'dist')));
     ok('거부: .git·.github·.vscode·.husky·package.json·루트 점 파일·빌드 밖', ['.git/config', '.github/workflows/x.yml', '.vscode/tasks.json', '.husky/pre-commit', 'package.json', 'dist/package.json', '.npmrc', '.env', 'src/app.js', '../x', '.dorms-check/rights-profile.json'].every(x => !restoreTargetAllowed(x, 'dist')));
+    ok('거부: 대소문자·전각·끝 점을 바꾼 이름(.GIT·PACKAGE.JSON·ｐackage.json·.git.)', ['.GIT/config', '.Git/hooks/pre-commit', 'PACKAGE.JSON', '\uff50ackage.json', '.git./config', 'dist/.GIT/x', '.VSCODE/tasks.json'].every(x => !restoreTargetAllowed(x, 'dist')));
+    ok('빌드 폴더 범위가 없으면(서명 없는 백업) 루트 대상만', !restoreTargetAllowed('dist/index.html', null) && restoreTargetAllowed('AGENTS.md', null));
     ok('거부: 빌드 폴더가 .git 이나 .. 이면 그 아래도', !restoreTargetAllowed('.git/config', '.git') && !restoreTargetAllowed('x/y', '..'));
     fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(other, { recursive: true, force: true });
   }

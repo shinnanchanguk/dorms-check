@@ -284,22 +284,28 @@ export function manifestStatus(man, root, backupDir) {
 const DENY_SEGMENTS = new Set(['.git', '.dorms-check', '.github', '.vscode', '.husky', '.idea', 'node_modules']);
 const DENY_BASENAMES = new Set(['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', '.npmrc']);
 const ROOT_TARGETS = new Set(['AGENTS.md', 'CLAUDE.md', 'dorms.json', 'LICENSE', 'public/usage.html']);
+// 대소문자를 가리지 않는 파일 체계(macOS·Windows)에서 .GIT 같은 이름이 거부 목록을 빠져나가지 않게
+// 비교 전에 유니코드 정규화(NFKC)와 소문자로 맞춘다. 끝의 점·공백(Windows 가 떼어 냄)도 지운다.
+function foldSeg(x) { return String(x).normalize('NFKC').toLowerCase().replace(/[. ]+$/, ''); }
+const ROOT_TARGETS_FOLDED = new Set([...ROOT_TARGETS].map((t) => t.split('/').map(foldSeg).join('/')));
 function safeBuildDir(buildDir) {
   if (typeof buildDir !== 'string' || !buildDir || path.isAbsolute(buildDir)) return null;
   const segs = buildDir.split(/[\\/]+/).filter(Boolean);
-  if (!segs.length || segs.some(x => x === '.' || x === '..' || DENY_SEGMENTS.has(x))) return null;
+  if (!segs.length || segs.some(x => x === '.' || x === '..' || DENY_SEGMENTS.has(foldSeg(x)))) return null;
   return segs.join('/');
 }
 export function restoreTargetAllowed(rel, buildDir) {
   if (typeof rel !== 'string' || !rel || path.isAbsolute(rel)) return false;
   const segs = rel.split(/[\\/]+/).filter(Boolean);
-  if (!segs.length || segs.some(x => x === '..' || x === '.' || DENY_SEGMENTS.has(x))) return false;
-  if (DENY_BASENAMES.has(segs[segs.length - 1])) return false;
-  const norm = segs.join('/');
-  if (ROOT_TARGETS.has(norm)) return true;
-  if (segs.length === 1 && segs[0].startsWith('.')) return false;
+  if (!segs.length || segs.some(x => x === '..' || x === '.' || DENY_SEGMENTS.has(foldSeg(x)))) return false;
+  const folded = segs.map(foldSeg);
+  if (DENY_BASENAMES.has(folded[folded.length - 1])) return false;
+  if (ROOT_TARGETS_FOLDED.has(folded.join('/'))) return true;
+  if (segs.length === 1 && folded[0].startsWith('.')) return false;
   const bd = safeBuildDir(buildDir);
-  return Boolean(bd && norm.startsWith(bd + '/'));
+  if (!bd) return false;
+  const bdFolded = bd.split('/').map(foldSeg).join('/');
+  return folded.join('/').startsWith(bdFolded + '/');
 }
 
 // 변경 전 원본을 보존하는 백업 세션(.dorms-check/backup/<ts>/).
@@ -406,6 +412,8 @@ export function restoreBackup(root, backupDir, { force = false } = {}) {
   if (status === 'missing' && !force) return { ...empty, refused: 'unsigned' };
   if ((!(man.version >= 2) || !man.written || typeof man.written !== 'object') && !force) return { ...empty, refused: 'legacy' };
   const rejected = [];
+  // 서명이 확인된 매니페스트만 빌드 폴더 범위를 정할 수 있다(--force 로 연 서명 없는 백업은 루트 대상만).
+  const trustedBuildDir = status === 'ok' ? man.buildDir : null;
   const rootAbs = path.resolve(root);
   const written = man.written && typeof man.written === 'object' ? man.written : null;
   const blocks = man.blocks && typeof man.blocks === 'object' ? man.blocks : {};
@@ -420,7 +428,7 @@ export function restoreBackup(root, backupDir, { force = false } = {}) {
   for (const rel of man.files || []) {
     // 경로 트래버설 방어: 매니페스트의 상대경로가 root(및 backupDir) 경계를 벗어나면 건너뜀
     if (!withinRoot(root, rel) || !withinRoot(backupDir, rel)) { skipped++; continue; }
-    if (!restoreTargetAllowed(rel, man.buildDir)) { rejected.push(rel); continue; }
+    if (!restoreTargetAllowed(rel, trustedBuildDir)) { rejected.push(rel); continue; }
     const src = path.join(backupDir, rel);
     const dest = path.resolve(rootAbs, rel);
     if (!lexists(src)) continue;
@@ -444,7 +452,7 @@ export function restoreBackup(root, backupDir, { force = false } = {}) {
   }
   for (const rel of man.createdFiles || []) {
     if (!withinRoot(root, rel)) { skipped++; continue; }
-    if (!restoreTargetAllowed(rel, man.buildDir)) { rejected.push(rel); continue; }
+    if (!restoreTargetAllowed(rel, trustedBuildDir)) { rejected.push(rel); continue; }
     const p = path.resolve(rootAbs, rel);
     if (!lexists(p)) continue;
     const keep = man.keepDirs && typeof man.keepDirs[rel] === 'string' && withinRoot(root, man.keepDirs[rel] || '.')
