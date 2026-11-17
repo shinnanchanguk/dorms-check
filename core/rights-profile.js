@@ -2,7 +2,7 @@
 // 원칙: 비공개 프롬프트 원문·민감 파일명은 프로필에 넣지 않는다(자산은 이름·종류만).
 // 의존성 0: 스키마 검증은 수기 검증기로(스키마 파일은 문서·서버 계약용).
 import path from 'node:path';
-import { exists, readJsonSafe, writeText } from './util.js';
+import { exists, readJsonSafe, safeWrite } from './util.js';
 import { t } from './copy.js';
 import { PRESETS, PRESET_IDS, normalizePermissionValue, validateDormsAppUrl, oneLine, hasControlChars } from './usage-policy.js';
 
@@ -64,7 +64,7 @@ export function validateRightsProfile(p) {
     if (!RIGHTSHOLDER_STATUS.includes(rh.status)) push(`rightsholder.status 는 ${RIGHTSHOLDER_STATUS.join('|')} 중 하나여야 합니다`);
     if (rh.workForHireReview !== undefined && !WORK_FOR_HIRE_REVIEW.includes(rh.workForHireReview)) push('rightsholder.workForHireReview 값이 올바르지 않습니다');
     // 표시 이름은 안내 여러 곳(AGENTS.md·머리 주석·LICENSE)에 그대로 들어간다: 한 줄·100자 이내만.
-    if (rh.displayName !== undefined && (typeof rh.displayName !== 'string' || rh.displayName.length > 100 || hasControlChars(rh.displayName) || /<!--|-->/.test(rh.displayName))) push('rightsholder.displayName 은 줄바꿈·제어 문자·HTML 주석 표식 없는 100자 이내 한 줄이어야 합니다');
+    if (rh.displayName !== undefined && (typeof rh.displayName !== 'string' || rh.displayName.length > 100 || hasControlChars(rh.displayName) || /[<>]/.test(rh.displayName))) push('rightsholder.displayName 은 줄바꿈·제어 문자·꺾쇠(< >) 없는 100자 이내 한 줄이어야 합니다');
   }
   if (!AUDIENCE.includes(p.audience)) push(`audience 는 ${AUDIENCE.join('|')} 중 하나여야 합니다`);
   const perms = p.permissions;
@@ -96,7 +96,7 @@ export function validateRightsProfile(p) {
   if (p.customClauses !== undefined && !Array.isArray(p.customClauses)) push('customClauses 는 배열이어야 합니다');
   if (p.userClauses !== undefined && (!Array.isArray(p.userClauses) || p.userClauses.some(c => typeof c !== 'string' || c.length > 300))) push('userClauses 는 300자 이내 문자열 배열이어야 합니다');
   if (p.dormsAppUrl !== undefined && !validateDormsAppUrl(p.dormsAppUrl).ok) push('dormsAppUrl: ' + t('cli.dormsUrlInvalid'));
-  if (p.appName !== undefined && (typeof p.appName !== 'string' || p.appName.length > 100 || hasControlChars(p.appName) || /<!--|-->/.test(p.appName))) push('appName 은 줄바꿈·제어 문자 없는 100자 이내 한 줄이어야 합니다');
+  if (p.appName !== undefined && (typeof p.appName !== 'string' || p.appName.length > 100 || hasControlChars(p.appName) || /[<>]/.test(p.appName))) push('appName 은 줄바꿈·제어 문자·꺾쇠(< >) 없는 100자 이내 한 줄이어야 합니다');
   if (p.attribution && p.attribution.text !== undefined && (typeof p.attribution.text !== 'string' || p.attribution.text.length > 200 || hasControlChars(p.attribution.text))) push('attribution.text 는 줄바꿈·제어 문자 없는 200자 이내 한 줄이어야 합니다');
   if (p.policyVersion !== undefined && typeof p.policyVersion === 'string' && (p.policyVersion.length > 40 || hasControlChars(p.policyVersion))) push('policyVersion 은 40자 이내 한 줄이어야 합니다');
   if (p.preset !== undefined && !PRESET_IDS.includes(p.preset)) push(`preset 은 ${PRESET_IDS.join('|')} 중 하나여야 합니다`);
@@ -138,7 +138,7 @@ export function writeRightsProfile(root, profile) {
   if (!v.ok) throw new Error('rights-profile 검증 실패:\n  - ' + v.errors.join('\n  - '));
   const p = rightsProfilePath(root);
   const clean = JSON.parse(JSON.stringify(profile)); // undefined 필드 제거
-  writeText(p, JSON.stringify(clean, null, 2) + '\n');
+  safeWrite(root, p, JSON.stringify(clean, null, 2) + '\n');
   return p;
 }
 
@@ -211,7 +211,7 @@ export function buildRightsProfileFromAnswers(answers = {}) {
   else if (answers.schoolInvolved === 'yes_unreviewed') { p.rightsholder.status = 'school_work_related'; p.rightsholder.workForHireReview = 'needed'; }
   else if (answers.schoolInvolved === 'no') { if (p.rightsholder.workForHireReview === 'unknown') p.rightsholder.workForHireReview = 'not_needed'; }
   if (answers.thirdPartyAssets === 'unverified' && p.rightsholder.status !== 'unconfirmed') p.rightsholder.status = 'third_party_included';
-  if (typeof answers.displayName === 'string') p.rightsholder.displayName = oneLine(answers.displayName, 100);
+  if (typeof answers.displayName === 'string') p.rightsholder.displayName = oneLine(answers.displayName.replace(/[<>]/g, ' '), 100);
 
   // 청중·허용 범위
   if (AUDIENCE.includes(answers.audience)) p.audience = answers.audience;
@@ -250,7 +250,7 @@ export function buildRightsProfileFromAnswers(answers = {}) {
     }
   }
   p.permissions.shareDormsLink = 'allowed';
-  if (typeof answers.appName === 'string' && oneLine(answers.appName, 100)) p.appName = oneLine(answers.appName, 100);
+  if (typeof answers.appName === 'string' && oneLine(answers.appName.replace(/[<>]/g, ' '), 100)) p.appName = oneLine(answers.appName.replace(/[<>]/g, ' '), 100);
   if (typeof answers.dormsAppUrl === 'string' && answers.dormsAppUrl.trim()) {
     const v = validateDormsAppUrl(answers.dormsAppUrl);
     if (!v.ok) throw new Error(t('cli.dormsUrlInvalid'));

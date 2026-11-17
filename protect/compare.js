@@ -61,6 +61,7 @@ function blockedV6(ip) {
   if (allZero(16)) return true;                                   // ::
   if (allZero(15) && b[15] === 1) return true;                    // ::1
   if (allZero(10) && b[10] === 255 && b[11] === 255) return blockedV4(b.slice(12).join('.')); // ::ffff:a.b.c.d
+  if (allZero(8) && b[8] === 255 && b[9] === 255 && b[10] === 0 && b[11] === 0) return blockedV4(b.slice(12).join('.')); // ::ffff:0:a.b.c.d (SIIT)
   if (allZero(12)) return blockedV4(b.slice(12).join('.'));      // ::a.b.c.d (옛 표기)
   if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b) return blockedV4(b.slice(12).join('.')); // 64:ff9b::/96
   if ((b[0] & 0xfe) === 0xfc) return true;                        // fc00::/7

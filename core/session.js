@@ -1,7 +1,7 @@
 // 협업 완주 루프 상태(.dorms-check/state.json). 라운드 누적 → "어디까지 통과했나" 세션 간 유지.
 // 트랙별 라운드 요약·통과 판정은 레지스트리(core/tracks.js)가 소유한다.
 import path from 'node:path';
-import { exists, readJsonSafe, writeText, ensureDir } from './util.js';
+import { exists, readJsonSafe, safeWrite } from './util.js';
 import { TRACKS } from './tracks.js';
 
 const DIR = '.dorms-check';
@@ -26,8 +26,7 @@ function newState() {
 
 export function saveState(root, state) {
   const p = statePath(root);
-  ensureDir(path.dirname(p));
-  writeText(p, JSON.stringify(state, null, 2) + '\n');
+  safeWrite(root, p, JSON.stringify(state, null, 2) + '\n');
   return p;
 }
 

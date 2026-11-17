@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import PDFDocument from 'pdfkit';
 import { markdownToHwpx } from 'hwp-convert';
 import { detectStack } from './detect.js';
-import { ensureDir, exists, readJsonSafe, readTextSafe, sha256, walk, writeText, withinRoot } from './util.js';
+import { ensureDir, exists, readJsonSafe, readTextSafe, sha256, walk, withinRoot, safeWrite, assertSafeTarget, assertStateDirSafe } from './util.js';
 import { EDZIP_ITEMS, EDZIP_LEGAL_BASIS } from '../catalog/edzip.js';
 import { EDZIP_CONTACTS, EDZIP_OFFICIAL_SOURCES } from '../catalog/edzip-sources.js';
 
@@ -106,7 +106,8 @@ export function buildEdzipPlan(root) {
 
 export function writeEdzipPlan(root, plan) {
   const p = path.join(root, PLAN_REL);
-  writeText(p, JSON.stringify(plan, null, 2) + '\n');
+  assertStateDirSafe(root);
+  safeWrite(root, p, JSON.stringify(plan, null, 2) + '\n');
   return p;
 }
 
@@ -394,7 +395,8 @@ function markdownToPlain(md) {
     .replace(/\|/g, '  ');
 }
 
-function writePdf(file, title, markdown) {
+function writePdf(root, file, title, markdown) {
+  assertSafeTarget(root, file);
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margins: { top: 50, right: 50, bottom: 50, left: 50 }, info: { Title: title, Author: 'dorms-check' } });
     const out = fs.createWriteStream(file, { flags: 'wx' });
@@ -414,7 +416,7 @@ function appendPrivateIgnore(root) {
   const rule = '.dorms-check/private/';
   if (old.split(/\r?\n/).map(x => x.trim()).includes(rule)) return false;
   const next = old + (old && !old.endsWith('\n') ? '\n' : '') + rule + '\n';
-  writeText(file, next);
+  safeWrite(root, file, next);
   return true;
 }
 
@@ -426,15 +428,17 @@ function uniqueOutputDir(root) {
   throw new Error('오늘 생성 폴더가 너무 많습니다.');
 }
 
-async function writeDocSet(outDir, stem, title, markdown) {
+// 에듀집 서류는 모두 프로젝트 안(.dorms-check/private/...)에만 쓴다. 쓰기 전 경로 검사로 링크를 따라 밖으로 나가지 않게 한다.
+async function writeDocSet(root, outDir, stem, title, markdown) {
   const marked = `${markdown.trimEnd()}\n\n---\n\n${DOCUMENT_ATTRIBUTION}\n`;
   const mdFile = path.join(outDir, `${stem}.md`);
   const hwpxFile = path.join(outDir, `${stem}.hwpx`);
   const pdfFile = path.join(outDir, `${stem}.pdf`);
-  writeText(mdFile, marked);
+  safeWrite(root, mdFile, marked);
   const bytes = await markdownToHwpx(marked, { title, creator: 'Team DoRm · 교사 홍창욱' });
+  assertSafeTarget(root, hwpxFile);
   fs.writeFileSync(hwpxFile, Buffer.from(bytes), { flag: 'wx' });
-  await writePdf(pdfFile, title, marked);
+  await writePdf(root, pdfFile, title, marked);
   return [mdFile, hwpxFile, pdfFile];
 }
 
@@ -571,6 +575,7 @@ function resolvePreparationDir(root, requested) {
 
 export async function prepareCouncilDocuments(root, { approvedUrl, confirmApply, sourceDir, fetchImpl = fetch }) {
   if (!confirmApply) throw new Error('--confirm-apply가 필요합니다.');
+  assertStateDirSafe(root);
   const resolvedSource = resolvePreparationDir(root, sourceDir);
   const manifestPath = path.join(resolvedSource, 'manifest.json');
   const manifest = readJsonSafe(manifestPath);
@@ -593,23 +598,25 @@ export async function prepareCouncilDocuments(root, { approvedUrl, confirmApply,
   if (targetFiles.some(name => exists(path.join(resolvedSource, name)))) throw new Error('학교 제출 초안이 이미 있습니다. 기존 파일을 보존하기 위해 덮어쓰지 않았습니다.');
 
   const files = [];
-  files.push(...await writeDocSet(resolvedSource, '05-internal-approval-draft', `${plan.app.name} 선정 심의 요청 기안`, internalApprovalMarkdown(plan, approval)));
-  files.push(...await writeDocSet(resolvedSource, '06-council-agenda-draft', `${plan.app.name} 학교운영위원회 심의 안건`, councilAgendaMarkdown(plan, approval)));
-  files.push(...await writeDocSet(resolvedSource, '07-school-submission-guide', '에듀집 확인 완료 뒤 학교 제출 안내', schoolSubmissionMarkdown(plan, approval, resolvedSource)));
+  files.push(...await writeDocSet(root, resolvedSource, '05-internal-approval-draft', `${plan.app.name} 선정 심의 요청 기안`, internalApprovalMarkdown(plan, approval)));
+  files.push(...await writeDocSet(root, resolvedSource, '06-council-agenda-draft', `${plan.app.name} 학교운영위원회 심의 안건`, councilAgendaMarkdown(plan, approval)));
+  files.push(...await writeDocSet(root, resolvedSource, '07-school-submission-guide', '에듀집 확인 완료 뒤 학교 제출 안내', schoolSubmissionMarkdown(plan, approval, resolvedSource)));
   const templates = path.join(resolvedSource, 'templates');
+  assertSafeTarget(root, path.join(templates, '.probe'));
   ensureDir(templates);
-  files.push(copyAsset(packageAsset('forms', 'school-internal-approval-blank.hwpx'), path.join(templates, 'school-internal-approval-blank.hwpx')));
+  files.push(copyAsset(root, packageAsset('forms', 'school-internal-approval-blank.hwpx'), path.join(templates, 'school-internal-approval-blank.hwpx')));
   manifest.schemaVersion = 2;
   manifest.schoolReviewGeneratedAt = new Date().toISOString();
   manifest.edzipApproval = approval;
   manifest.files = [...(manifest.files || []), ...files.map(file => ({ name: path.relative(resolvedSource, file), sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') }))];
   manifest.piiStored = false;
   manifest.automaticSubmission = false;
-  writeText(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  safeWrite(root, manifestPath, JSON.stringify(manifest, null, 2) + '\n');
   return { applied: true, outDir: resolvedSource, approval, manifest, files };
 }
 
-function copyAsset(source, dest) {
+function copyAsset(root, source, dest) {
+  assertSafeTarget(root, dest);
   fs.copyFileSync(source, dest, fs.constants.COPYFILE_EXCL);
   return dest;
 }
@@ -628,22 +635,25 @@ export async function applyEdzipPlan(root, { planSha256, confirmApply, answersFi
     return { applied: false, scope, needsContinueConfirmation: true, sources: EDZIP_OFFICIAL_SOURCES.filter(x => ['law.school-materials', 'moe.selection-guideline'].includes(x.id)) };
   }
 
+  assertStateDirSafe(root);
   const outDir = uniqueOutputDir(root);
+  assertSafeTarget(root, path.join(outDir, '.probe'));
   ensureDir(outDir);
   appendPrivateIgnore(root);
   const sourceChecks = await checkSources();
   const files = [];
-  files.push(...await writeDocSet(outDir, '01-privacy-policy', `${plan.app.name} 개인정보 처리방침`, privacyMarkdown(plan, answers)));
-  files.push(...await writeDocSet(outDir, '02-required-checklist', `${plan.app.name} 필수기준 자가점검표`, checklistMarkdown(plan, answers, scope)));
-  files.push(...await writeDocSet(outDir, '03-edzip-provider-brief', `${plan.app.name} 에듀집 등록 제품 설명자료`, providerBriefMarkdown(plan, scope)));
-  files.push(...await writeDocSet(outDir, '04-submission-guide', '에듀집 제출 안내', submissionMarkdown(sourceChecks)));
+  files.push(...await writeDocSet(root, outDir, '01-privacy-policy', `${plan.app.name} 개인정보 처리방침`, privacyMarkdown(plan, answers)));
+  files.push(...await writeDocSet(root, outDir, '02-required-checklist', `${plan.app.name} 필수기준 자가점검표`, checklistMarkdown(plan, answers, scope)));
+  files.push(...await writeDocSet(root, outDir, '03-edzip-provider-brief', `${plan.app.name} 에듀집 등록 제품 설명자료`, providerBriefMarkdown(plan, scope)));
+  files.push(...await writeDocSet(root, outDir, '04-submission-guide', '에듀집 제출 안내', submissionMarkdown(sourceChecks)));
 
   const originals = path.join(outDir, 'official-originals');
+  assertSafeTarget(root, path.join(originals, '.probe'));
   ensureDir(originals);
-  files.push(copyAsset(packageAsset('forms', 'edzip-checklist-original.hwp'), path.join(originals, 'edzip-checklist-original.hwp')));
-  files.push(copyAsset(packageAsset('forms', 'edzip-consent-original.hwp'), path.join(originals, 'edzip-consent-original.hwp')));
-  files.push(copyAsset(packageAsset('sources', 'moe-selection-guideline-2025-12.hwpx'), path.join(originals, 'moe-selection-guideline-2025-12.hwpx')));
-  files.push(copyAsset(packageAsset('sources', 'edzip-registration-guide-2026-01-28.pdf'), path.join(originals, 'edzip-registration-guide-2026-01-28.pdf')));
+  files.push(copyAsset(root, packageAsset('forms', 'edzip-checklist-original.hwp'), path.join(originals, 'edzip-checklist-original.hwp')));
+  files.push(copyAsset(root, packageAsset('forms', 'edzip-consent-original.hwp'), path.join(originals, 'edzip-consent-original.hwp')));
+  files.push(copyAsset(root, packageAsset('sources', 'moe-selection-guideline-2025-12.hwpx'), path.join(originals, 'moe-selection-guideline-2025-12.hwpx')));
+  files.push(copyAsset(root, packageAsset('sources', 'edzip-registration-guide-2026-01-28.pdf'), path.join(originals, 'edzip-registration-guide-2026-01-28.pdf')));
 
   const manifest = {
     schemaVersion: 1,
@@ -655,6 +665,6 @@ export async function applyEdzipPlan(root, { planSha256, confirmApply, answersFi
     piiStored: false,
     automaticSubmission: false,
   };
-  writeText(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+  safeWrite(root, path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
   return { applied: true, outDir, scope, manifest };
 }

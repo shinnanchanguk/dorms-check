@@ -1,6 +1,7 @@
 // 설정 로드/저장 (dorms-check.config.json). 파싱 실패는 조용히 기본값으로 가지 않음.
 import path from 'node:path';
-import { exists, readJsonSafe, writeText } from './util.js';
+import { exists, readJsonSafe, safeWrite } from './util.js';
+import { oneLine } from './usage-policy.js';
 
 // 유효한 트랙 목록은 레지스트리(core/tracks.js)가 SSOT.
 import { trackIds } from './tracks.js';
@@ -46,18 +47,26 @@ export function loadConfig(root) {
   const user = fileExists ? readJsonSafe(p) : null;
   const base = defaultConfig();
   const cfg = { ...base, ...(user || {}) };
-  cfg.app = { ...base.app, ...((user && user.app) || {}) };
-  cfg.teacher = { ...base.teacher, ...((user && user.teacher) || {}) };
+  cfg.app = oneLineFields({ ...base.app, ...((user && user.app) || {}) });
+  cfg.teacher = oneLineFields({ ...base.teacher, ...((user && user.teacher) || {}) });
   cfg._exists = Boolean(user);
   cfg._parseError = fileExists && user === null;
   cfg._path = p;
   return cfg;
 }
 
+// 설정 글자는 리포트·기안문·HWPX 에 그대로 들어간다(남의 저장소가 준 설정일 수도 있다).
+// 줄바꿈·제어 문자를 지운 한 줄(200자)로만 쓴다: 셸 시작 파일 등에 독립된 명령 줄이 생기지 않게.
+function oneLineFields(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) out[k] = typeof v === 'string' ? oneLine(v, 200) : v;
+  return out;
+}
+
 export function writeConfig(root, cfg) {
   const p = path.join(root, 'dorms-check.config.json');
   const clean = { ...cfg };
   delete clean._exists; delete clean._parseError; delete clean._path;
-  writeText(p, JSON.stringify(clean, null, 2) + '\n');
+  safeWrite(root, p, JSON.stringify(clean, null, 2) + '\n');
   return p;
 }
