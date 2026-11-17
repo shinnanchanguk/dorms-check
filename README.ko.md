@@ -65,7 +65,14 @@ AI에게 맡기려면 [복사해 쓰는 프롬프트](./USE-WITH-AI.md)를 사�
 - `interview`에서 도름스 앱 주소(`https://dorms.school/apps/<번호>` 또는 `/arcade/<번호>`만 받음)와 이용·보호 안내 값을 선생님이 보고 옮겨 적습니다. 도름스 사이트를 긁어 오지 않습니다.
 - 앱 안에 `usage.html` 이용 안내 화면을 만듭니다. 도름스와 같은 열두 항목·같은 말(허용 / 먼저 허락 / 허용 안 함), 묶음(교육 나눔형·제한 이용형·오픈 협업형·커스텀), 출처 표시 방법, 덧붙인 조건, 저작권법 조문 링크를 담습니다. `public/` 폴더가 있으면 거기에도 두어 다시 빌드해도 남습니다.
 - 저작권 고지는 저작권법 제12·16·18·20·22·35조의5·37·136조를 `law.go.kr` 링크로 겁 주지 않게 담고, 법률 자문이 아니라고 밝힙니다.
-- 화면 바닥 줄은 `interview`의 선택이나 설정 `protection.provenance.visibleFooter: false`로 끌 수 있습니다. `CLAUDE.md` 블록은 `protection.provenance.claudeMd: false`로 끕니다.
+- 화면 바닥 줄에는 만든 사람과 이용 범위(예: "고쳐 쓰기·재배포는 먼저 허락(도름스 쪽지)")가 함께 보입니다. `interview`의 선택이나 설정 `protection.provenance.visibleFooter: false`로 끌 수 있습니다. `CLAUDE.md` 블록은 `protection.provenance.claudeMd: false`로 끕니다.
+- 화면 바탕(`body`)이 격자(grid)·가로 나란히(flex)이거나 넘치는 부분을 숨기는(`overflow: hidden`) 페이지에는 바닥 줄을 넣지 않고 계획·적용 화면에 알립니다. 넣으면 칸이 줄어들거나 줄이 화면 밖에 놓여 안 보이기 때문입니다. 그런 앱은 앱 화면 안 알맞은 곳에 출처 줄을 직접 넣거나, 그래도 넣으려면 `visibleFooter: "force"`로 둡니다. CSS-in-JS 처럼 실행해야 정해지는 배치는 미리 알아내지 못하니 적용 뒤 화면을 한 번 보세요.
+- 이미 있는 `usage.html`·`dorms.json`이 dorms-check 가 만든 것이 아니면 덮어쓰지 않습니다. 프로젝트 안의 심볼릭 링크를 따라 밖의 파일을 쓰지 않으며, 그런 링크가 있으면 계획 단계에서 멈춥니다.
+- `protect restore`는 적용 뒤 선생님이 직접 고친 파일을 덮거나 지우지 않습니다. `AGENTS.md`·`CLAUDE.md`는 안내 블록만 되돌리고 나머지 내용은 남깁니다. 고친 파일까지 적용 전으로 돌리려면 `--force`, 다시 빌드하고 여러 번 적용했을 때 처음 상태까지 모두 되돌리려면 `--all`을 씁니다.
+- 출처 안내를 켜면 `robots.txt`의 AI 수집기 차단과 맞물립니다. 기본은 사용자가 부탁해 페이지를 읽는 AI 도우미(ChatGPT-User·Perplexity-User·Claude-User 등)도 막는데, 그러면 그 도우미는 주소에서 출처 안내를 못 읽습니다. `interview`의 `userFetchers: allow`(또는 권리 프로필 `provenance.allowUserFetchers: true`, 설정 `protection.robots.allowUserFetchers: true`)로 학습용 수집기만 막고 AI 도우미는 열어 둘 수 있습니다.
+- 이용 범위가 "출처를 남기면 고쳐 쓰기 허용"이면 새로 만드는 `LICENSE`도 그에 맞는 허락 문구로 만들고, 이미 "허락 없이 수정 불가" LICENSE 가 있으면 어긋난다고 알립니다.
+- 도름스 표의 일부만 옮겨 적으면 나머지는 도름스 커스텀의 출발점인 교육 나눔형 값으로 채우고, 채운 항목을 알려 줍니다.
+- 메모: AI 가 긴 도름스 주소를 옮겨 적다 틀리는 일이 있었습니다(시험 1회). 도름스 짧은 주소(`/s/...`)를 안내에 함께 쓰는 것은 도름스 쪽 기능이 필요해 아직 하지 않았습니다.
 - 모든 안내 문구는 [templates/copy.ko.json](./templates/copy.ko.json) 한 파일에 있습니다.
 - 한계: 강제 장치가 아닙니다. 안내를 지우고 베끼거나 AI가 무시하면 막지 못합니다. 숨은 명령이나 과장은 넣지 않습니다.
 
