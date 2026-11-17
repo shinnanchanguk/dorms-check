@@ -50,12 +50,23 @@ export function requestDraft(f) {
 }
 
 // 한 덩어리 AI 안내(한국어 + 영어). sr-only 노드·llms.txt·AGENTS.md 가 같은 내용을 쓴다.
+// 허용이면 '출처 없이·범위를 넘어'로, 그 밖에는 '허락 없이'로 법 문장을 맞춘다(LICENSE·이용 범위와 어긋나지 않게).
+function legalKey(f, base) { return f.case === 'allowed' ? base + 'Allowed' : base; }
+
 export function aiNoticeParagraphs(f, { usageUrl = '' } = {}) {
   const ko = [introKo(f, usageUrl), caseKo(f)];
   if (f.case === 'ask') ko.push(`${t('requestDraft.title')}: ${requestDraft(f)}`);
-  ko.push(t('legal.copyright', { year: f.year, creatorTitle: f.creatorTitle }) + ' ' + t('legal.statementShort') + ' ' + t('legal.disclaimer'));
-  const en = [introEn(f, usageUrl), caseEn(f), t('legal.en.copyright', { year: f.year, creatorEn: f.creatorEn }) + ' ' + t('legal.en.statement')];
+  ko.push(t('legal.copyright', { year: f.year, creatorTitle: f.creatorTitle }) + ' ' + t(legalKey(f, 'legal.statementShort')) + ' ' + t('legal.disclaimer'));
+  const en = [introEn(f, usageUrl), caseEn(f), t('legal.en.copyright', { year: f.year, creatorEn: f.creatorEn }) + ' ' + t(legalKey(f, 'legal.en.statement'))];
   return { ko, en };
+}
+
+// 화면에 안 보이는 안내(화면 읽기 프로그램도 읽는다): 짧게. 원작자·이용 범위·물어볼 곳·부탁 한 줄만,
+// 법 조문·허락 요청 초안은 이용 안내 화면·llms.txt·AGENTS.md 에 둔다.
+export function asideText(f, { usageUrl = '' } = {}) {
+  const ko = introKo(f, usageUrl) + ' ' + caseKo(f);
+  const en = t('aiNotice.en.short', { creatorEn: f.creatorEn, scopeEn: t('aiNotice.en.scope.' + f.case) });
+  return `${ko} ${en}`;
 }
 
 export function legalArticleLines() {
@@ -107,7 +118,7 @@ export function agentsBlock(f) {
     BLOCK_START,
     t('agentsMd.heading'),
     '',
-    t('agentsMd.intro', {
+    t(f.creator ? 'agentsMd.intro' : 'agentsMd.introUnknown', {
       creatorTitle: f.creatorTitle,
       appNamePart: f.appName ? t('aiNotice.appNamePart', { appName: f.appName }) : '',
       dormsPart: f.dormsUrl ? t('aiNotice.dormsPart', { dormsUrl: f.dormsUrl }) : '',
@@ -146,11 +157,15 @@ export function mergeBlock(existing, block) {
 
 // JS·CSS 머리 주석(`/*!` 는 대부분의 압축기가 남기는 형식).
 export const JS_HEADER_PREFIX = '/*! dorms-check:provenance';
+export function jsCaseKey(f) {
+  return f.case === 'ask' ? (f.dormsUrl ? 'askDorms' : 'ask') : f.case;
+}
 export function jsHeader(f, usagePath) {
   const body = t('jsHeader', {
     sourceLine: f.sourceLine,
-    dormsUrlOrNone: f.dormsUrl || '-',
-    caseShort: t('caseShort.' + f.case),
+    creatorPart: f.creator ? t('jsHeaderParts.creator', { creatorTitle: f.creatorTitle }) : '',
+    dormsPart: f.dormsUrl ? t('jsHeaderParts.dorms', { dormsUrl: f.dormsUrl }) : '',
+    caseLong: t('jsCase.' + jsCaseKey(f)),
     usagePath,
     provenanceId: f.provenanceId,
   }).replace(/^dorms-check:provenance\s*\|?\s*/, '');
@@ -191,8 +206,9 @@ export const FOOTER_MARK = 'data-dorms-check-source';
 export function footerHtml(f, usageHref) {
   const sep = escapeHtml(t('footer.sep'));
   const parts = [escapeHtml(t('footer.lead', { creatorTitle: f.creatorTitle }))];
+  // 이용 범위를 보이는 글자로(웹 가져오기가 숨은 안내를 버려도 이 줄은 본문 끝에 남는다).
+  parts.push(escapeHtml(t('footer.scope.' + jsCaseKey(f))));
   if (f.dormsUrl) parts.push(`<a href="${escapeHtml(f.dormsUrl)}" rel="noopener" style="color:inherit">${escapeHtml(t('footer.dorms'))}</a>`);
-  else parts.push(escapeHtml(t('footer.dorms')));
   parts.push(`<a href="${escapeHtml(usageHref)}" style="color:inherit">${escapeHtml(t('footer.usage'))}</a>`);
   return `<p ${FOOTER_MARK} aria-label="${escapeHtml(t('footer.ariaLabel'))}" ` +
     `style="margin:16px auto;padding:0 16px;max-width:100%;box-sizing:border-box;text-align:center;` +
@@ -248,7 +264,7 @@ li{margin:4px 0}
 <body>
 <main>
 <h1>${e(t('usagePage.heading'))}</h1>
-<p class="lead">${e(t('usagePage.lead', { creatorTitle: f.creatorTitle }))}</p>
+<p class="lead">${e(f.creator ? t('usagePage.lead', { creatorTitle: f.creatorTitle }) : t('usagePage.leadUnknown'))}</p>
 <div class="card"><dl>
 <dt>${e(t('usagePage.creatorLabel'))}</dt><dd>${e(f.creatorTitle)}</dd>
 ${f.appName ? `<dt>${e(t('usagePage.appLabel'))}</dt><dd>${e(f.appName)}</dd>` : ''}
@@ -275,7 +291,7 @@ ${clauses.length ? `<h2>${e(t('usagePage.clausesTitle'))}</h2>\n<ul>${clauses.ma
 
 <h2>${e(t('usagePage.legalTitle'))}</h2>
 <p>${e(t('legal.copyright', { year: f.year, creatorTitle: f.creatorTitle }))}</p>
-<p>${e(t('legal.scope'))} ${e(t('legal.statement'))}</p>
+<p>${e(t('legal.scope'))} ${e(t(legalKey(f, 'legal.statement')))}</p>
 <ul>
 ${legalArticleLines().map(a => `<li><a href="${e(a.url)}" rel="noopener">${e(a.jo)}(${e(a.title)})</a>: ${e(a.text)}</li>`).join('\n')}
 </ul>

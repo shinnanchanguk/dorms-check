@@ -15,10 +15,10 @@ import { renderReportMd, printSummary } from '../core/report.js';
 import { buildPayload } from '../core/payload.js';
 import { loadState, saveState, recordRound } from '../core/session.js';
 import { catalogItem, TRACKS } from '../core/tracks.js';
-import { INTERVIEW_QUESTIONS, buildRightsProfileFromAnswers, writeRightsProfile } from '../core/rights-profile.js';
+import { INTERVIEW_QUESTIONS, buildRightsProfileFromAnswers, writeRightsProfile, permissionsFilledFromDefault } from '../core/rights-profile.js';
 import { buildProtectionPlan, writePlan, loadPlan, planPath, checkPlanApproval } from '../core/protection-plan.js';
 import { runProtectSteps, runProtectVerify, resolveBuildDir, saveProtectState, loadProtectState } from '../protect/apply.js';
-import { restoreBackup, latestBackup } from '../core/util.js';
+import { restoreBackup, latestBackup, listBackups } from '../core/util.js';
 import { verifyBuild } from '../protect/verify-static.js';
 import { compareSuspect } from '../protect/compare.js';
 import { loadRightsProfile } from '../core/rights-profile.js';
@@ -62,7 +62,7 @@ function help() {
   log.plain('  dcheck interview [--answers <JSON>]         권리·이용 범위·도름스 앱 주소 질문 또는 답변 저장');
   log.plain('  dcheck protect plan                        앱 보호 변경 계획 저장(출처 안내·이용 안내 화면 포함)');
   log.plain('  dcheck protect apply --plan-sha256 <값> --confirm-apply');
-  log.plain('  dcheck protect restore [--from <경로>]      적용 전 백업 복원');
+  log.plain('  dcheck protect restore [--from <경로>|--all] [--force]  적용 전 백업 복원');
   log.plain('  dcheck protect compare --url <의심 주소>      복제 의심 주소에서 내 출처 표식·빌드 지문 찾기(기록 저장)');
   log.plain('  dcheck verify                              앱 보호 적용 전후 산출물 비교');
   log.plain('');
@@ -383,6 +383,7 @@ function runInterview() {
         attributionMethod: '출처 표시 방법(비우면 기본 문구)',
         customClauses: ['덧붙이는 조건 한 줄(선택)'],
         visibleFooter: 'yes | no',
+        userFetchers: 'allow | block (사용자가 부탁해 페이지를 읽는 AI 도우미를 robots.txt 에서 열어 둘지)',
       },
       dormsNote: '도름스 사이트를 긁어 오지 않습니다. 선생님이 자기 도름스 앱 페이지의 이용·보호 안내 값을 보고 옮겨 적습니다. 도름스 앱 주소는 https://dorms.school/apps/<번호> 또는 /arcade/<번호> 만 받습니다.',
     };
@@ -400,6 +401,8 @@ function runInterview() {
   try { written = writeRightsProfile(root, profile); }
   catch (e) { log.err(String(e.message || e)); process.exitCode = 1; return; }
   log.ok(`권리 프로필 생성: ${path.relative(root, written)}`);
+  const filled = permissionsFilledFromDefault(answers);
+  if (filled.length) log.warn('  ' + t('cli.permissionsFilledDefault', { n: filled.length, keys: filled.map(k => t('permissionActions.' + k)).join(', ') }));
 
   // 설문에서 곧장 갈리는 declared 항목을 review 에 기록(증거 = 설문 답. 결정적 검사 항목은 덮지 못한다).
   const review = readJsonSafe(REVIEW) || {};
@@ -469,7 +472,9 @@ async function runProtectApply() {
   saveProtectState(root, { baseline: { at: new Date().toISOString(), buildDir, errors: baseline.issues.filter(i => i.sev === 'error').length, warnings: baseline.issues.filter(i => i.sev === 'warn').length } });
 
   log.title(`보호 적용  ${color.dim('buildDir=' + buildDir + ' · plan=' + approval.sha.slice(0, 12) + '…')}`);
-  const res = await runProtectSteps(root, { buildDir, config: cfg, dry: false });
+  let res;
+  try { res = await runProtectSteps(root, { buildDir, config: cfg, dry: false }); }
+  catch (e) { log.err(e.message); process.exitCode = 1; return; }
   if (!res.ok) { process.exitCode = 1; return; }
   saveProtectState(root, { lastApply: { ...loadProtectState(root).lastApply, planSha256: approval.sha } });
 
@@ -485,13 +490,31 @@ async function runProtectApply() {
 }
 
 // protect restore: 마지막(또는 지정) 백업으로 복원.
+// --all: 적용 백업을 최근 것부터 모두 되돌린다(다시 빌드하고 여러 번 적용했을 때 처음 상태로).
+// --force: 적용 뒤 직접 고친 파일도 적용 전 원본으로 덮는다(기본은 고친 파일을 그대로 둔다).
 function runProtectRestore() {
   const from = opt('from', '');
-  const b = from ? path.resolve(root, from) : latestBackup(root);
-  if (!b) { log.err('복원할 백업이 없습니다.'); process.exitCode = 1; return; }
-  const r = restoreBackup(root, b);
-  if (r.noManifest) { log.err(`백업 매니페스트를 찾을 수 없습니다: ${path.relative(root, b)}`); process.exitCode = 1; return; }
-  log.ok(`복원 ${r.restored}개${r.removed ? `, 생성파일 ${r.removed}개 제거` : ''}${r.skipped ? color.yellow(`, 경계 밖 ${r.skipped}개 건너뜀`) : ''} ← ${color.dim(path.relative(root, b))}`);
+  const all = flag('all');
+  const force = flag('force');
+  const list = from ? [path.resolve(root, from)] : all ? listBackups(root).reverse() : [latestBackup(root)].filter(Boolean);
+  if (!list.length) { log.err('복원할 백업이 없습니다.'); process.exitCode = 1; return; }
+  const kept = new Set(), blockRestored = new Set();
+  for (const b of list) {
+    const r = restoreBackup(root, b, { force });
+    if (r.noManifest) { log.err(`백업 매니페스트를 찾을 수 없습니다: ${path.relative(root, b)}`); process.exitCode = 1; return; }
+    log.ok(t('cli.restore.done', { restored: r.restored, removed: r.removed, from: path.relative(root, b) }));
+    if (r.skipped) log.warn('  ' + t('cli.restore.skipped', { n: r.skipped }));
+    r.kept.forEach(x => kept.add(x));
+    r.blockRestored.forEach(x => blockRestored.add(x));
+  }
+  for (const x of blockRestored) kept.delete(x);
+  if (blockRestored.size) log.plain('  ' + t('cli.restore.blockRestored', { files: [...blockRestored].join(', ') }));
+  if (kept.size) log.warn('  ' + t('cli.restore.kept', { n: kept.size, files: [...kept].slice(0, 8).join(', ') }));
+  if (all) log.plain('  ' + t('cli.restore.all', { n: list.length }));
+  else if (!from) {
+    const older = listBackups(root).length - 1;
+    if (older > 0) log.plain(color.dim('  ' + t('cli.restore.older', { n: older })));
+  }
 }
 
 // verify: 적용 전후 산출물 정적 검사 비교.

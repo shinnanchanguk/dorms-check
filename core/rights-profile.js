@@ -4,7 +4,7 @@
 import path from 'node:path';
 import { exists, readJsonSafe, writeText } from './util.js';
 import { t } from './copy.js';
-import { PRESETS, PRESET_IDS, normalizePermissionValue, validateDormsAppUrl } from './usage-policy.js';
+import { PRESETS, PRESET_IDS, normalizePermissionValue, validateDormsAppUrl, oneLine, hasControlChars } from './usage-policy.js';
 
 const FILE = path.join('.dorms-check', 'rights-profile.json');
 
@@ -63,6 +63,8 @@ export function validateRightsProfile(p) {
   else {
     if (!RIGHTSHOLDER_STATUS.includes(rh.status)) push(`rightsholder.status 는 ${RIGHTSHOLDER_STATUS.join('|')} 중 하나여야 합니다`);
     if (rh.workForHireReview !== undefined && !WORK_FOR_HIRE_REVIEW.includes(rh.workForHireReview)) push('rightsholder.workForHireReview 값이 올바르지 않습니다');
+    // 표시 이름은 안내 여러 곳(AGENTS.md·머리 주석·LICENSE)에 그대로 들어간다: 한 줄·100자 이내만.
+    if (rh.displayName !== undefined && (typeof rh.displayName !== 'string' || rh.displayName.length > 100 || hasControlChars(rh.displayName) || /<!--|-->/.test(rh.displayName))) push('rightsholder.displayName 은 줄바꿈·제어 문자·HTML 주석 표식 없는 100자 이내 한 줄이어야 합니다');
   }
   if (!AUDIENCE.includes(p.audience)) push(`audience 는 ${AUDIENCE.join('|')} 중 하나여야 합니다`);
   const perms = p.permissions;
@@ -94,10 +96,20 @@ export function validateRightsProfile(p) {
   if (p.customClauses !== undefined && !Array.isArray(p.customClauses)) push('customClauses 는 배열이어야 합니다');
   if (p.userClauses !== undefined && (!Array.isArray(p.userClauses) || p.userClauses.some(c => typeof c !== 'string' || c.length > 300))) push('userClauses 는 300자 이내 문자열 배열이어야 합니다');
   if (p.dormsAppUrl !== undefined && !validateDormsAppUrl(p.dormsAppUrl).ok) push('dormsAppUrl: ' + t('cli.dormsUrlInvalid'));
-  if (p.appName !== undefined && (typeof p.appName !== 'string' || p.appName.length > 100)) push('appName 은 100자 이내 문자열이어야 합니다');
+  if (p.appName !== undefined && (typeof p.appName !== 'string' || p.appName.length > 100 || hasControlChars(p.appName) || /<!--|-->/.test(p.appName))) push('appName 은 줄바꿈·제어 문자 없는 100자 이내 한 줄이어야 합니다');
+  if (p.attribution && p.attribution.text !== undefined && (typeof p.attribution.text !== 'string' || p.attribution.text.length > 200 || hasControlChars(p.attribution.text))) push('attribution.text 는 줄바꿈·제어 문자 없는 200자 이내 한 줄이어야 합니다');
+  if (p.policyVersion !== undefined && typeof p.policyVersion === 'string' && (p.policyVersion.length > 40 || hasControlChars(p.policyVersion))) push('policyVersion 은 40자 이내 한 줄이어야 합니다');
   if (p.preset !== undefined && !PRESET_IDS.includes(p.preset)) push(`preset 은 ${PRESET_IDS.join('|')} 중 하나여야 합니다`);
-  if (p.attribution && p.attribution.method !== undefined && (typeof p.attribution.method !== 'string' || p.attribution.method.length > 200)) push('attribution.method 는 200자 이내 문자열이어야 합니다');
-  if (p.provenance !== undefined && (typeof p.provenance !== 'object' || p.provenance === null)) push('provenance 는 객체여야 합니다');
+  if (p.attribution && p.attribution.method !== undefined && (typeof p.attribution.method !== 'string' || p.attribution.method.length > 200 || hasControlChars(p.attribution.method))) push('attribution.method 는 줄바꿈·제어 문자 없는 200자 이내 문자열이어야 합니다');
+  if (p.provenance !== undefined) {
+    if (typeof p.provenance !== 'object' || p.provenance === null || Array.isArray(p.provenance)) push('provenance 는 객체여야 합니다');
+    else {
+      const pv = p.provenance;
+      if (pv.visibleFooter !== undefined && ![true, false, 'force'].includes(pv.visibleFooter)) push('provenance.visibleFooter 는 true|false|"force" 중 하나여야 합니다');
+      if (pv.claudeMd !== undefined && typeof pv.claudeMd !== 'boolean') push('provenance.claudeMd 는 true|false 여야 합니다');
+      if (pv.allowUserFetchers !== undefined && typeof pv.allowUserFetchers !== 'boolean') push('provenance.allowUserFetchers 는 true|false 여야 합니다');
+    }
+  }
   return { ok: errors.length === 0, errors };
 }
 
@@ -181,6 +193,7 @@ function dormsSection() {
       { id: 'attributionMethod', ask: t('interview.attributionMethod'), free: true },
       { id: 'customClauses', ask: t('interview.customClauses'), free: true, list: true },
       { id: 'visibleFooter', ask: t('interview.visibleFooter'), choices: { yes: t('interview.visibleFooterYes'), no: t('interview.visibleFooterNo') } },
+      { id: 'userFetchers', ask: t('interview.userFetchers'), choices: { allow: t('interview.userFetchersAllow'), block: t('interview.userFetchersBlock') } },
     ],
   };
 }
@@ -198,7 +211,7 @@ export function buildRightsProfileFromAnswers(answers = {}) {
   else if (answers.schoolInvolved === 'yes_unreviewed') { p.rightsholder.status = 'school_work_related'; p.rightsholder.workForHireReview = 'needed'; }
   else if (answers.schoolInvolved === 'no') { if (p.rightsholder.workForHireReview === 'unknown') p.rightsholder.workForHireReview = 'not_needed'; }
   if (answers.thirdPartyAssets === 'unverified' && p.rightsholder.status !== 'unconfirmed') p.rightsholder.status = 'third_party_included';
-  if (typeof answers.displayName === 'string') p.rightsholder.displayName = answers.displayName.slice(0, 100);
+  if (typeof answers.displayName === 'string') p.rightsholder.displayName = oneLine(answers.displayName, 100);
 
   // 청중·허용 범위
   if (AUDIENCE.includes(answers.audience)) p.audience = answers.audience;
@@ -216,12 +229,20 @@ export function buildRightsProfileFromAnswers(answers = {}) {
   if (PERMISSION_VALUES.includes(answers.aiTraining)) p.permissions.aiTrainingOrClone = answers.aiTraining;
   if (p.permissions.aiTrainingOrClone === 'prohibited') p.permissions.uploadPrivateAssetsToAI = 'prohibited';
 
-  // 도름스 이용·보호 안내 묶음 → 손으로 옮겨 적은 항목 값 순으로 덮는다(나중 것이 이긴다).
+  // 도름스 이용·보호 안내 묶음 → AI 학습 답 → 손으로 옮겨 적은 항목 값 순으로 덮는다(나중 것이 이긴다).
+  // 묶음 없이 표의 일부만 옮겨 적으면, 도름스 커스텀이 시작하는 기본 묶음(교육 나눔형)에서 출발한다
+  // (모두 '먼저 허락'으로 두면 '앱을 그대로 사용'까지 허락이 필요하다고 잘못 안내된다).
+  const manual = answers.permissions && typeof answers.permissions === 'object' && !Array.isArray(answers.permissions);
   if (PRESET_IDS.includes(answers.preset)) {
     p.preset = answers.preset;
     Object.assign(p.permissions, PRESETS[answers.preset]);
+  } else if (manual) {
+    p.preset = 'custom';
+    Object.assign(p.permissions, PRESETS.custom);
   }
-  if (answers.permissions && typeof answers.permissions === 'object' && !Array.isArray(answers.permissions)) {
+  // 따로 고른 AI 학습 답은 묶음보다 앞선다(묶음이 조용히 덮지 않게).
+  if (PERMISSION_VALUES.includes(answers.aiTraining)) p.permissions.aiTrainingOrClone = answers.aiTraining;
+  if (manual) {
     for (const [k, v] of Object.entries(answers.permissions)) {
       if (!PERMISSION_KEYS.includes(k) || k === 'shareDormsLink') continue;
       const nv = normalizePermissionValue(v);
@@ -229,15 +250,16 @@ export function buildRightsProfileFromAnswers(answers = {}) {
     }
   }
   p.permissions.shareDormsLink = 'allowed';
-  if (typeof answers.appName === 'string' && answers.appName.trim()) p.appName = answers.appName.trim().slice(0, 100);
+  if (typeof answers.appName === 'string' && oneLine(answers.appName, 100)) p.appName = oneLine(answers.appName, 100);
   if (typeof answers.dormsAppUrl === 'string' && answers.dormsAppUrl.trim()) {
     const v = validateDormsAppUrl(answers.dormsAppUrl);
     if (!v.ok) throw new Error(t('cli.dormsUrlInvalid'));
     p.dormsAppUrl = v.url;
   }
   if (answers.attributionRequired === 'no') p.attribution.required = false;
-  if (typeof answers.attributionMethod === 'string' && answers.attributionMethod.trim()) p.attribution.method = answers.attributionMethod.trim().slice(0, 200);
-  if (answers.visibleFooter === 'no') p.provenance = { visibleFooter: false };
+  if (typeof answers.attributionMethod === 'string' && oneLine(answers.attributionMethod, 200)) p.attribution.method = oneLine(answers.attributionMethod, 200);
+  if (answers.visibleFooter === 'no') p.provenance = { ...(p.provenance || {}), visibleFooter: false };
+  if (answers.userFetchers === 'allow' || answers.userFetchers === 'block') p.provenance = { ...(p.provenance || {}), allowUserFetchers: answers.userFetchers === 'allow' };
 
   // 보호 자산(이름만)
   if (Array.isArray(answers.protectedAssets)) {
@@ -252,9 +274,19 @@ export function buildRightsProfileFromAnswers(answers = {}) {
   if (answers.aiContribution === 'mostly_ai') p.customClauses.push('AI 생성 비중이 큼(권리 주장 범위 검토 필요)');
   // 선생님이 직접 적은 조건(이용 안내 화면에 그대로 보인다). 내부 메모(위 두 줄)는 화면에 내지 않는다.
   if (Array.isArray(answers.customClauses)) {
-    p.userClauses = answers.customClauses.map(c => String(c || '').trim().slice(0, 300)).filter(Boolean).slice(0, 10);
+    p.userClauses = answers.customClauses.map(c => oneLine(c, 300)).filter(Boolean).slice(0, 10);
   }
 
   if (p.rightsholder.displayName) p.attribution.text = `만든이 ${p.rightsholder.displayName}`;
   return p;
+}
+
+// 묶음 없이 표의 일부만 옮겨 적었을 때, 기본 묶음 값으로 채운 항목(안내용). 없으면 빈 배열.
+export function permissionsFilledFromDefault(answers = {}) {
+  if (PRESET_IDS.includes(answers.preset)) return [];
+  const m = answers.permissions;
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return [];
+  const given = new Set(Object.keys(m).filter(k => normalizePermissionValue(m[k])));
+  if (PERMISSION_VALUES.includes(answers.aiTraining)) given.add('aiTrainingOrClone');
+  return Object.keys(PRESETS.custom).filter(k => !given.has(k));
 }

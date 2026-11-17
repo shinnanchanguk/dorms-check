@@ -129,7 +129,7 @@ async function run() {
     ok('CSS: @charset 다음 줄에 머리 주석', css.startsWith('@charset "UTF-8";\n/*! dorms-check:provenance'));
     ok('외부 라이브러리 파일엔 머리 주석 없음', !read(root, 'dist/assets/vendor-react.js').includes('dorms-check') && isVendorFile('assets/vendor-react.js'));
     const html = read(root, 'dist/index.html');
-    ok('sr-only 안내 + 바닥 출처 줄', html.includes('data-dorms-check-notice') && html.includes('data-dorms-check-source') && html.includes('href="usage.html"'));
+    ok('sr-only 안내 + 바닥 출처 줄(자산을 루트 기준으로 부르는 페이지는 /usage.html)', html.includes('data-dorms-check-notice') && html.includes('data-dorms-check-source') && html.includes('href="/usage.html"'));
     ok('하위 폴더 HTML 은 ../usage.html 로 연결', read(root, 'dist/sub/page.html').includes('href="../usage.html"'));
     const usage = read(root, 'dist/usage.html');
     ok('이용 안내: utf-8·뷰포트·줄바꿈 규칙', usage.includes('<meta charset="utf-8">') && usage.includes('name="viewport"') && usage.includes('word-break:keep-all') && usage.includes('overflow-wrap:anywhere'));

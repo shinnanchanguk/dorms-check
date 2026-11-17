@@ -11,8 +11,29 @@ import { fileURLToPath } from 'node:url';
 import { walk, readText, readTextSafe, readJsonSafe, exists, writeText, sha256 } from '../../core/util.js';
 import { fill } from '../html.js';
 import { rightsConfirmed } from '../../core/rights-profile.js';
+import { provenanceFacts } from '../../core/usage-policy.js';
+import { t, copyValue } from '../../core/copy.js';
 
 const MARK = '# dorms-check protection';
+// 사용자가 부탁해서 그때 페이지를 읽는 AI 도우미(학습용 수집기가 아님). 열어 두면 출처 안내를 읽을 수 있다.
+export const USER_FETCHERS = ['ChatGPT-User', 'Perplexity-User', 'Claude-User', 'Claude-Web', 'Meta-ExternalFetcher', 'MistralAI-User'];
+const PROPRIETARY_MARK = 'All Rights Reserved';
+
+// 사용자 에이전트(AI 도우미)를 열어 둘지: 권리 프로필 provenance.allowUserFetchers > 설정 protection.robots.allowUserFetchers.
+export function allowUserFetchers(ctx) {
+  const p = ctx.rightsProfile?.provenance?.allowUserFetchers;
+  if (typeof p === 'boolean') return p;
+  return ctx.config?.protection?.robots?.allowUserFetchers === true;
+}
+
+export function robotsBlock(bots) {
+  const lines = [`${MARK} block AI / scraping crawlers (begin)`];
+  for (const b of bots) { lines.push(`User-agent: ${b}`, 'Disallow: /'); }
+  lines.push('');
+  lines.push('# general crawlers stay allowed (SEO preserved); see /llms.txt for policy');
+  lines.push(`${MARK} (end)`, '');
+  return lines.join('\n');
+}
 
 export const legalStep = {
   id: 'legal',
@@ -20,42 +41,47 @@ export const legalStep = {
   itemIds: ['protection.notice.machine-readable', 'protection.release.integrity'],
 
   run(ctx) {
-    const { root, buildFull, dry, backup, rightsProfile } = ctx;
+    const { root, buildFull, dry, rightsProfile } = ctx;
     const changed = [];
     const created = [];
     const notes = [];
-    const owner = rightsProfile?.rightsholder?.displayName || '';
+    const f = provenanceFacts(rightsProfile);
+    const owner = f.creator;
     const year = new Date().getFullYear();
 
-    // 1) robots.txt — AI/수집 크롤러 차단 블록 추가(멱등)
-    const bots = readJsonSafe(path.join(fileURLToPath(new URL('../ai-bots.json', import.meta.url)))) || [];
+    // 1) robots.txt — AI/수집 크롤러 차단 블록(표식 사이만 우리 것, 선택이 바뀌면 블록만 갈아 끼운다)
+    const allBots = readJsonSafe(path.join(fileURLToPath(new URL('../ai-bots.json', import.meta.url)))) || [];
+    const openUsers = allowUserFetchers(ctx);
+    const bots = openUsers ? allBots.filter(b => !USER_FETCHERS.includes(b)) : allBots;
     const robotsPath = path.join(buildFull, 'robots.txt');
     const robotsExisted = exists(robotsPath);
-    let robots = robotsExisted ? readText(robotsPath) : '';
-    if (!robots.includes(MARK)) {
-      const lines = [`${MARK} block AI / scraping crawlers (begin)`];
-      for (const b of bots) { lines.push(`User-agent: ${b}`, 'Disallow: /'); }
-      lines.push('');
-      lines.push('# general crawlers stay allowed (SEO preserved); see /llms.txt for policy');
-      lines.push(`${MARK} (end)`, '');
-      const block = lines.join('\n');
-      const next = robots.trim() ? robots.trim() + '\n\n' + block : 'User-agent: *\nAllow: /\n\n' + block;
-      if (!dry) {
-        if (robotsExisted) backup && backup.backup(robotsPath);
-        else backup && backup.markCreated(robotsPath);
-        writeText(robotsPath, next);
-      }
+    const robots = robotsExisted ? readText(robotsPath) : '';
+    const block = robotsBlock(bots);
+    const bs = robots.indexOf(`${MARK} block AI`);
+    const beEnd = robots.indexOf(`${MARK} (end)`);
+    let next;
+    if (bs !== -1 && beEnd > bs) {
+      const tail = robots.slice(beEnd + `${MARK} (end)`.length).replace(/^\n/, '');
+      next = robots.slice(0, bs) + block + tail;
+    } else {
+      next = robots.trim() ? robots.trim() + '\n\n' + block : 'User-agent: *\nAllow: /\n\n' + block;
+    }
+    if (next !== robots) {
+      ctx.io.write(robotsPath, next);
       (robotsExisted ? changed : created).push(path.relative(root, robotsPath));
       notes.push(`robots.txt: AI 수집기 ${bots.length}종 차단 블록 추가(일반 검색로봇은 허용).`);
     } else {
       notes.push('robots.txt 에 이미 차단 블록 있음(멱등).');
     }
+    notes.push(openUsers
+      ? t('cli.robotsUserFetchersAllowed', { n: allBots.filter(b => USER_FETCHERS.includes(b)).length })
+      : t('cli.robotsUserFetchersBlocked'));
 
     // 2) .well-known/tdmrep.json — EU TDM opt-out
     const tdmPath = path.join(buildFull, '.well-known', 'tdmrep.json');
     if (!exists(tdmPath)) {
       const tdm = [{ location: '/', 'tdm-reservation': 1, 'tdm-policy': '/llms.txt' }];
-      if (!dry) { backup && backup.markCreated(tdmPath); writeText(tdmPath, JSON.stringify(tdm, null, 2) + '\n'); }
+      ctx.io.write(tdmPath, JSON.stringify(tdm, null, 2) + '\n');
       created.push(path.relative(root, tdmPath));
     }
 
@@ -63,16 +89,30 @@ export const legalStep = {
     const licPath = path.join(root, 'LICENSE');
     if (exists(licPath)) {
       notes.push('LICENSE 이미 존재하니 건드리지 않음.');
+      // 이용 범위가 '출처를 남기면 고쳐 쓰기 허용'인데 LICENSE 가 전부 금지면 AI·사람이 헷갈린다(알리기만 한다).
+      const cur = readTextSafe(licPath) || '';
+      if (f.case === 'allowed' && cur.includes(PROPRIETARY_MARK)) notes.push(t('cli.licenseConflict'));
     } else if (!rightsConfirmed(rightsProfile)) {
       notes.push('권리관계가 아직 확인되지 않아 LICENSE 를 만들지 않음(interview 로 확인 후 다시 apply).');
+    } else if (f.case === 'allowed') {
+      const lic = fill(copyValue('license.allowedText'), {
+        owner: owner || 'the owner',
+        contact: f.contact || '(see usage.html)',
+        year,
+        sourceLine: f.sourceLine,
+        dormsUrlPart: f.dormsUrl ? ` (${f.dormsUrl})` : '',
+      });
+      ctx.io.write(licPath, lic);
+      created.push(path.relative(root, licPath));
+      notes.push(t('cli.licenseAllowedCreated'));
     } else {
       const tplPath = path.join(fileURLToPath(new URL('../../templates/proprietary-license.txt', import.meta.url)));
       const lic = fill(readText(tplPath), {
         owner: owner || 'the owner',
-        contact: rightsProfile?.attribution?.text || '(see site)',
+        contact: f.contact || '(see site)',
         year,
       });
-      if (!dry) { backup && backup.markCreated(licPath); writeText(licPath, lic); }
+      ctx.io.write(licPath, lic);
       created.push(path.relative(root, licPath));
       notes.push('LICENSE(독점) 생성 — 권리관계 확인됨을 전제로 함. 내용을 읽고 필요하면 고쳐 쓰세요.');
     }

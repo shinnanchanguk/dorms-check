@@ -42,7 +42,8 @@
         "displayName": {
           "type": "string",
           "maxLength": 100,
-          "description": "권리자 표시 이름(안내문에 쓰임)"
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+          "description": "권리자 표시 이름(안내문에 쓰임). 줄바꿈·제어 문자·HTML 주석 표식(<!-- -->) 없는 한 줄"
         },
         "workForHireReview": {
           "enum": [
@@ -291,14 +292,22 @@
       "type": "object",
       "properties": {
         "visibleFooter": {
-          "type": "boolean"
+          "oneOf": [
+            { "type": "boolean" },
+            { "const": "force" }
+          ],
+          "description": "false 면 바닥 줄 없음. 기본(true)은 화면 바탕이 grid·가로 flex·넘침 숨김인 페이지는 건너뜀. \"force\" 는 그래도 넣음"
         },
         "claudeMd": {
           "type": "boolean"
+        },
+        "allowUserFetchers": {
+          "type": "boolean",
+          "description": "true 면 robots.txt 에서 사용자가 부탁해 읽는 AI 도우미(ChatGPT-User 등)는 막지 않음(출처 안내를 읽게)"
         }
       },
       "additionalProperties": false,
-      "description": "출처 안내 선택(바닥 줄·CLAUDE.md)"
+      "description": "출처 안내 선택(바닥 줄·CLAUDE.md·AI 도우미)"
     }
   }
 }

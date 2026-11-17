@@ -83,29 +83,53 @@ export const LAW_ARTICLES = [
 ];
 export function lawUrl(jo) { return `https://www.law.go.kr/법령/저작권법/${jo}`; }
 
+// 프로필 글자를 안내에 넣기 전 한 줄로 정리한다: 제어 문자(줄바꿈 포함)·보이지 않는 방향 문자 제거,
+// HTML 주석 표식(<!-- -->) 제거, 공백 합치기, 길이 제한. 이렇게 하면 AGENTS.md 블록 표식을 끊거나
+// 줄 머리(## 제목·명령 줄)를 끼워 넣을 수 없다.
+const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2064\ufeff]/g;
+export function oneLine(value, max = 200) {
+  if (value === null || value === undefined) return '';
+  let s = String(value).replace(CONTROL_RE, ' ');
+  for (let i = 0; i < 3; i++) s = s.replace(/<!--|-->|<!-|--!>/g, ' ');
+  s = s.replace(/\s+/g, ' ').trim();
+  return s.length > max ? s.slice(0, max).trim() : s;
+}
+export function hasControlChars(value) { CONTROL_RE.lastIndex = 0; return CONTROL_RE.test(String(value)); }
+
+// 이름이 이미 '선생님'·'쌤'으로 끝나면 '선생님'을 또 붙이지 않는다("홍길동선생님 선생님" 겹침 막기).
+const TITLE_SUFFIX_RE = /(선생님|쌤)$/;
+export function creatorWithTitle(creator) {
+  if (!creator) return t('creator.unknown');
+  return TITLE_SUFFIX_RE.test(creator) ? creator : t('creator.withTitle', { creator });
+}
+
 // 권리 프로필 → 안내를 만드는 데 필요한 사실 묶음(문구 아님).
 export function provenanceFacts(profile, { year = new Date().getFullYear() } = {}) {
   const p = profile || {};
-  const creator = (p.rightsholder && p.rightsholder.displayName) || '';
-  const creatorTitle = creator ? t('creator.withTitle', { creator }) : t('creator.unknown');
+  const creator = oneLine(p.rightsholder && p.rightsholder.displayName, 100);
+  const creatorTitle = creatorWithTitle(creator);
   const dormsUrl = p.dormsAppUrl && validateDormsAppUrl(p.dormsAppUrl).ok ? validateDormsAppUrl(p.dormsAppUrl).url : '';
-  const appName = p.appName || '';
+  const appName = oneLine(p.appName, 100);
   const permissions = { ...(p.permissions || {}) };
   permissions.shareDormsLink = 'allowed';
   const kase = adaptationCase(profile ? p.permissions : null);
-  const sourceLine = appName ? t('sourceLine.withApp', { appName, creatorTitle }) : t('sourceLine.text', { creatorTitle });
+  // 도름스 주소가 없으면 '도름스'를 적지 않는다(도름스에 올라가 있다고 잘못 알리지 않게).
+  const sl = dormsUrl ? 'sourceLine' : 'sourceLineNoDorms';
+  const sourceLine = appName ? t(sl + '.withApp', { appName, creatorTitle }) : t(sl + '.text', { creatorTitle });
   const provenanceId = sha256(`dorms-check:${dormsUrl || ''}:${creator}:${appName}`).slice(0, 16);
+  const preset = PRESET_ID_SET.has(p.preset) ? p.preset : '';
   return {
     creator, creatorTitle, creatorEn: creator || 'the creator', dormsUrl, appName,
     appTitle: appName || creatorTitle, permissions, case: kase, sourceLine, provenanceId, year,
-    contact: (p.attribution && p.attribution.text) || '',
+    contact: oneLine(p.attribution && p.attribution.text, 200),
     attributionRequired: p.attribution ? p.attribution.required !== false : true,
-    attributionMethod: (p.attribution && p.attribution.method) || '',
-    userClauses: Array.isArray(p.userClauses) ? p.userClauses : [],
-    preset: p.preset || '',
-    policyVersion: p.policyVersion || '',
+    attributionMethod: oneLine(p.attribution && p.attribution.method, 200),
+    userClauses: Array.isArray(p.userClauses) ? p.userClauses.map(c => oneLine(c, 300)).filter(Boolean).slice(0, 10) : [],
+    preset,
+    policyVersion: oneLine(p.policyVersion, 40),
   };
 }
+const PRESET_ID_SET = new Set(['edu_share', 'restricted', 'open_collab', 'custom']);
 
 // 표에 보일 행(도름스 순서). 값이 없는 항목은 '먼저 허락'으로 보인다(미설정 = 먼저 허락).
 export function permissionRows(permissions) {

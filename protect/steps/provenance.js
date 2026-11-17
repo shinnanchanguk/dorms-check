@@ -8,18 +8,21 @@
 // 정직한 한계: 안내를 지우고 베끼거나 AI 가 무시하면 막지 못한다. 강제 장치가 아니라 허락 요청·협업으로 돌리는 장치다.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { walk, readTextSafe, readJsonSafe, exists, writeText } from '../../core/util.js';
-import { insertBeforeBodyClose } from '../html.js';
+import { walk, readTextSafe, readJsonSafe, exists } from '../../core/util.js';
+import { insertBeforeBodyClose, bodyLayoutRisk, linkedCss, usageHref } from '../html.js';
 import { t } from '../../core/copy.js';
 import { provenanceFacts } from '../../core/usage-policy.js';
 import {
   USAGE_FILE, FOOTER_MARK, footerHtml, usagePageHtml, agentsBlock, mergeBlock,
-  jsHeader, JS_HEADER_PREFIX, stripJsHeader, dormsJson,
+  jsHeader, jsCaseKey, JS_HEADER_PREFIX, stripJsHeader, dormsJson, BLOCK_START, BLOCK_END,
 } from '../provenance-text.js';
 
 const PKG = readJsonSafe(fileURLToPath(new URL('../../package.json', import.meta.url))) || {};
-const FOOTER_START = '<!-- dorms-check:provenance:footer:start -->';
-const FOOTER_END = '<!-- dorms-check:provenance:footer:end -->';
+export const FOOTER_START = '<!-- dorms-check:provenance:footer:start -->';
+export const FOOTER_END = '<!-- dorms-check:provenance:footer:end -->';
+// 우리가 만든 파일이라는 표식(없으면 선생님 파일로 보고 덮지 않는다).
+const USAGE_MARK = 'name="dorms-check-provenance"';
+const DORMS_JSON_MARK = '"$comment": "dorms-check provenance"';
 
 // 남이 만든 묶음(외부 라이브러리)으로 보이는 파일은 머리 주석을 달지 않는다.
 export function isVendorFile(rel) {
@@ -34,16 +37,17 @@ function relHref(fromFile, toFile) {
   return r || path.basename(toFile);
 }
 
-function writeIfChanged(ctx, file, next, changed, created) {
-  const { root, dry, backup } = ctx;
+// 바꿀 것이 있을 때만 쓴다. mark 가 주어지면, 이미 있는 파일에 그 표식이 없을 때(선생님 파일) 덮지 않는다.
+function writeIfChanged(ctx, file, next, out, { mark, block } = {}) {
+  const { root } = ctx;
   const cur = exists(file) ? readTextSafe(file) : null;
   if (cur === next) return false;
-  if (!dry) {
-    if (cur === null) backup && backup.markCreated(file);
-    else backup && backup.backup(file);
-    writeText(file, next);
+  if (cur !== null && mark && !cur.includes(mark)) {
+    out.notes.push(t('cli.keptUserFile', { file: path.relative(root, file) }));
+    return false;
   }
-  (cur === null ? created : changed).push(path.relative(root, file));
+  ctx.io.write(file, next, { block });
+  (cur === null ? out.created : out.changed).push(path.relative(root, file));
   return true;
 }
 
@@ -54,46 +58,52 @@ export const provenanceStep = {
 
   run(ctx) {
     const { root, buildFull, rightsProfile, config } = ctx;
-    const changed = [];
-    const created = [];
-    const notes = [];
+    const out = { changed: [], created: [], notes: [], warnings: [] };
     const f = provenanceFacts(rightsProfile);
     const opts = { ...(config?.protection?.provenance || {}), ...(rightsProfile?.provenance || {}) };
     const visibleFooter = opts.visibleFooter !== false;
+    const forceFooter = opts.visibleFooter === 'force';
     const claudeMd = opts.claudeMd !== false;
 
     // 1) 이용 안내 화면: 빌드 결과 + (있으면) public/ 원본에도 둬서 다시 빌드해도 남게.
     const usageHtml = usagePageHtml(f);
     const usageBuild = path.join(buildFull, USAGE_FILE);
-    writeIfChanged(ctx, usageBuild, usageHtml, changed, created);
+    writeIfChanged(ctx, usageBuild, usageHtml, out, { mark: USAGE_MARK });
     const publicDir = path.join(root, 'public');
     if (exists(publicDir) && path.resolve(publicDir) !== path.resolve(buildFull)) {
-      writeIfChanged(ctx, path.join(publicDir, USAGE_FILE), usageHtml, changed, created);
+      writeIfChanged(ctx, path.join(publicDir, USAGE_FILE), usageHtml, out, { mark: USAGE_MARK });
     }
 
     // 2) 바닥 출처 줄(HTML). 이용 안내 화면 자신에는 넣지 않는다.
+    //    화면 바탕이 grid·가로 flex·넘침 숨김이면 줄이 화면을 깨거나 안 보이므로 넣지 않고 알린다.
     let footerCount = 0;
     for (const file of walk(buildFull, { exts: ['.html', '.htm'] })) {
       if (path.resolve(file) === path.resolve(usageBuild)) continue;
       const src = readTextSafe(file);
       if (src === null) continue;
-      const block = `${FOOTER_START}\n${footerHtml(f, relHref(file, usageBuild))}\n${FOOTER_END}`;
+      const rel = path.relative(root, file);
+      let want = visibleFooter;
+      if (want && !forceFooter) {
+        const risk = bodyLayoutRisk(src, linkedCss(src, file, buildFull, readTextSafe));
+        if (risk) {
+          want = false;
+          out.warnings.push(t('layoutRisk.footerSkipped', { file: rel, reason: t('layoutRisk.' + risk), sourceLine: f.sourceLine, scope: t('footer.scope.' + jsCaseKey(f)) }));
+        }
+      }
+      const block = `${FOOTER_START}\n${footerHtml(f, usageHref(src, file, buildFull, usageBuild))}\n${FOOTER_END}`;
       const s = src.indexOf(FOOTER_START);
       const e = src.indexOf(FOOTER_END);
-      let out;
+      let next;
       if (s !== -1 && e > s) {
-        out = visibleFooter ? src.slice(0, s) + block + src.slice(e + FOOTER_END.length)
+        next = want ? src.slice(0, s) + block + src.slice(e + FOOTER_END.length)
           : (src.slice(0, s) + src.slice(e + FOOTER_END.length)).replace(/\n\n<\/body>/i, '\n</body>');
       } else if (src.includes(FOOTER_MARK)) {
-        out = src; // 표식 없는 예전 줄은 건드리지 않는다
+        next = src; // 표식 없는 예전 줄은 건드리지 않는다
       } else {
-        out = visibleFooter ? insertBeforeBodyClose(src, block) : src;
+        next = want ? insertBeforeBodyClose(src, block) : src;
       }
-      if (out !== src) {
-        if (!ctx.dry) { ctx.backup && ctx.backup.backup(file); writeText(file, out); }
-        changed.push(path.relative(root, file));
-      }
-      if (visibleFooter) footerCount++;
+      if (next !== src) { ctx.io.write(file, next); out.changed.push(rel); }
+      if (want) footerCount++;
     }
 
     // 3) JS·CSS 머리 주석(소스맵·외부 라이브러리·#! 로 시작하는 파일은 건너뜀).
@@ -109,33 +119,32 @@ export const provenanceStep = {
       const body = src.startsWith(JS_HEADER_PREFIX) ? stripJsHeader(src) : src;
       // CSS 의 @charset 은 파일 맨 앞이어야 하므로 그 뒤에 넣는다.
       const cs = file.endsWith('.css') ? /^@charset\s+"[^"]*";\n?/i.exec(body) : null;
-      const out = cs ? cs[0] + (cs[0].endsWith('\n') ? '' : '\n') + header + stripJsHeader(body.slice(cs[0].length)) : header + body;
+      const next = cs ? cs[0] + (cs[0].endsWith('\n') ? '' : '\n') + header + stripJsHeader(body.slice(cs[0].length)) : header + body;
       jsCount++;
-      if (out !== src) {
-        if (!ctx.dry) { ctx.backup && ctx.backup.backup(file); writeText(file, out); }
-        changed.push(path.relative(root, file));
-      }
+      if (next !== src) { ctx.io.write(file, next); out.changed.push(path.relative(root, file)); }
     }
 
     // 4) 저장소 쪽: AGENTS.md (늘), CLAUDE.md (끄지 않았으면), 표식 밖 내용은 그대로.
+    //    복원 때 블록만 되돌릴 수 있게 블록 표식을 백업 기록에 함께 남긴다.
     const block = agentsBlock(f);
+    const marks = { start: BLOCK_START, end: BLOCK_END };
     const agentsPath = path.join(root, 'AGENTS.md');
-    writeIfChanged(ctx, agentsPath, mergeBlock(readTextSafe(agentsPath), block), changed, created);
+    writeIfChanged(ctx, agentsPath, mergeBlock(readTextSafe(agentsPath), block), out, { block: marks });
     const claudePath = path.join(root, 'CLAUDE.md');
     if (claudeMd || exists(claudePath)) {
-      writeIfChanged(ctx, claudePath, mergeBlock(readTextSafe(claudePath), block), changed, created);
+      writeIfChanged(ctx, claudePath, mergeBlock(readTextSafe(claudePath), block), out, { block: marks });
     }
 
-    // 5) dorms.json (빌드 결과 + 프로젝트 맨 위).
+    // 5) dorms.json (빌드 결과 + 프로젝트 맨 위). 선생님이 직접 만든 dorms.json 은 덮지 않는다.
     const json = JSON.stringify(dormsJson(f, PKG.version), null, 2) + '\n';
-    writeIfChanged(ctx, path.join(buildFull, 'dorms.json'), json, changed, created);
-    writeIfChanged(ctx, path.join(root, 'dorms.json'), json, changed, created);
+    writeIfChanged(ctx, path.join(buildFull, 'dorms.json'), json, out, { mark: DORMS_JSON_MARK });
+    writeIfChanged(ctx, path.join(root, 'dorms.json'), json, out, { mark: DORMS_JSON_MARK });
 
     const caseLabel = f.case === 'allowed' ? t('permissionValues.allowed') : f.case === 'prohibited' ? t('permissionValues.prohibited') : t('permissionValues.permission_required');
-    notes.push(t('cli.provenanceNoteChannels', { js: jsCount, footer: footerCount }));
-    notes.push(t('cli.provenanceNoteCase', { value: caseLabel }));
-    if (!f.dormsUrl) notes.push(t('cli.provenanceNoteNoDorms'));
-    notes.push(t('cli.provenanceNoteHonest'));
-    return { changed, created, notes };
+    out.notes.push(t('cli.provenanceNoteChannels', { js: jsCount, footer: footerCount }));
+    out.notes.push(t('cli.provenanceNoteCase', { value: caseLabel }));
+    if (!f.dormsUrl) out.notes.push(t('cli.provenanceNoteNoDorms'));
+    out.notes.push(t('cli.provenanceNoteHonest'));
+    return out;
   },
 };

@@ -4,6 +4,8 @@
 import path from 'node:path';
 import vm from 'node:vm';
 import { walk, readTextSafe, exists, isLikelyESM } from '../core/util.js';
+import { bodyLayoutRisk, linkedCss } from './html.js';
+import { t } from '../core/copy.js';
 
 // HTML 에서 로컬(상대/루트) 자산 참조만 추출
 export function localRefs(htmlSrc) {
@@ -41,6 +43,11 @@ export function verifyBuild(root, buildDir) {
     }
     if (src.includes('data-dorms-check-source') && !/<p\b[^>]*data-dorms-check-source[\s\S]*?<\/p>/i.test(src)) {
       issues.push({ sev: 'error', file: rel, msg: '바닥 출처 줄 <p>가 닫히지 않음(주입 손상)' });
+    }
+    // 바닥 출처 줄이 grid·가로 flex·넘침 숨김 화면 바탕에 바로 붙으면 화면이 깨지거나 줄이 안 보인다.
+    if (src.includes('data-dorms-check-source')) {
+      const risk = bodyLayoutRisk(src, linkedCss(src, f, buildDir, readTextSafe));
+      if (risk) issues.push({ sev: 'warn', file: rel, msg: t('layoutRisk.verifyWarn', { reason: t('layoutRisk.' + risk) }) });
     }
     if (/<body/i.test(src) && !/<\/body>/i.test(src)) {
       issues.push({ sev: 'warn', file: rel, msg: '<body>가 닫히지 않음' });

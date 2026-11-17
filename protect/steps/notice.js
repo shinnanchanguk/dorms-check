@@ -5,10 +5,11 @@
 // 안내 기준: 권리 프로필의 modify·sourceReuse·redistribute 중 가장 엄격한 값(없으면 먼저 허락).
 // 정직한 한계: AI 고지의 효과는 모델에 따라 불확실하고, 사람 복제엔 무효한 보조 채널이다.
 import path from 'node:path';
-import { walk, readTextSafe, exists, writeText } from '../../core/util.js';
-import { insertInHead, insertBeforeBodyClose, hasMarker, escapeForComment, escapeHtml } from '../html.js';
+import { walk, readTextSafe, exists } from '../../core/util.js';
+import { insertInHead, insertBeforeBodyClose, hasMarker, escapeForComment, escapeHtml, usageHref } from '../html.js';
+import { t } from '../../core/copy.js';
 import { provenanceFacts } from '../../core/usage-policy.js';
-import { aiNoticeParagraphs, llmsContent, USAGE_FILE } from '../provenance-text.js';
+import { aiNoticeParagraphs, asideText, llmsContent, USAGE_FILE } from '../provenance-text.js';
 
 const MARKER = 'dorms-check:notice';
 const HEAD_START = '<!-- dorms-check:notice:head:start -->';
@@ -24,10 +25,6 @@ export function noticeText(profile) {
   return [...ko, ...en].join(' ');
 }
 
-function relUsageHref(buildFull, file) {
-  const rel = path.relative(path.dirname(file), path.join(buildFull, USAGE_FILE)).split(path.sep).join('/');
-  return rel || USAGE_FILE;
-}
 
 function replaceBetween(src, start, end, block) {
   const s = src.indexOf(start);
@@ -42,13 +39,14 @@ export const noticeStep = {
   itemIds: ['protection.notice.visible', 'protection.notice.machine-readable'],
 
   run(ctx) {
-    const { root, buildFull, dry, backup, rightsProfile } = ctx;
+    const { root, buildFull, rightsProfile } = ctx;
     const changed = [];
     const created = [];
     const notes = [];
     const files = walk(buildFull, { exts: ['.html', '.htm'] });
     const f = provenanceFacts(rightsProfile);
-    const notice = noticeText(rightsProfile);
+    // 화면 읽기 프로그램도 읽으니 짧게: 원작자·이용 범위·물어볼 곳·부탁만(법 조문·초안은 이용 안내 화면에).
+    const notice = asideText(f, { usageUrl: USAGE_FILE });
     const policy = f.case === 'allowed' ? 'adapt-with-attribution' : f.case === 'prohibited' ? 'no-adaptation' : 'ask-creator-first';
 
     const headBlock = `${HEAD_START}\n` +
@@ -56,11 +54,11 @@ export const noticeStep = {
       `<meta name="ai-policy" content="${policy}; attribution-required; see /llms.txt">\n` +
       `<meta name="dorms-check-provenance" content="${escapeHtml(f.provenanceId)}">\n` +
       HEAD_END;
-    const bodyBlock = (file) => `${BODY_START}\n` +
-      `<aside data-dorms-check-notice aria-label="copyright and AI usage notice" ` +
+    const bodyBlock = (file, src) => `${BODY_START}\n` +
+      `<aside data-dorms-check-notice aria-label="${escapeHtml(t('aiNotice.asideLabel'))}" ` +
       `style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;` +
       `clip:rect(0 0 0 0);white-space:normal;border:0">${escapeHtml(notice)} ` +
-      `<a href="${escapeHtml(relUsageHref(buildFull, file))}">${escapeHtml(USAGE_FILE)}</a></aside>\n` +
+      `<a href="${escapeHtml(usageHref(src, file, buildFull, path.join(buildFull, USAGE_FILE)))}">${escapeHtml(USAGE_FILE)}</a></aside>\n` +
       BODY_END;
 
     let skipped = 0, legacy = 0;
@@ -72,15 +70,15 @@ export const noticeStep = {
       let out;
       if (src.includes(HEAD_START) || src.includes(BODY_START)) {
         out = replaceBetween(src, HEAD_START, HEAD_END, headBlock) ?? src;
-        out = replaceBetween(out, BODY_START, BODY_END, bodyBlock(file)) ?? out;
+        out = replaceBetween(out, BODY_START, BODY_END, bodyBlock(file, src)) ?? out;
       } else if (hasMarker(src, MARKER)) {
         legacy++; continue; // 예전 판이 넣은 고지: 다시 빌드하면 새 형식으로 들어간다
       } else {
         out = insertInHead(src, headBlock);
-        out = insertBeforeBodyClose(out, bodyBlock(file));
+        out = insertBeforeBodyClose(out, bodyBlock(file, src));
       }
       if (out === src) { skipped++; continue; } // 멱등
-      if (!dry) { backup && backup.backup(file); writeText(file, out); }
+      ctx.io.write(file, out);
       changed.push(path.relative(root, file));
     }
 
@@ -89,22 +87,22 @@ export const noticeStep = {
     const newLlms = llmsContent(f, LLMS_MARK);
     const curLlms = exists(llmsPath) ? readTextSafe(llmsPath) : null;
     if (curLlms === null) {
-      if (!dry) { backup && backup.markCreated(llmsPath); writeText(llmsPath, newLlms); }
+      ctx.io.write(llmsPath, newLlms);
       created.push(path.relative(root, llmsPath));
     } else if (curLlms.includes(LLMS_MARK)) {
       if (curLlms !== newLlms) {
-        if (!dry) { backup && backup.backup(llmsPath); writeText(llmsPath, newLlms); }
+        ctx.io.write(llmsPath, newLlms);
         changed.push(path.relative(root, llmsPath));
       }
     } else {
-      notes.push('기존 llms.txt 를 보존했습니다(직접 작성한 것으로 보임). 덮어쓰지 않음.');
+      notes.push(t('cli.notice.llmsKept'));
     }
 
-    notes.push(`고지 채널: HTML 주석 + meta(ai-policy) + sr-only 고지 노드 + llms.txt (HTML ${changed.filter(c => c.endsWith('.html') || c.endsWith('.htm')).length}개, 안내 기준 ${f.case})`);
-    if (skipped) notes.push(`이미 같은 고지가 있는 ${skipped}개 HTML 건너뜀(멱등).`);
-    if (legacy) notes.push(`예전 판 고지가 있는 ${legacy}개 HTML 은 그대로 둠(다시 빌드한 뒤 적용하면 새 안내로 바뀜).`);
-    if (!f.creator) notes.push('권리자 표시 이름이 비어 있어 고지의 식별력이 약합니다. interview 로 채우면 좋아요.');
-    notes.push('정직: AI 고지 효과는 불확실(모델 의존)하고 사람 복제엔 무효한 보조 채널입니다.');
+    notes.push(t('cli.notice.channels', { html: changed.filter(c => c.endsWith('.html') || c.endsWith('.htm')).length, case: f.case }));
+    if (skipped) notes.push(t('cli.notice.idempotent', { n: skipped }));
+    if (legacy) notes.push(t('cli.notice.legacy', { n: legacy }));
+    if (!f.creator) notes.push(t('cli.notice.noCreator'));
+    notes.push(t('cli.notice.honest'));
     return { changed, created, notes };
   },
 };
