@@ -38,7 +38,13 @@ export async function buildProtectionPlan(root, { config } = {}) {
     return { error: '빌드 산출물 디렉토리를 찾지 못했습니다. 먼저 프로젝트를 빌드하세요(예: npm run build).' };
   }
   const rightsProfile = loadRightsProfile(root);
-  const dry = await runProtectSteps(root, { buildDir, config, dry: true, quiet: true });
+  let dry;
+  try { dry = await runProtectSteps(root, { buildDir, config, dry: true, quiet: true }); }
+  catch (e) { return { error: e.message }; }
+  if (!dry.ok) {
+    const bad = dry.steps.find(s => s.error);
+    return { error: bad ? `${bad.title}: ${bad.error}` : 'protect plan failed' };
+  }
 
   // 서버 이전 후보: 결정적 스캔에서 잡힌 클라이언트 노출(비밀키·프롬프트 후보·모델파일)
   const scan = runProtectionScan(root);
@@ -59,7 +65,7 @@ export async function buildProtectionPlan(root, { config } = {}) {
     // 대상 자산: 권리 프로필의 보호 자산(이름·종류만 — 원문 없음)
     targets: (rightsProfile?.protectedAssets || []).map(a => ({ label: a.label, kind: a.kind, location: a.location || 'unknown' })),
     // 변경 파일 목록(단계별): dry 실행이 수집한 실제 예정 목록
-    steps: dry.steps.map(s => ({ id: s.id, title: s.title, willChange: s.changed, willCreate: s.created })),
+    steps: dry.steps.map(s => ({ id: s.id, title: s.title, willChange: s.changed, willCreate: s.created, warnings: s.warnings || [] })),
     // 서버 이전 후보: 이 계획은 파일을 서버로 옮기지 않는다(코드 이전은 교사 AI 가 별도 동의로).
     serverMoveCandidates: serverMoveCandidates.slice(0, 50),
     risks: [
@@ -69,6 +75,7 @@ export async function buildProtectionPlan(root, { config } = {}) {
       '출처 안내는 빌드 결과 말고도 프로젝트 맨 위 AGENTS.md·CLAUDE.md·dorms.json, public/usage.html 을 만들거나 고칩니다(표식 사이만 바꾸고 선생님 내용은 보존).',
       '화면 맨 아래에 작은 출처 줄이 보입니다. 원하지 않으면 interview 에서 끄거나 설정 protection.provenance.visibleFooter 를 false 로 두세요.',
       plan_riskLicense(rightsProfile),
+      ...dry.steps.flatMap(s => s.warnings || []),
     ].filter(Boolean),
     restore: {
       method: 'dcheck protect restore (마지막 백업으로 복원)',

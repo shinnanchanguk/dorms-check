@@ -2,9 +2,11 @@
 // 등록된 단계를 순서대로 실행한다. dry=true 면 파일을 바꾸지 않고 변경 예정 목록만 모은다(계획용).
 // 실제 적용은 반드시 백업을 먼저 만들고, 단계 실패 시 즉시 백업으로 복원한다.
 import path from 'node:path';
-import { log, color, exists, createBackup, restoreBackup, writeText, readJsonSafe } from '../core/util.js';
+import fs from 'node:fs';
+import { log, color, exists, createBackup, restoreBackup, writeText, readJsonSafe, withinRoot, safeWrite, assertSafeTarget, assertStateDirSafe, lexists } from '../core/util.js';
+import { t } from '../core/copy.js';
 import { detectStack } from '../core/detect.js';
-import { loadRightsProfile } from '../core/rights-profile.js';
+import { loadRightsProfile, validateRightsProfile } from '../core/rights-profile.js';
 import { verifyBuild } from './verify-static.js';
 import { sourcemapStep } from './steps/sourcemap.js';
 import { noticeStep } from './steps/notice.js';
@@ -18,11 +20,40 @@ export const PROTECT_STEPS = [sourcemapStep, noticeStep, provenanceStep, legalSt
 
 const STATE_FILE = path.join('.dorms-check', 'protect', 'state.json');
 
+// 빌드 폴더는 프로젝트 안의 하위 폴더여야 한다('../x'·절대 경로·프로젝트 자신은 받지 않는다).
+export function buildDirInRoot(root, dir) {
+  if (typeof dir !== 'string' || !dir || dir === '.' || path.isAbsolute(dir)) return false;
+  if (!withinRoot(root, dir)) return false;
+  return path.resolve(root, dir) !== path.resolve(root);
+}
+
 export function resolveBuildDir(root, preferred) {
-  if (preferred && preferred !== '.' && exists(path.join(root, preferred))) return preferred;
+  if (preferred && buildDirInRoot(root, preferred) && exists(path.join(root, preferred))) return preferred;
   const d = detectStack(root);
-  if (d.buildDir && d.buildDir !== '.' && exists(path.join(root, d.buildDir))) return d.buildDir;
+  if (d.buildDir && buildDirInRoot(root, d.buildDir) && exists(path.join(root, d.buildDir))) return d.buildDir;
   return null;
+}
+
+// 단계가 파일을 쓰고 지우는 유일한 길. 계획(dry)에서도 경로 검사는 똑같이 해서, 밖을 가리키는 링크는
+// 계획 단계에서 바로 멈춘다. 실제 적용 때는 백업 → 안전한 쓰기 → 쓴 내용의 지문 기록 순서로 한다.
+function makeIo(root, dry, backup) {
+  return {
+    write(file, data, { block } = {}) {
+      assertSafeTarget(root, file);
+      if (dry) return;
+      if (lexists(file)) backup && backup.backup(file);
+      else backup && backup.markCreated(file);
+      safeWrite(root, file, data);
+      backup && backup.recordWritten(file, data, { block });
+    },
+    remove(file) {
+      assertSafeTarget(root, file);
+      if (dry) return;
+      backup && backup.backup(file);
+      fs.unlinkSync(file);
+      backup && backup.recordRemoved(file);
+    },
+  };
 }
 
 export function loadProtectState(root) {
@@ -39,23 +70,31 @@ export function saveProtectState(root, patch) {
 // 단계 실행. dry=true → 변경 없음(계획 수집). dry=false → 백업 + 적용 + 실패 시 복원.
 // 반환: { ok, steps: [{id, title, changed, created, notes, error?}], backupDir, restored? }
 export async function runProtectSteps(root, { buildDir, config, dry = false, quiet = false } = {}) {
+  if (!buildDirInRoot(root, buildDir)) throw new Error(t('cli.buildDirOutside', { buildDir: String(buildDir) }));
+  assertStateDirSafe(root);
   const rightsProfile = loadRightsProfile(root);
+  if (rightsProfile) {
+    const v = validateRightsProfile(rightsProfile);
+    if (!v.ok) throw new Error(t('cli.profileInvalid') + '\n  - ' + v.errors.join('\n  - '));
+  }
   const buildFull = path.join(root, buildDir);
+  assertSafeTarget(root, path.join(buildFull, '.probe'));
   const backup = dry ? null : createBackup(root);
-  const ctx = { root, buildDir, buildFull, config, rightsProfile, dry, backup };
+  const ctx = { root, buildDir, buildFull, config, rightsProfile, dry, backup, io: makeIo(root, dry, backup) };
 
   const results = [];
   for (const step of PROTECT_STEPS) {
     if (!quiet) log.title(`${step.title}  ${color.dim('[' + step.id + ']')}${dry ? color.yellow('  (계획 — 미적용)') : ''}`);
     try {
       const r = step.run(ctx) || {};
-      results.push({ id: step.id, title: step.title, changed: r.changed || [], created: r.created || [], notes: r.notes || [] });
+      results.push({ id: step.id, title: step.title, changed: r.changed || [], created: r.created || [], notes: r.notes || [], warnings: r.warnings || [] });
       if (!quiet) {
+        for (const w of r.warnings || []) log.warn('  ' + w);
         for (const n of r.notes || []) log.plain('  ' + color.dim(n));
         log.ok(`  변경 ${(r.changed || []).length}개 · 생성 ${(r.created || []).length}개${dry ? color.yellow(' (계획)') : ''}`);
       }
     } catch (e) {
-      results.push({ id: step.id, title: step.title, changed: [], created: [], notes: [], error: e.message });
+      results.push({ id: step.id, title: step.title, changed: [], created: [], notes: [], warnings: [], error: e.message });
       if (!dry && backup) {
         // 실패 시 즉시 복원(부분 적용 상태로 남기지 않는다)
         const b = backup.finalize();

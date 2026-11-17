@@ -16,7 +16,8 @@ import { JS_HEADER_PREFIX, stripJsHeader } from './provenance-text.js';
 const MAX_ASSETS = 25;
 const MAX_REDIRECTS = 5;
 const MAX_BODY = 2 * 1024 * 1024;
-const TIMEOUT_MS = 15000;
+const TIMEOUT_MS = 15000;        // 요청 하나(이어받는 시간 포함 전체)
+const TOTAL_TIMEOUT_MS = 90000;  // 대조 한 번 전체
 
 // 이름 정리: 소문자, 대괄호·끝 점 제거("localhost." 우회 막기).
 export function normalizeHost(hostname) {
@@ -66,6 +67,10 @@ function blockedV6(ip) {
   if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;       // fe80::/10
   if (b[0] === 0xff) return true;                                 // 멀티캐스트
   if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x0d && b[3] === 0xb8) return true; // 문서용
+  if (b[0] === 0xfe && (b[1] & 0xc0) === 0xc0) return true;       // fec0::/10 (옛 사이트 로컬)
+  if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) return true; // 2001::/32 Teredo(안에 IPv4 를 숨김)
+  if (b[0] === 0x20 && b[1] === 0x02) return blockedV4(b.slice(2, 6).join('.')); // 2002::/16 6to4: 안의 IPv4 로 판정
+  if (b[0] === 0x01 && b.slice(1, 8).every(x => x === 0)) return true; // 100::/64 버리는 주소
   return false;
 }
 
@@ -111,8 +116,12 @@ export async function resolveSafe(hostname, { allowLocal = false, lookupImpl = d
 }
 
 // 확인한 IP 로만 접속한다(확인과 접속 사이에 DNS 가 바뀌어도 그 IP 로 간다). 크기·시간 상한.
-function pinnedGet(u, pinned) {
+function pinnedGet(u, pinned, timeoutMs = TIMEOUT_MS) {
   return new Promise(resolve => {
+    let settled = false;
+    const finish = v => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
+    // 요청 하나의 전체 시간 한도. 서버가 몇 초마다 한 글자씩 흘려도 여기서 끊는다(소켓 쉬는 시간 한도만으로는 못 끊는다).
+    const timer = setTimeout(() => { try { req.destroy(new Error('timeout')); } catch { /* 이미 닫힘 */ } finish({ ok: false, error: 'timeout' }); }, Math.max(1, timeoutMs));
     const mod = u.protocol === 'https:' ? https : http;
     const lookup = (_host, opts, cb) => {
       if (typeof opts === 'function') cb = opts;
@@ -123,7 +132,7 @@ function pinnedGet(u, pinned) {
       protocol: u.protocol, hostname: normalizeHost(u.hostname), port: u.port || undefined,
       path: u.pathname + u.search, method: 'GET', lookup, servername: net.isIP(normalizeHost(u.hostname)) ? undefined : normalizeHost(u.hostname),
       headers: { 'user-agent': 'dorms-check-compare', accept: '*/*', host: u.host },
-      timeout: TIMEOUT_MS, agent: false,
+      timeout: Math.max(1, timeoutMs), agent: false,
     }, res => {
       const chunks = []; let total = 0; let truncated = false;
       res.on('data', c => {
@@ -132,20 +141,20 @@ function pinnedGet(u, pinned) {
         if (total > MAX_BODY) { truncated = true; chunks.push(c.subarray(0, c.length - (total - MAX_BODY))); res.destroy(); return; }
         chunks.push(c);
       });
-      const done = () => resolve({ ok: true, status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8'), truncated });
+      const done = () => finish({ ok: true, status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8'), truncated });
       res.on('end', done);
       res.on('close', done);
       res.on('error', () => done());
     });
     req.on('timeout', () => { req.destroy(new Error('timeout')); });
-    req.on('error', e => resolve({ ok: false, error: e.code || e.message }));
+    req.on('error', e => finish({ ok: false, error: e.code || e.message }));
     req.end();
   });
 }
 
 // 테스트용 fetchImpl 이 있으면 그것으로 받되, 주소 검사(이름 풀기 포함)는 똑같이 한다.
-async function fetchOnce(u, pinned, fetchImpl) {
-  if (!fetchImpl) return pinnedGet(u, pinned);
+async function fetchOnce(u, pinned, fetchImpl, timeoutMs) {
+  if (!fetchImpl) return pinnedGet(u, pinned, timeoutMs);
   try {
     const res = await fetchImpl(u.href, { redirect: 'manual' });
     const text = (await res.text()).slice(0, MAX_BODY);
@@ -154,14 +163,16 @@ async function fetchOnce(u, pinned, fetchImpl) {
 }
 
 // 넘겨주기(redirect)를 한 번씩 직접 따라가며, 매번 주소 글자와 풀린 IP 를 다시 검사한다.
-async function fetchChecked(href, { allowLocal, fetchImpl, lookupImpl }) {
+async function fetchChecked(href, { allowLocal, fetchImpl, lookupImpl, deadline, requestTimeoutMs = TIMEOUT_MS }) {
   let cur = href;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
+    const left = deadline ? deadline - Date.now() : requestTimeoutMs;
+    if (left <= 0) return { ok: false, error: 'timeout' };
     const p = parseSuspectUrl(cur, { allowLocal });
     if (!p.ok) return { ok: false, error: p.reason };
     const pinned = await resolveSafe(p.url.hostname, { allowLocal, lookupImpl });
     if (!pinned.ok) return { ok: false, error: pinned.reason };
-    const r = await fetchOnce(p.url, pinned, fetchImpl);
+    const r = await fetchOnce(p.url, pinned, fetchImpl, Math.min(requestTimeoutMs, left));
     if (!r.ok) return r;
     const loc = r.headers && r.headers.location;
     if (r.status >= 300 && r.status < 400 && loc) {
@@ -210,13 +221,15 @@ export function localFingerprints(root, buildFull) {
   return { raw, stripped };
 }
 
-export async function compareSuspect(root, { url, buildFull, rightsProfile, allowLocal = false, fetchImpl, lookupImpl, now = new Date() } = {}) {
+export async function compareSuspect(root, { url, buildFull, rightsProfile, allowLocal = false, fetchImpl, lookupImpl, now = new Date(), requestTimeoutMs = TIMEOUT_MS, totalTimeoutMs = TOTAL_TIMEOUT_MS } = {}) {
   const parsed = parseSuspectUrl(url, { allowLocal });
   if (!parsed.ok) return { ok: false, reason: parsed.reason };
   const base = parsed.url;
   const f = provenanceFacts(rightsProfile);
-  const get = h => fetchChecked(h, { allowLocal, fetchImpl, lookupImpl });
+  const deadline = Date.now() + totalTimeoutMs;
+  const get = h => fetchChecked(h, { allowLocal, fetchImpl, lookupImpl, deadline, requestTimeoutMs });
   const page = await get(base.href);
+  if (!page.ok && page.error === 'timeout') return { ok: false, reason: t('cli.compareTimeout', { seconds: Math.round(Math.min(requestTimeoutMs, totalTimeoutMs) / 1000) }) };
   if (!page.ok) return { ok: false, reason: page.error === t('cli.compareLocalBlocked') ? page.error : `주소를 열지 못했어요: ${page.error || 'network'}` };
   const finalBase = (() => { try { return new URL(page.finalUrl || base.href); } catch { return base; } })();
 
