@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 
 const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
 const wrap = (code, s) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : String(s));
@@ -229,12 +230,84 @@ export function restoreMarkedBlock(current, original, { start, end }) {
 
 const BACKUP_BASE = path.join('.dorms-check', 'backup');
 
+// ── 백업 출처 확인: 이 컴퓨터의 dorms-check 가 만든 백업만 복원한다 ──
+// 백업 폴더는 저장소 안이라, 남의 저장소에 평범한 파일로 가짜 백업(.git/config 를 덮는 매니페스트 등)을
+// 심어 둘 수 있다. 그래서 매니페스트를 사용자별 비밀 열쇠(~/.config/dorms-check/backup.key, 0600)로
+// HMAC 서명하고, 서명이 맞는 것만 믿는다. 시험에서는 DORMS_CHECK_CONFIG_HOME 으로 열쇠 위치를 바꾼다.
+function configHome() {
+  return process.env.DORMS_CHECK_CONFIG_HOME || path.join(os.homedir(), '.config', 'dorms-check');
+}
+export function backupKey({ create = true } = {}) {
+  const dir = configHome();
+  const file = path.join(dir, 'backup.key');
+  try {
+    const st = fs.lstatSync(file);
+    if (st.isSymbolicLink() || !st.isFile()) throw new UnsafePathError(file, 'notfile');
+    const key = fs.readFileSync(file);
+    if (key.length < 32) throw new UnsafePathError(file, 'notfile');
+    return key;
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    if (!create) return null;
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const key = crypto.randomBytes(32);
+    try { fs.writeFileSync(file, key, { mode: 0o600, flag: 'wx' }); }
+    catch (err) { if (err.code === 'EEXIST') return backupKey({ create: false }); throw err; }
+    return key;
+  }
+}
+function canonical(v) {
+  if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
+  return JSON.stringify(v === undefined ? null : v);
+}
+function realOr(p) { try { return fs.realpathSync(p); } catch { return path.resolve(p); } }
+// 서명은 매니페스트 내용 + 그 프로젝트의 실제 위치 + 백업 폴더 이름에 묶인다(다른 곳으로 옮겨 쓰지 못하게).
+function manifestSig(man, root, backupDir, key) {
+  const { sig: _omit, ...rest } = man;
+  return crypto.createHmac('sha256', key)
+    .update('dorms-check-backup\0' + realOr(root) + '\0' + path.basename(backupDir) + '\0' + canonical(rest))
+    .digest('hex');
+}
+// 'ok' | 'missing' | 'bad'
+export function manifestStatus(man, root, backupDir) {
+  if (!man || typeof man.sig !== 'string' || !man.sig) return 'missing';
+  const key = backupKey({ create: false });
+  if (!key) return 'bad';
+  const want = Buffer.from(manifestSig(man, root, backupDir, key), 'hex');
+  const got = Buffer.from(man.sig, 'hex');
+  return got.length === want.length && crypto.timingSafeEqual(got, want) ? 'ok' : 'bad';
+}
+
+// 복원 대상 허용 목록: 보호 단계가 쓰는 자리(루트 안내 파일, public/usage.html, 기록한 빌드 폴더 아래)만.
+// .git·.dorms-check·편집기·CI 설정·package.json·루트의 점 파일은 서명과 상관없이 늘 거부한다.
+const DENY_SEGMENTS = new Set(['.git', '.dorms-check', '.github', '.vscode', '.husky', '.idea', 'node_modules']);
+const DENY_BASENAMES = new Set(['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', '.npmrc']);
+const ROOT_TARGETS = new Set(['AGENTS.md', 'CLAUDE.md', 'dorms.json', 'LICENSE', 'public/usage.html']);
+function safeBuildDir(buildDir) {
+  if (typeof buildDir !== 'string' || !buildDir || path.isAbsolute(buildDir)) return null;
+  const segs = buildDir.split(/[\\/]+/).filter(Boolean);
+  if (!segs.length || segs.some(x => x === '.' || x === '..' || DENY_SEGMENTS.has(x))) return null;
+  return segs.join('/');
+}
+export function restoreTargetAllowed(rel, buildDir) {
+  if (typeof rel !== 'string' || !rel || path.isAbsolute(rel)) return false;
+  const segs = rel.split(/[\\/]+/).filter(Boolean);
+  if (!segs.length || segs.some(x => x === '..' || x === '.' || DENY_SEGMENTS.has(x))) return false;
+  if (DENY_BASENAMES.has(segs[segs.length - 1])) return false;
+  const norm = segs.join('/');
+  if (ROOT_TARGETS.has(norm)) return true;
+  if (segs.length === 1 && segs[0].startsWith('.')) return false;
+  const bd = safeBuildDir(buildDir);
+  return Boolean(bd && norm.startsWith(bd + '/'));
+}
+
 // 변경 전 원본을 보존하는 백업 세션(.dorms-check/backup/<ts>/).
 // - 파일 수정 직전 backup(file) 호출 → 원본 보존(restore 시 되돌림)
 // - 신규 생성 파일은 markCreated(file) 호출 → restore 시 제거(원래 없던 파일 정리)
 // - 쓴 직후 recordWritten(file, text) → 우리가 쓴 내용의 sha256. restore 때 지금 내용이 이것과 다르면
 //   선생님이 그 뒤에 고친 것이므로 덮거나 지우지 않는다(표식 블록 파일은 블록만 되돌린다).
-export function createBackup(root) {
+export function createBackup(root, { buildDir = null } = {}) {
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   const dir = path.join(root, BACKUP_BASE, ts);
   const manifest = [];
@@ -243,6 +316,7 @@ export function createBackup(root) {
   const written = {};
   const blocks = {};
   const seen = new Set();
+  const signManifest = (man) => ({ ...man, sig: manifestSig(man, root, dir, backupKey()) });
   return {
     dir,
     backup(file) {
@@ -277,7 +351,7 @@ export function createBackup(root) {
         safeWrite(
           root,
           path.join(dir, '_manifest.json'),
-          JSON.stringify({ at: new Date().toISOString(), version: 2, files: manifest, createdFiles, keepDirs, written, blocks }, null, 2)
+          JSON.stringify(signManifest({ at: new Date().toISOString(), version: 2, buildDir, files: manifest, createdFiles, keepDirs, written, blocks }), null, 2)
         );
       }
       return { dir, count: manifest.length, created: createdFiles.length };
@@ -325,6 +399,13 @@ export function restoreBackup(root, backupDir, { force = false } = {}) {
   try { man = JSON.parse(fs.readFileSync(assertSafeSource(root, backupDir, path.join(backupDir, '_manifest.json')), 'utf8')); }
   catch (e) { if (e instanceof UnsafePathError) throw e; man = null; }
   if (!man) return { restored: 0, removed: 0, noManifest: true, kept: [], blockRestored: [] };
+  // 출처 확인: 서명이 틀리면 늘 거부, 서명이 없거나(예전 판·가짜) 쓴 내용 기록이 없으면 --force 없이는 거부.
+  const status = manifestStatus(man, root, backupDir);
+  const empty = { restored: 0, removed: 0, skipped: 0, kept: [], blockRestored: [], rejected: [] };
+  if (status === 'bad') return { ...empty, refused: 'badSignature' };
+  if (status === 'missing' && !force) return { ...empty, refused: 'unsigned' };
+  if ((!(man.version >= 2) || !man.written || typeof man.written !== 'object') && !force) return { ...empty, refused: 'legacy' };
+  const rejected = [];
   const rootAbs = path.resolve(root);
   const written = man.written && typeof man.written === 'object' ? man.written : null;
   const blocks = man.blocks && typeof man.blocks === 'object' ? man.blocks : {};
@@ -339,6 +420,7 @@ export function restoreBackup(root, backupDir, { force = false } = {}) {
   for (const rel of man.files || []) {
     // 경로 트래버설 방어: 매니페스트의 상대경로가 root(및 backupDir) 경계를 벗어나면 건너뜀
     if (!withinRoot(root, rel) || !withinRoot(backupDir, rel)) { skipped++; continue; }
+    if (!restoreTargetAllowed(rel, man.buildDir)) { rejected.push(rel); continue; }
     const src = path.join(backupDir, rel);
     const dest = path.resolve(rootAbs, rel);
     if (!lexists(src)) continue;
@@ -362,6 +444,7 @@ export function restoreBackup(root, backupDir, { force = false } = {}) {
   }
   for (const rel of man.createdFiles || []) {
     if (!withinRoot(root, rel)) { skipped++; continue; }
+    if (!restoreTargetAllowed(rel, man.buildDir)) { rejected.push(rel); continue; }
     const p = path.resolve(rootAbs, rel);
     if (!lexists(p)) continue;
     const keep = man.keepDirs && typeof man.keepDirs[rel] === 'string' && withinRoot(root, man.keepDirs[rel] || '.')
@@ -380,7 +463,18 @@ export function restoreBackup(root, backupDir, { force = false } = {}) {
       /* 그 밖의 오류는 건너뜀 */
     }
   }
-  return { restored: n, removed, skipped, kept, blockRestored };
+  return { restored: n, removed, skipped, kept, blockRestored, rejected, status };
+}
+
+// 이 컴퓨터의 열쇠로 서명이 맞는 백업만(이름순). 서명이 없거나 틀린 백업 수도 함께 돌려준다.
+export function verifiedBackups(root) {
+  const ok = [], other = [];
+  for (const d of listBackups(root)) {
+    let man = null;
+    try { man = JSON.parse(fs.readFileSync(assertSafeSource(root, d, path.join(d, '_manifest.json')), 'utf8')); } catch { /* 깨짐 */ }
+    (manifestStatus(man, root, d) === 'ok' ? ok : other).push(d);
+  }
+  return { ok, other };
 }
 
 export { DEFAULT_IGNORE };

@@ -79,7 +79,7 @@ export async function runProtectSteps(root, { buildDir, config, dry = false, qui
   }
   const buildFull = path.join(root, buildDir);
   assertSafeTarget(root, path.join(buildFull, '.probe'));
-  const backup = dry ? null : createBackup(root);
+  const backup = dry ? null : createBackup(root, { buildDir });
   const ctx = { root, buildDir, buildFull, config, rightsProfile, dry, backup, io: makeIo(root, dry, backup) };
 
   const results = [];

@@ -14,6 +14,9 @@ import { compareSuspect, parseSuspectUrl, isBlockedAddress, isLocalHost, resolve
 import { verifyBuild } from '../protect/verify-static.js';
 import { loadCopy } from '../core/copy.js';
 
+// 백업 서명 열쇠는 선생님 홈이 아니라 시험용 임시 폴더에 만든다.
+process.env.DORMS_CHECK_CONFIG_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dcheck-key-'));
+
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) { pass++; console.log('  v', name); } else { fail++; console.error('  x', name); } }
 

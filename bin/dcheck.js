@@ -18,7 +18,7 @@ import { catalogItem, TRACKS } from '../core/tracks.js';
 import { INTERVIEW_QUESTIONS, buildRightsProfileFromAnswers, writeRightsProfile, permissionsFilledFromDefault } from '../core/rights-profile.js';
 import { buildProtectionPlan, writePlan, loadPlan, planPath, checkPlanApproval } from '../core/protection-plan.js';
 import { runProtectSteps, runProtectVerify, resolveBuildDir, saveProtectState, loadProtectState } from '../protect/apply.js';
-import { restoreBackup, latestBackup, listBackups, assertStateDirSafe } from '../core/util.js';
+import { restoreBackup, verifiedBackups, assertStateDirSafe, safeWrite, withinRoot } from '../core/util.js';
 import { verifyBuild } from '../protect/verify-static.js';
 import { compareSuspect } from '../protect/compare.js';
 import { loadRightsProfile } from '../core/rights-profile.js';
@@ -93,13 +93,14 @@ function printDetect() {
 }
 
 // .dorms-check 가 심볼릭 링크면(예: public 을 가리킴) 점검 결과를 쓰지 않는다.
+// .dorms-check 트리 어디에든 링크·이상한 항목이 있으면(남의 저장소가 심어 둔 경우) 결과를 쓰지 않는다.
 function stateDirIsSafe() {
-  try { return !lstatSync(STATE_DIR).isSymbolicLink(); } catch { return true; }
+  try { assertStateDirSafe(root); return true; } catch { return false; }
 }
 
 async function runScan() {
   const json = flag('json');
-  if (!stateDirIsSafe()) { outputMachineResult({ ok: false, code: 'UNSAFE_STATE_DIR', exitCode: 2, reason: '.dorms-check 가 심볼릭 링크라 점검 결과를 쓰지 않습니다. 링크를 지우고 다시 실행하세요.' }, { json }); return; }
+  if (!stateDirIsSafe()) { outputMachineResult({ ok: false, code: 'UNSAFE_STATE_DIR', exitCode: 2, reason: t('cli.unsafeStateDir') }, { json }); return; }
   const cfg = loadConfig(root);
   if (cfg._parseError) {
     outputMachineResult({ ok: false, code: 'INVALID_CONFIG', exitCode: 2, reason: 'dorms-check.config.json을 읽지 못했습니다. JSON 형식을 확인하세요.' }, { json });
@@ -176,10 +177,9 @@ async function runScan() {
   saveState(root, state);
   const config = { ...cfg, app: { ...cfg.app, stack }, tracks };
   const md = renderReportMd({ config, results, trackResults, bonus });
-  ensureDir(STATE_DIR);
-  writeText(path.join(STATE_DIR, 'REPORT.md'), md);
+  safeWrite(root, path.join(STATE_DIR, 'REPORT.md'), md);
   const saved = { at: new Date().toISOString(), url, reachable, results, bonus, raw, trackResults };
-  writeText(path.join(STATE_DIR, 'scan.json'), JSON.stringify(saved, null, 2));
+  safeWrite(root, path.join(STATE_DIR, 'scan.json'), JSON.stringify(saved, null, 2));
   if (json) {
     console.log(JSON.stringify({ ok: true, command: 'scan', ...saved }, null, 2));
     return;
@@ -280,8 +280,7 @@ function runJudge() {
     review[id] = { status: v.status, evidence: v.evidence || '', by: v.by || 'teacher-assistant', at: new Date().toISOString() };
     accepted++;
   }
-  ensureDir(STATE_DIR);
-  writeText(REVIEW, JSON.stringify(review, null, 2) + '\n');
+  safeWrite(root, REVIEW, JSON.stringify(review, null, 2) + '\n');
   log.ok(`판정 병합: ${accepted}건 수용, ${rejected}건 거부. 다시 scan 하세요.`);
 }
 
@@ -339,9 +338,10 @@ function runSubmit() {
   const payload = buildPayload({ config: { ...cfg, app: { ...cfg.app, stack } }, results, trackResults, bonus, toolVersion: PKG.version });
 
   const outDir = path.resolve(root, opt('out', '.dorms-check/evidence'));
-  ensureDir(outDir);
-  writeText(path.join(outDir, 'report.json'), JSON.stringify(payload, null, 2));
-  writeText(path.join(outDir, 'REPORT.md'), readFileSync(path.join(STATE_DIR, 'REPORT.md'), 'utf8'));
+  // 프로젝트 안이면 프로젝트 기준으로, 선생님이 --out 으로 밖을 고르면 그 폴더 기준으로 링크를 막는다.
+  const outBase = withinRoot(root, path.relative(root, outDir)) ? root : outDir;
+  safeWrite(outBase, path.join(outDir, 'report.json'), JSON.stringify(payload, null, 2));
+  safeWrite(outBase, path.join(outDir, 'REPORT.md'), readFileSync(path.join(STATE_DIR, 'REPORT.md'), 'utf8'));
   log.ok(`증빙팩 생성: ${path.relative(root, outDir)}/ (report.json · REPORT.md)`);
 
   log.title('도름스 마크 신청');
@@ -422,8 +422,7 @@ function runInterview() {
   } else if (answers.existingLicense) {
     put('protection.rights.license-consistency', 'pending', '설문: 기존 공개 이력 있음 또는 불확실(충돌 검토 후 judge 로 기록)');
   }
-  ensureDir(STATE_DIR);
-  writeText(REVIEW, JSON.stringify(review, null, 2) + '\n');
+  safeWrite(root, REVIEW, JSON.stringify(review, null, 2) + '\n');
   log.plain('  설문에서 갈린 권리 항목을 기록했어요. 다시 scan 하면 반영됩니다.');
   log.plain(color.dim('  프로필에는 비밀 원문·민감 파일명이 들어가지 않아요(이름만).'));
 }
@@ -497,24 +496,34 @@ function runProtectRestore() {
   const from = opt('from', '');
   const all = flag('all');
   const force = flag('force');
-  const list = from ? [path.resolve(root, from)] : all ? listBackups(root).reverse() : [latestBackup(root)].filter(Boolean);
-  if (!list.length) { log.err('복원할 백업이 없습니다.'); process.exitCode = 1; return; }
-  const kept = new Set(), blockRestored = new Set();
+  // 이 컴퓨터의 dorms-check 가 서명한 백업만 기본 대상으로 고른다(저장소에 심어 둔 가짜 백업은 고르지 않는다).
+  const { ok: verified, other } = verifiedBackups(root);
+  const list = from ? [path.resolve(root, from)] : all ? [...verified].reverse() : verified.slice(-1);
+  if (!list.length) {
+    log.err('복원할 백업이 없습니다.');
+    if (other.length) log.warn('  ' + t('cli.restore.ignoredUnverified', { n: other.length }));
+    process.exitCode = 1; return;
+  }
+  if (!from && other.length) log.warn('  ' + t('cli.restore.ignoredUnverified', { n: other.length }));
+  const kept = new Set(), blockRestored = new Set(), rejected = new Set();
   for (const b of list) {
     let r;
     try { r = restoreBackup(root, b, { force }); } catch (e) { log.err(e.message); process.exitCode = 1; return; }
     if (r.noManifest) { log.err(`백업 매니페스트를 찾을 수 없습니다: ${path.relative(root, b)}`); process.exitCode = 1; return; }
+    if (r.refused) { log.err(t('cli.restore.refused.' + r.refused, { from: path.relative(root, b) })); process.exitCode = 1; return; }
     log.ok(t('cli.restore.done', { restored: r.restored, removed: r.removed, from: path.relative(root, b) }));
     if (r.skipped) log.warn('  ' + t('cli.restore.skipped', { n: r.skipped }));
     r.kept.forEach(x => kept.add(x));
     r.blockRestored.forEach(x => blockRestored.add(x));
+    (r.rejected || []).forEach(x => rejected.add(x));
   }
   for (const x of blockRestored) kept.delete(x);
   if (blockRestored.size) log.plain('  ' + t('cli.restore.blockRestored', { files: [...blockRestored].join(', ') }));
   if (kept.size) log.warn('  ' + t('cli.restore.kept', { n: kept.size, files: [...kept].slice(0, 8).join(', ') }));
+  if (rejected.size) log.warn('  ' + t('cli.restore.rejectedTargets', { n: rejected.size, files: [...rejected].slice(0, 8).join(', ') }));
   if (all) log.plain('  ' + t('cli.restore.all', { n: list.length }));
   else if (!from) {
-    const older = listBackups(root).length - 1;
+    const older = verified.length - 1;
     if (older > 0) log.plain(color.dim('  ' + t('cli.restore.older', { n: older })));
   }
 }
@@ -787,8 +796,8 @@ function runHooksCmd() {
 async function main() {
   if (removedFeature()) return;
   // .dorms-check 가 심볼릭 링크(예: public 을 가리킴)면 결과를 쓰는 명령은 모두 멈춘다.
-  if (!['help', '--help', '-h', undefined, 'detect', 'hooks', 'status', 'report', 'audit'].includes(cmd) && !stateDirIsSafe()) {
-    outputMachineResult({ ok: false, code: 'UNSAFE_STATE_DIR', exitCode: 2, reason: '.dorms-check 가 심볼릭 링크라 결과를 쓰지 않습니다. 링크를 지우고 다시 실행하세요.' }, { json: flag('json') });
+  if (!['help', '--help', '-h', undefined, 'detect', 'hooks', 'status', 'audit'].includes(cmd) && !stateDirIsSafe()) {
+    outputMachineResult({ ok: false, code: 'UNSAFE_STATE_DIR', exitCode: 2, reason: t('cli.unsafeStateDir') }, { json: flag('json') });
     return;
   }
   switch (cmd) {

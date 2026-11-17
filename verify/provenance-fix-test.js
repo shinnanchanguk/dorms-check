@@ -5,7 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { runProtectSteps, resolveBuildDir, buildDirInRoot } from '../protect/apply.js';
-import { restoreBackup, listBackups, safeWrite, restoreMarkedBlock, assertStateDirSafe, assertSafeSource, createBackup } from '../core/util.js';
+import { restoreBackup, listBackups, safeWrite, restoreMarkedBlock, assertStateDirSafe, assertSafeSource, createBackup, verifiedBackups, restoreTargetAllowed, backupKey } from '../core/util.js';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { loadConfig, writeConfig } from '../core/config.js';
+import { saveState } from '../core/session.js';
 import { buildRightsProfileFromAnswers, writeRightsProfile, validateRightsProfile, permissionsFilledFromDefault } from '../core/rights-profile.js';
 import { provenanceFacts, oneLine, creatorWithTitle } from '../core/usage-policy.js';
 import { agentsBlock, mergeBlock, BLOCK_START, BLOCK_END, aiNoticeParagraphs, asideText, jsHeader, footerHtml, USAGE_FILE } from '../protect/provenance-text.js';
@@ -14,6 +17,9 @@ import { verifyBuild } from '../protect/verify-static.js';
 import { compareSuspect, isBlockedAddress } from '../protect/compare.js';
 import { USER_FETCHERS } from '../protect/steps/legal.js';
 import { t } from '../core/copy.js';
+
+// 백업 서명 열쇠는 선생님 홈이 아니라 시험용 임시 폴더에 만든다.
+process.env.DORMS_CHECK_CONFIG_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dcheck-key-'));
 
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) { pass++; console.log('  v', name); } else { fail++; console.error('  x', name); } }
@@ -427,6 +433,146 @@ async function run() {
     const rr = restoreBackup(r2, listBackups(r2).pop());
     ok('정상 백업 복원은 그대로 됨', rr.restored > 0 && read(r2, 'dist/index.html') === orig);
     fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  console.log('\n[F12] 저장소에 심어 둔 가짜 백업으로 복원(2차 F1)');
+  {
+    const CLI = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', 'bin', 'dcheck.js');
+    const cli = (cwd, args) => spawnSync(process.execPath, [CLI, ...args], { cwd, env: { ...process.env, NO_COLOR: '1' }, encoding: 'utf8' });
+    const GITCFG = '[core]\n\trepositoryformatversion = 0\n';
+    const plant = (root, name = '9999-12-31T00-00-00-000Z', man = { files: ['.git/config'], createdFiles: ['src/app.js'] }) => {
+      const d = path.join(root, '.dorms-check', 'backup', name);
+      fs.mkdirSync(path.join(d, '.git'), { recursive: true });
+      fs.writeFileSync(path.join(d, '.git', 'config'), '[core]\n\tfsmonitor = "touch PWNED"\n');
+      fs.writeFileSync(path.join(d, '_manifest.json'), JSON.stringify(man));
+      return d;
+    };
+    const mkRepo = () => {
+      const root = tmp();
+      site(root, '<!doctype html><html><head></head><body><script src="./assets/app.js"></script></body></html>');
+      fs.mkdirSync(path.join(root, '.git')); fs.writeFileSync(path.join(root, '.git', 'config'), GITCFG);
+      fs.mkdirSync(path.join(root, 'src')); fs.writeFileSync(path.join(root, 'src', 'app.js'), '// 선생님 작업물\n');
+      return root;
+    };
+
+    // 보고서 재현 그대로(서명 없음, version·written 없음)
+    const root = mkRepo();
+    const fake = plant(root);
+    const r = restoreBackup(root, fake);
+    ok('서명 없는 가짜 백업: 복원 거부(unsigned)', r.refused === 'unsigned' && read(root, '.git/config') === GITCFG && fs.existsSync(path.join(root, 'src', 'app.js')));
+    const rf = restoreBackup(root, fake, { force: true });
+    ok('--force 여도 .git/config 와 src/app.js 는 허용 목록 밖이라 거부', read(root, '.git/config') === GITCFG && fs.existsSync(path.join(root, 'src', 'app.js')) && rf.rejected.includes(path.join('.git', 'config')) && rf.rejected.includes(path.join('src', 'app.js')));
+    const c1 = cli(root, ['protect', 'restore']);
+    ok(`CLI restore: 확인된 백업 없음 → exit 1, 파일 그대로 (exit ${c1.status})`, c1.status === 1 && read(root, '.git/config') === GITCFG && fs.existsSync(path.join(root, 'src', 'app.js')) && /확인되지 않은 백업 1개/.test(c1.stdout + c1.stderr));
+    const c2 = cli(root, ['protect', 'restore', '--from', path.relative(root, fake)]);
+    ok('CLI restore --from 가짜: 서명 없음 거부, exit 1', c2.status === 1 && read(root, '.git/config') === GITCFG);
+
+    // 정상 apply 뒤 가짜(이름이 더 뒤로 정렬)가 있어도 기본 복원은 내 백업을 고른다
+    writeRightsProfile(root, buildRightsProfileFromAnswers({ ...BASE }));
+    const before = read(root, 'dist/index.html');
+    fs.rmSync(path.join(root, '.dorms-check', 'backup'), { recursive: true, force: true });
+    await runProtectSteps(root, { buildDir: 'dist', quiet: true });
+    plant(root);
+    const v = verifiedBackups(root);
+    ok('서명 확인된 백업 1 · 확인 안 된 백업 1', v.ok.length === 1 && v.other.length === 1);
+    const c3 = cli(root, ['protect', 'restore']);
+    ok(`CLI restore: 내 백업만 복원, 가짜는 무시 (exit ${c3.status})`, c3.status === 0 && read(root, 'dist/index.html') === before && read(root, '.git/config') === GITCFG && fs.existsSync(path.join(root, 'src', 'app.js')) && !fs.existsSync(path.join(root, 'CLAUDE.md')));
+
+    // 서명된 매니페스트를 고치면(대상 끼워 넣기) 서명이 틀려 거부
+    await runProtectSteps(root, { buildDir: 'dist', quiet: true });
+    const mine = verifiedBackups(root).ok.pop();
+    const manPath = path.join(mine, '_manifest.json');
+    const man = JSON.parse(fs.readFileSync(manPath, 'utf8'));
+    ok('매니페스트에 서명·buildDir·version 2', typeof man.sig === 'string' && man.sig.length === 64 && man.buildDir === 'dist' && man.version === 2);
+    fs.writeFileSync(manPath, JSON.stringify({ ...man, files: [...man.files, '.git/config'] }));
+    const rt = restoreBackup(root, mine, { force: true });
+    ok('고친 매니페스트는 --force 여도 거부(badSignature)', rt.refused === 'badSignature' && read(root, '.git/config') === GITCFG);
+    fs.writeFileSync(manPath, JSON.stringify(man));
+    // 다른 프로젝트로 옮긴 서명 백업도 거부
+    const other = mkRepo();
+    fs.mkdirSync(path.join(other, '.dorms-check', 'backup'), { recursive: true });
+    fs.cpSync(mine, path.join(other, '.dorms-check', 'backup', path.basename(mine)), { recursive: true });
+    ok('다른 프로젝트로 옮긴 서명 백업은 거부', restoreBackup(other, path.join(other, '.dorms-check', 'backup', path.basename(mine))).refused === 'badSignature');
+    // 다른 열쇠(다른 컴퓨터·다른 사용자)로 서명한 백업도 거부
+    const savedHome = process.env.DORMS_CHECK_CONFIG_HOME;
+    process.env.DORMS_CHECK_CONFIG_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dcheck-key2-'));
+    ok('다른 열쇠로는 서명이 안 맞음', restoreBackup(root, mine).refused === 'badSignature');
+    process.env.DORMS_CHECK_CONFIG_HOME = savedHome;
+    ok('원래 열쇠로는 정상 복원', !restoreBackup(root, mine).refused && read(root, 'dist/index.html') === before);
+
+    // 열쇠 파일: 0600, 링크면 거부
+    const keyFile = path.join(process.env.DORMS_CHECK_CONFIG_HOME, 'backup.key');
+    ok('열쇠 파일 0600', (fs.statSync(keyFile).mode & 0o777) === 0o600 && backupKey().length === 32);
+    const lh = fs.mkdtempSync(path.join(os.tmpdir(), 'dcheck-key3-'));
+    fs.writeFileSync(path.join(lh, 'real.key'), 'x'.repeat(40));
+    fs.symlinkSync(path.join(lh, 'real.key'), path.join(lh, 'backup.key'));
+    process.env.DORMS_CHECK_CONFIG_HOME = lh;
+    let threw = false; try { backupKey(); } catch { threw = true; }
+    process.env.DORMS_CHECK_CONFIG_HOME = savedHome;
+    ok('링크된 열쇠 파일 거부', threw);
+
+    // 허용 목록
+    ok('허용: 루트 안내 파일·public/usage.html·빌드 폴더 아래', ['AGENTS.md', 'CLAUDE.md', 'dorms.json', 'LICENSE', 'public/usage.html', 'dist/index.html', 'dist/.well-known/tdmrep.json'].every(x => restoreTargetAllowed(x, 'dist')));
+    ok('거부: .git·.github·.vscode·.husky·package.json·루트 점 파일·빌드 밖', ['.git/config', '.github/workflows/x.yml', '.vscode/tasks.json', '.husky/pre-commit', 'package.json', 'dist/package.json', '.npmrc', '.env', 'src/app.js', '../x', '.dorms-check/rights-profile.json'].every(x => !restoreTargetAllowed(x, 'dist')));
+    ok('거부: 빌드 폴더가 .git 이나 .. 이면 그 아래도', !restoreTargetAllowed('.git/config', '.git') && !restoreTargetAllowed('x/y', '..'));
+    fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(other, { recursive: true, force: true });
+  }
+
+  console.log('\n[F13] 다른 트랙의 상태 쓰기·설정 글자(2차 F2)');
+  {
+    const CLI = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', 'bin', 'dcheck.js');
+    const base = tmp();
+    const outside = path.join(base, 'outside'); fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'zshrc_fake'), 'ORIGINAL RC\n');
+    const root = path.join(base, 'repo'); fs.mkdirSync(root);
+    site(root, '<!doctype html><html><head></head><body></body></html>');
+    fs.writeFileSync(path.join(root, 'dorms-check.config.json'), JSON.stringify({ app: { name: 'x\ntouch PWNED\n', url: '' }, tracks: ['security'] }));
+    fs.mkdirSync(path.join(root, '.dorms-check'));
+    fs.symlinkSync('../../outside/zshrc_fake', path.join(root, '.dorms-check', 'REPORT.md'));
+    const sc = spawnSync(process.execPath, [CLI, 'scan', '--code-only'], { cwd: root, env: { ...process.env, NO_COLOR: '1' }, encoding: 'utf8' });
+    ok(`scan: 상태 폴더 안 링크면 멈춤 (exit ${sc.status}), 밖 파일 그대로`, sc.status !== 0 && read(outside, 'zshrc_fake') === 'ORIGINAL RC\n');
+    fs.unlinkSync(path.join(root, '.dorms-check', 'REPORT.md'));
+    const sc2 = spawnSync(process.execPath, [CLI, 'scan', '--code-only'], { cwd: root, env: { ...process.env, NO_COLOR: '1' }, encoding: 'utf8' });
+    const rep = fs.existsSync(path.join(root, '.dorms-check', 'REPORT.md')) ? read(root, '.dorms-check/REPORT.md') : '';
+    ok(`링크 없으면 scan 동작, 리포트에 독립된 명령 줄 없음 (exit ${sc2.status})`, rep.length > 0 && !/^touch PWNED$/m.test(rep) && rep.includes('x touch PWNED'));
+    ok('loadConfig: 앱 이름·주소를 한 줄로', loadConfig(root).app.name === 'x touch PWNED');
+    // 개별 쓰기 함수도 링크를 따라가지 않는다(검사를 거치지 않는 호출 대비)
+    fs.rmSync(path.join(root, '.dorms-check', 'state.json'), { force: true });
+    fs.symlinkSync('../../outside/zshrc_fake', path.join(root, '.dorms-check', 'state.json'));
+    let threw = false; try { saveState(root, { version: 1 }); } catch { threw = true; }
+    ok('saveState: state.json 링크 거부', threw && read(outside, 'zshrc_fake') === 'ORIGINAL RC\n');
+    fs.unlinkSync(path.join(root, '.dorms-check', 'state.json'));
+    fs.rmSync(path.join(root, '.dorms-check', 'rights-profile.json'), { force: true });
+    fs.symlinkSync('../../outside/zshrc_fake', path.join(root, '.dorms-check', 'rights-profile.json'));
+    threw = false; try { writeRightsProfile(root, buildRightsProfileFromAnswers({ ...BASE })); } catch { threw = true; }
+    ok('writeRightsProfile(interview): 프로필 링크 거부', threw && read(outside, 'zshrc_fake') === 'ORIGINAL RC\n');
+    fs.unlinkSync(path.join(root, '.dorms-check', 'rights-profile.json'));
+    fs.rmSync(path.join(root, 'dorms-check.config.json'));
+    fs.symlinkSync('../outside/zshrc_fake', path.join(root, 'dorms-check.config.json'));
+    threw = false; try { writeConfig(root, { app: { name: 'a' } }); } catch { threw = true; }
+    ok('writeConfig: 설정 파일 링크 거부', threw && read(outside, 'zshrc_fake') === 'ORIGINAL RC\n');
+    // interview CLI 도 상태 폴더 링크에서 멈춤
+    fs.unlinkSync(path.join(root, 'dorms-check.config.json'));
+    fs.writeFileSync(path.join(root, 'answers.json'), JSON.stringify(BASE));
+    fs.rmSync(path.join(root, '.dorms-check', 'review.json'), { force: true });
+    fs.symlinkSync('../../outside/zshrc_fake', path.join(root, '.dorms-check', 'review.json'));
+    const iv = spawnSync(process.execPath, [CLI, 'interview', '--answers', 'answers.json'], { cwd: root, env: { ...process.env, NO_COLOR: '1' }, encoding: 'utf8' });
+    ok(`interview: 상태 폴더 안 링크면 멈춤 (exit ${iv.status})`, iv.status !== 0 && read(outside, 'zshrc_fake') === 'ORIGINAL RC\n');
+    void execFileSync;
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  console.log('\n[F14] 권고 R1(::ffff:0:0/96)·R4(이름 꺾쇠)');
+  {
+    ok('::ffff:0:7f00:1(SIIT 127.0.0.1) 막음', isBlockedAddress('::ffff:0:7f00:1') && isBlockedAddress('::ffff:0:a00:1'));
+    ok('::ffff:0: 공개 IPv4 는 통과', !isBlockedAddress('::ffff:0:5db8:d822'));
+    const p = buildRightsProfileFromAnswers({ ...BASE });
+    p.rightsholder.displayName = '<img src=x onerror=alert(1)>';
+    ok('검증기: 이름의 < > 거부', !validateRightsProfile(p).ok);
+    p.rightsholder.displayName = '홍길동'; p.appName = 'a > b';
+    ok('검증기: 앱 이름의 < > 거부', !validateRightsProfile(p).ok);
+    const q = buildRightsProfileFromAnswers({ ...BASE, displayName: '<b>홍길동</b>', appName: '분수<script>' });
+    ok('설문 답의 꺾쇠는 지워 저장(검증 통과)', !/[<>]/.test(q.rightsholder.displayName + q.appName) && validateRightsProfile(q).ok);
   }
 
   console.log(`\n결과: ${pass} pass, ${fail} fail`);

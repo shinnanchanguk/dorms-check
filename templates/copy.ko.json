@@ -221,7 +221,14 @@
       "kept": "적용한 뒤 직접 고친 파일이라 그대로 둔 것 {n}개: {files} (원본으로 덮으려면 --force)",
       "blockRestored": "안내 블록만 되돌리고 선생님이 쓴 내용은 남긴 파일: {files}",
       "older": "이전 적용 백업이 {n}개 더 있어요. 처음 상태까지 모두 되돌리려면 dcheck protect restore --all 을 쓰세요.",
-      "all": "백업 {n}개를 최근 것부터 차례로 되돌렸어요."
+      "all": "백업 {n}개를 최근 것부터 차례로 되돌렸어요.",
+      "ignoredUnverified": "이 컴퓨터의 dorms-check 가 만들었다고 확인되지 않은 백업 {n}개는 고르지 않았어요(남이 저장소에 넣어 둔 것일 수 있어요).",
+      "refused": {
+        "badSignature": "{from}: 이 컴퓨터의 dorms-check 가 만든 백업이 아니에요(서명이 맞지 않음). 복원하지 않았어요.",
+        "unsigned": "{from}: 서명이 없는 백업이라 복원하지 않았어요. 예전 판 dorms-check 로 직접 만든 백업이 확실하면 --force 를 붙이세요(그래도 .git·package.json 같은 파일은 되돌리지 않아요).",
+        "legacy": "{from}: 예전 형식 백업이라 선생님이 나중에 고친 내용을 가려낼 수 없어 복원하지 않았어요. 확실하면 --force 를 붙이세요."
+      },
+      "rejectedTargets": "보호 단계가 쓰지 않는 자리라 되돌리지 않은 파일 {n}개: {files}"
     },
     "unsafeWrite": "{file} 은(는) {reason} 읽거나 쓰지 않았어요. 이 저장소를 만든 사람이 넣어 둔 것일 수 있으니 확인한 뒤 다시 실행해 주세요.",
     "unsafeWriteReason": {
@@ -239,7 +246,8 @@
     "licenseConflict": "이미 있는 LICENSE 는 \"허락 없이 수정 불가\" 내용인데 이 앱의 이용 범위는 출처를 남기면 고쳐 쓰기 허용이에요. 둘이 어긋나니 LICENSE 를 고쳐 쓰거나, 지우고 다시 적용하면 이용 범위에 맞는 LICENSE 를 만들어요.",
     "licenseAllowedCreated": "LICENSE 생성: 이용 범위(출처를 남기면 고쳐 쓰기 허용)에 맞춘 허락 문구. 내용을 읽고 필요하면 고쳐 쓰세요.",
     "robotsUserFetchersAllowed": "robots.txt: 사용자가 부탁해 읽는 AI 도우미 {n}종은 막지 않았어요(출처 안내를 읽을 수 있게).",
-    "robotsUserFetchersBlocked": "robots.txt: 사용자가 부탁해 읽는 AI 도우미도 막았어요. 이 경우 AI 도우미는 주소에서 출처 안내를 못 읽어요(interview 에서 바꿀 수 있어요)."
+    "robotsUserFetchersBlocked": "robots.txt: 사용자가 부탁해 읽는 AI 도우미도 막았어요. 이 경우 AI 도우미는 주소에서 출처 안내를 못 읽어요(interview 에서 바꿀 수 있어요).",
+    "unsafeStateDir": ".dorms-check 폴더 안에 다른 곳을 가리키는 연결(심볼릭 링크)이나 보통 파일이 아닌 항목이 있어 결과를 쓰지 않습니다. 그 항목을 지우고 다시 실행하세요."
   },
   "compare": {
     "title": "복제 의심 주소 대조 기록",
