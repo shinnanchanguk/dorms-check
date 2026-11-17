@@ -21,6 +21,8 @@ import { runProtectSteps, runProtectVerify, resolveBuildDir, saveProtectState, l
 import { restoreBackup, verifiedBackups, assertStateDirSafe, safeWrite, withinRoot } from '../core/util.js';
 import { verifyBuild } from '../protect/verify-static.js';
 import { compareSuspect } from '../protect/compare.js';
+import { fetchLiveProvenance } from '../protect/live.js';
+import { provenanceFacts } from '../core/usage-policy.js';
 import { loadRightsProfile } from '../core/rights-profile.js';
 import { t } from '../core/copy.js';
 import { applyEdzipPlan, buildEdzipPlan, prepareCouncilDocuments, writeEdzipPlan } from '../core/edzip-autopilot.js';
@@ -64,7 +66,7 @@ function help() {
   log.plain('  dcheck protect apply --plan-sha256 <값> --confirm-apply');
   log.plain('  dcheck protect restore [--from <경로>|--all] [--force]  적용 전 백업 복원');
   log.plain('  dcheck protect compare --url <의심 주소>      복제 의심 주소에서 내 출처 표식·빌드 지문 찾기(기록 저장)');
-  log.plain('  dcheck verify                              앱 보호 적용 전후 산출물 비교');
+  log.plain('  dcheck verify [--url <운영 주소>]           앱 보호 적용 전후 산출물 비교(+운영 주소에서 안내 확인)');
   log.plain('');
   log.plain('  심층 점검(정밀 보안 감사, 요청할 때만):');
   log.plain('  dcheck audit plan [--profile quick|standard|deep] [--scope <경로,경로>] [--budget <N>]');
@@ -160,8 +162,15 @@ async function runScan() {
       results.push({ id, status: value.status, observed: value.evidence || '(AI 판단)', evidence: { aiJudgment: value } });
     }
   }
+  // 0.5.2: 보호 점검은 주소가 있으면 운영 사이트에서 출처 안내가 실제로 보이는지 직접 확인한다.
+  let live = null;
+  if (tracks.includes('protection') && !codeOnly) {
+    if (!json) log.step('운영 주소에서 출처 안내 확인');
+    try { live = await fetchLiveProvenance(url, { allowLocal: flag('allow-local'), provenanceId: provenanceFacts(loadRightsProfile(root)).provenanceId }); }
+    catch (error) { live = { ok: false, reason: String(error?.message || error) }; }
+  }
   for (const track of TRACKS) {
-    if (tracks.includes(track.id) && track.collect) results.push(...track.collect({ results, review, config: cfg, root }));
+    if (tracks.includes(track.id) && track.collect) results.push(...track.collect({ results, review, config: cfg, root, live }));
   }
 
   const scan = { reachable, items: results, raw };
@@ -529,7 +538,7 @@ function runProtectRestore() {
 }
 
 // verify: 적용 전후 산출물 정적 검사 비교.
-function runVerify() {
+async function runVerify() {
   const cfg = loadConfig(root);
   const plan = loadPlan(root);
   const buildDir = resolveBuildDir(root, (plan && plan.buildDir) || cfg?.protection?.buildDir);
@@ -547,6 +556,26 @@ function runVerify() {
   } else {
     log.ok(`정적 검증 통과${v.warnings ? color.dim(` (주의 ${v.warnings}건)`) : ''}.`);
   }
+  // 0.5.2: --url 이 있으면 운영 주소에서 안내가 실제로 보이는지도 확인한다(서버가 다시 빌드하면 사라질 수 있다).
+  const url = opt('url', '');
+  if (url) await printLiveProvenance(url);
+  else log.plain(color.dim('  ' + t('cli.verifyLiveHint')));
+}
+
+async function printLiveProvenance(url) {
+  log.title(t('cli.liveTitle', { url }));
+  let r;
+  try { r = await fetchLiveProvenance(url, { allowLocal: flag('allow-local'), provenanceId: provenanceFacts(loadRightsProfile(root)).provenanceId }); }
+  catch (error) { r = { ok: false, reason: String(error?.message || error) }; }
+  if (!r.ok) { log.warn('  ' + t('cli.liveUnreachable', { reason: r.reason || 'network' })); return r; }
+  const rows = [
+    ['llms', r.llms], ['robots', r.robotsBlock], ['tdm', r.tdm], ['dormsJson', r.dormsJson],
+    ['usage', r.usage], ['html', r.html], ['footer', r.footer], ['jsHeader', r.jsHeader],
+  ];
+  for (const [k, v] of rows) (v ? log.ok : log.warn)('  ' + t('cli.liveItem.' + k) + ': ' + (v ? t('cli.liveYes') : t('cli.liveNo')));
+  if (!r.llms || !r.usage || !r.robotsBlock) log.warn('  ' + t('cli.liveMissingHint'));
+  if (!r.jsHeader) log.plain(color.dim('  ' + t('cli.liveJsHint')));
+  return r;
 }
 
 // protect compare: 복제 의심 주소의 공개 파일에서 내 출처 표식·빌드 지문을 찾아 기록한다(그 주소를 바꾸지 않음).
@@ -810,7 +839,7 @@ async function main() {
     case 'edzip': await runEdzipCmd(); break;
     case 'audit': await runAuditCmd(); break;
     case 'hooks': runHooksCmd(); break;
-    case 'verify': runVerify(); break;
+    case 'verify': await runVerify(); break;
     case 'status': runStatus(); break;
     case 'report': runReport(); break;
     case 'submit': runSubmit(); break;

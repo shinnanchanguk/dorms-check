@@ -70,9 +70,9 @@ export async function buildProtectionPlan(root, { config } = {}) {
     serverMoveCandidates: serverMoveCandidates.slice(0, 50),
     risks: [
       '빌드 산출물의 HTML·JS 를 수정하므로, 적용 후 반드시 verify 로 깨짐을 확인해야 합니다.',
-      '빌드를 다시 하면 적용이 사라집니다(빌드 후 재적용 필요).',
+      '빌드 결과에 넣은 것(JS·CSS 머리 주석 등)은 다시 빌드하면 사라집니다. public/ 과 HTML 원본(index.html 등)에 넣은 안내는 남으니, 그 파일들을 저장소에 함께 올리고 배포 뒤 verify --url <운영 주소> 로 확인하세요.',
       'robots.txt 차단·고지는 지키지 않는 수집기에게는 효력이 없습니다(완전 보호 아님).',
-      '출처 안내는 빌드 결과 말고도 프로젝트 맨 위 AGENTS.md·CLAUDE.md·dorms.json, public/usage.html 을 만들거나 고칩니다(표식 사이만 바꾸고 선생님 내용은 보존).',
+      '출처 안내는 빌드 결과 말고도 프로젝트 맨 위 AGENTS.md·CLAUDE.md·dorms.json, public/ 폴더(usage.html·llms.txt·robots.txt·dorms.json·.well-known/tdmrep.json), HTML 원본(index.html·public/index.html·src/app.html 중 있는 것)을 만들거나 고칩니다(표식 사이만 바꾸고 선생님 내용은 보존).',
       '화면 맨 아래에 작은 출처 줄이 보입니다. 원하지 않으면 interview 에서 끄거나 설정 protection.provenance.visibleFooter 를 false 로 두세요.',
       plan_riskLicense(rightsProfile),
       ...dry.steps.flatMap(s => s.warnings || []),

@@ -247,7 +247,30 @@
     "licenseAllowedCreated": "LICENSE 생성: 이용 범위(출처를 남기면 고쳐 쓰기 허용)에 맞춘 허락 문구. 내용을 읽고 필요하면 고쳐 쓰세요.",
     "robotsUserFetchersAllowed": "robots.txt: 사용자가 부탁해 읽는 AI 도우미 {n}종은 막지 않았어요(출처 안내를 읽을 수 있게).",
     "robotsUserFetchersBlocked": "robots.txt: 사용자가 부탁해 읽는 AI 도우미도 막았어요. 이 경우 AI 도우미는 주소에서 출처 안내를 못 읽어요(interview 에서 바꿀 수 있어요).",
-    "unsafeStateDir": ".dorms-check 폴더 안에 다른 곳을 가리키는 연결(심볼릭 링크)이나 보통 파일이 아닌 항목이 있어 결과를 쓰지 않습니다. 그 항목을 지우고 다시 실행하세요."
+    "unsafeStateDir": ".dorms-check 폴더 안에 다른 곳을 가리키는 연결(심볼릭 링크)이나 보통 파일이 아닌 항목이 있어 결과를 쓰지 않습니다. 그 항목을 지우고 다시 실행하세요.",
+    "clauseDropped": "덧붙인 조건 가운데 AI 에게 일을 시키는 문장은 이용 안내에 싣지 않았어요: \"{clause}\". 사람에게 하는 부탁으로 고쳐 쓰면 실려요.",
+    "rebuildKept": "다시 빌드해도 남도록 {where} 에도 같은 안내를 넣었어요. 이 파일들을 저장소에 함께 올려야 서버에서 다시 빌드해도 남아요.",
+    "rebuildNoSource": "public/ 폴더나 HTML 원본(index.html)을 찾지 못해 빌드 결과에만 안내를 넣었어요. Vercel·Netlify 처럼 서버가 다시 빌드하는 배포라면 안내가 사라지니, 빌드 폴더를 그대로 올리거나 배포한 뒤 dcheck verify --url <운영 주소> 로 확인하세요.",
+    "rebuildJsHeader": "JS·CSS 맨 위 머리 주석은 빌드 결과에만 붙어서, 서버가 다시 빌드하면 사라져요. 남기려면 README 의 '다시 빌드해도 머리 주석 남기기'를 보세요.",
+    "licensePermissiveConflict": "저장소의 라이선스가 누구나 고쳐 쓰고 다시 퍼뜨려도 된다는 허용형({license})인데, 이 앱의 이용 안내는 '먼저 허락'이에요. 베끼는 사람의 AI 도 둘이 어긋난다고 봐요. 라이선스를 바꾸거나 이용 범위를 고쳐 둘을 맞춰 주세요(dorms-check 는 라이선스를 바꾸지 않아요).",
+    "licenseHolderMismatch": "LICENSE 의 저작권자({holder})와 안내에 적힌 원작자({creator})가 달라요. 같은 사람이면 한쪽 표기를 맞춰 주세요.",
+    "verifyLiveHint": "배포한 뒤에는 dcheck verify --url <운영 주소> 로 운영 사이트에서도 안내가 보이는지 확인하세요.",
+    "liveTitle": "운영 주소에서 안내 확인: {url}",
+    "liveUnreachable": "운영 주소를 열지 못해 확인하지 못했어요({reason}).",
+    "liveItem": {
+      "llms": "llms.txt",
+      "robots": "robots.txt AI 수집기 차단",
+      "tdm": "TDM 예약(.well-known/tdmrep.json)",
+      "dormsJson": "dorms.json 출처 정보",
+      "usage": "이용 안내 화면(usage.html)",
+      "html": "첫 화면 HTML 안내",
+      "footer": "화면 바닥 출처 줄",
+      "jsHeader": "JS·CSS 머리 주석"
+    },
+    "liveYes": "있음",
+    "liveNo": "없음",
+    "liveMissingHint": "운영 사이트에 빠진 안내가 있어요. 서버가 다시 빌드하는 배포라면 0.5.2 로 다시 적용해 public/ 에 들어간 파일까지 저장소에 올린 뒤 배포하세요.",
+    "liveJsHint": "머리 주석이 없는 것은 서버가 다시 빌드할 때 흔한 일이에요. 다른 안내(llms.txt·이용 안내 화면·HTML 안내)가 있으면 출처 안내는 살아 있어요."
   },
   "compare": {
     "title": "복제 의심 주소 대조 기록",
@@ -265,8 +288,12 @@
       "creator": "만든 사람 이름이 들어 있음",
       "bundleExact": "내 빌드 파일과 똑같은 파일(지문 일치)",
       "bundleStripped": "머리 주석만 지운 똑같은 파일(지문 일치)",
-      "dormsJson": "dorms.json 의 출처 정보 일치"
-    }
+      "dormsJson": "dorms.json 의 출처 정보 일치",
+      "bundleOld": "내 예전 판 빌드 파일과 똑같은 파일(지난 판 지문 일치)",
+      "bundleSimilar": "내 빌드 파일과 많이 겹치는 파일(조각 일치 비율)"
+    },
+    "skippedCommon": "프레임워크 공통 조각이라 대조에서 뺀 파일",
+    "truncated": "8MB 를 넘어 앞부분만 받음"
   },
   "sourceLineNoDorms": {
     "text": "{creatorTitle} 앱",

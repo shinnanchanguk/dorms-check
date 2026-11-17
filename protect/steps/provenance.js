@@ -77,20 +77,23 @@ export const provenanceStep = {
     // 2) 바닥 출처 줄(HTML). 이용 안내 화면 자신에는 넣지 않는다.
     //    화면 바탕이 grid·가로 flex·넘침 숨김이면 줄이 화면을 깨거나 안 보이므로 넣지 않고 알린다.
     let footerCount = 0;
-    for (const file of walk(buildFull, { exts: ['.html', '.htm'] })) {
+    // 다시 빌드할 때 출발점이 되는 HTML 원본에도 같은 줄을 넣는다(주소는 같은 폴더 기준).
+    const templates = new Set(((ctx.mirror && ctx.mirror.htmlTemplates) || []).map(p => path.resolve(p)));
+    for (const file of [...walk(buildFull, { exts: ['.html', '.htm'] }), ...templates]) {
       if (path.resolve(file) === path.resolve(usageBuild)) continue;
       const src = readTextSafe(file);
       if (src === null) continue;
       const rel = path.relative(root, file);
+      const isTemplate = templates.has(path.resolve(file));
       let want = visibleFooter;
       if (want && !forceFooter) {
-        const risk = bodyLayoutRisk(src, linkedCss(src, file, buildFull, readTextSafe));
+        const risk = bodyLayoutRisk(src, isTemplate ? '' : linkedCss(src, file, buildFull, readTextSafe));
         if (risk) {
           want = false;
           out.warnings.push(t('layoutRisk.footerSkipped', { file: rel, reason: t('layoutRisk.' + risk), sourceLine: f.sourceLine, scope: t('footer.scope.' + jsCaseKey(f)) }));
         }
       }
-      const block = `${FOOTER_START}\n${footerHtml(f, usageHref(src, file, buildFull, usageBuild))}\n${FOOTER_END}`;
+      const block = `${FOOTER_START}\n${footerHtml(f, isTemplate ? USAGE_FILE : usageHref(src, file, buildFull, usageBuild))}\n${FOOTER_END}`;
       const s = src.indexOf(FOOTER_START);
       const e = src.indexOf(FOOTER_END);
       let next;
@@ -103,7 +106,7 @@ export const provenanceStep = {
         next = want ? insertBeforeBodyClose(src, block) : src;
       }
       if (next !== src) { ctx.io.write(file, next); out.changed.push(rel); }
-      if (want) footerCount++;
+      if (want && !isTemplate) footerCount++;
     }
 
     // 3) JS·CSS 머리 주석(소스맵·외부 라이브러리·#! 로 시작하는 파일은 건너뜀).
@@ -139,6 +142,21 @@ export const provenanceStep = {
     const json = JSON.stringify(dormsJson(f, PKG.version), null, 2) + '\n';
     writeIfChanged(ctx, path.join(buildFull, 'dorms.json'), json, out, { mark: DORMS_JSON_MARK });
     writeIfChanged(ctx, path.join(root, 'dorms.json'), json, out, { mark: DORMS_JSON_MARK });
+    if (ctx.mirror && ctx.mirror.publicDir) writeIfChanged(ctx, path.join(ctx.mirror.publicDir, 'dorms.json'), json, out, { mark: DORMS_JSON_MARK });
+
+    // 덧붙인 조건 가운데 AI 에게 시키는 문장은 이용 안내에 싣지 않았다고 알린다.
+    for (const c of f.droppedClauses || []) out.warnings.push(t('cli.clauseDropped', { clause: c.length > 80 ? c.slice(0, 80) + '…' : c }));
+
+    // 다시 빌드해도 남는 자리 안내: public/·HTML 원본에 넣었는지, 머리 주석은 다시 빌드하면 사라진다는 사실.
+    const m = ctx.mirror || {};
+    if (m.publicDir || (m.htmlTemplates || []).length) {
+      out.notes.push(t('cli.rebuildKept', {
+        where: [m.publicDir ? path.relative(root, m.publicDir) + '/' : null, ...(m.htmlTemplates || []).map(p => path.relative(root, p))].filter(Boolean).join(', '),
+      }));
+    } else {
+      out.warnings.push(t('cli.rebuildNoSource'));
+    }
+    if (jsCount) out.notes.push(t('cli.rebuildJsHeader'));
 
     const caseLabel = f.case === 'allowed' ? t('permissionValues.allowed') : f.case === 'prohibited' ? t('permissionValues.prohibited') : t('permissionValues.permission_required');
     out.notes.push(t('cli.provenanceNoteChannels', { js: jsCount, footer: footerCount }));

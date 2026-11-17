@@ -54,28 +54,32 @@ export const noticeStep = {
       `<meta name="ai-policy" content="${policy}; attribution-required; see /llms.txt">\n` +
       `<meta name="dorms-check-provenance" content="${escapeHtml(f.provenanceId)}">\n` +
       HEAD_END;
-    const bodyBlock = (file, src) => `${BODY_START}\n` +
+    const bodyBlock = (file, src, hrefOverride) => `${BODY_START}\n` +
       `<aside data-dorms-check-notice aria-label="${escapeHtml(t('aiNotice.asideLabel'))}" ` +
       `style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;` +
       `clip:rect(0 0 0 0);white-space:normal;border:0">${escapeHtml(notice)} ` +
-      `<a href="${escapeHtml(usageHref(src, file, buildFull, path.join(buildFull, USAGE_FILE)))}">${escapeHtml(USAGE_FILE)}</a></aside>\n` +
+      `<a href="${escapeHtml(hrefOverride || usageHref(src, file, buildFull, path.join(buildFull, USAGE_FILE)))}">${escapeHtml(USAGE_FILE)}</a></aside>\n` +
       BODY_END;
 
     let skipped = 0, legacy = 0;
     const usagePage = path.resolve(buildFull, USAGE_FILE);
-    for (const file of files) {
+    // 빌드 결과 HTML + 다시 빌드할 때 출발점이 되는 HTML 원본(Vite index.html 등). 원본은 사이트 맨 위에 놓이므로
+    // 이용 안내 화면 주소를 같은 폴더 기준(usage.html)으로 적는다.
+    const templates = new Set(((ctx.mirror && ctx.mirror.htmlTemplates) || []).map(p => path.resolve(p)));
+    for (const file of [...files, ...templates]) {
       if (path.resolve(file) === usagePage) continue; // 이용 안내 화면은 출처 안내 단계가 통째로 만든다
       const src = readTextSafe(file);
       if (src === null) continue;
+      const href = templates.has(path.resolve(file)) ? USAGE_FILE : null;
       let out;
       if (src.includes(HEAD_START) || src.includes(BODY_START)) {
         out = replaceBetween(src, HEAD_START, HEAD_END, headBlock) ?? src;
-        out = replaceBetween(out, BODY_START, BODY_END, bodyBlock(file, src)) ?? out;
+        out = replaceBetween(out, BODY_START, BODY_END, bodyBlock(file, src, href)) ?? out;
       } else if (hasMarker(src, MARKER)) {
         legacy++; continue; // 예전 판이 넣은 고지: 다시 빌드하면 새 형식으로 들어간다
       } else {
         out = insertInHead(src, headBlock);
-        out = insertBeforeBodyClose(out, bodyBlock(file, src));
+        out = insertBeforeBodyClose(out, bodyBlock(file, src, href));
       }
       if (out === src) { skipped++; continue; } // 멱등
       ctx.io.write(file, out);
@@ -83,19 +87,23 @@ export const noticeStep = {
     }
 
     // llms.txt: 우리가 만든 것(마커 포함)만 갱신하고, 사용자가 직접 만든 것은 보존한다.
-    const llmsPath = path.join(buildFull, 'llms.txt');
+    // 빌드 결과와 public/ 둘 다에 둔다(public/ 은 다시 빌드해도 그대로 복사된다).
     const newLlms = llmsContent(f, LLMS_MARK);
-    const curLlms = exists(llmsPath) ? readTextSafe(llmsPath) : null;
-    if (curLlms === null) {
-      ctx.io.write(llmsPath, newLlms);
-      created.push(path.relative(root, llmsPath));
-    } else if (curLlms.includes(LLMS_MARK)) {
-      if (curLlms !== newLlms) {
+    const llmsDirs = [buildFull, ctx.mirror && ctx.mirror.publicDir].filter(Boolean);
+    for (const dir of llmsDirs) {
+      const llmsPath = path.join(dir, 'llms.txt');
+      const curLlms = exists(llmsPath) ? readTextSafe(llmsPath) : null;
+      if (curLlms === null) {
         ctx.io.write(llmsPath, newLlms);
-        changed.push(path.relative(root, llmsPath));
+        created.push(path.relative(root, llmsPath));
+      } else if (curLlms.includes(LLMS_MARK)) {
+        if (curLlms !== newLlms) {
+          ctx.io.write(llmsPath, newLlms);
+          changed.push(path.relative(root, llmsPath));
+        }
+      } else {
+        notes.push(t('cli.notice.llmsKept'));
       }
-    } else {
-      notes.push(t('cli.notice.llmsKept'));
     }
 
     notes.push(t('cli.notice.channels', { html: changed.filter(c => c.endsWith('.html') || c.endsWith('.htm')).length, case: f.case }));

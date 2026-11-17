@@ -283,7 +283,12 @@ export function manifestStatus(man, root, backupDir) {
 // .git·.dorms-check·편집기·CI 설정·package.json·루트의 점 파일은 서명과 상관없이 늘 거부한다.
 const DENY_SEGMENTS = new Set(['.git', '.dorms-check', '.github', '.vscode', '.husky', '.idea', 'node_modules']);
 const DENY_BASENAMES = new Set(['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', '.npmrc']);
-const ROOT_TARGETS = new Set(['AGENTS.md', 'CLAUDE.md', 'dorms.json', 'LICENSE', 'public/usage.html']);
+// 0.5.2: 다시 빌드해도 남게 public/ 과 HTML 원본(index.html · public/index.html · src/app.html)에도 쓴다.
+const ROOT_TARGETS = new Set([
+  'AGENTS.md', 'CLAUDE.md', 'dorms.json', 'LICENSE', 'public/usage.html',
+  'public/llms.txt', 'public/robots.txt', 'public/dorms.json', 'public/.well-known/tdmrep.json',
+  'index.html', 'public/index.html', 'src/app.html',
+]);
 // 대소문자를 가리지 않는 파일 체계(macOS·Windows)에서 .GIT 같은 이름이 거부 목록을 빠져나가지 않게
 // 비교 전에 유니코드 정규화(NFKC)와 소문자로 맞춘다. 끝의 점·공백(Windows 가 떼어 냄)도 지운다.
 function foldSeg(x) { return String(x).normalize('NFKC').toLowerCase().replace(/[. ]+$/, ''); }

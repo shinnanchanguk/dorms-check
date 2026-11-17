@@ -4,6 +4,7 @@
 // 정직한 한계: 표식이 없다고 복제가 아니라는 뜻이 아니고(새로 다시 만든 복제엔 남지 않는다),
 // 표식이 있다고 침해가 확정되는 것도 아니다. 법률 자문이 아니다.
 import path from 'node:path';
+import { readdirSync as fsReaddir } from 'node:fs';
 import net from 'node:net';
 import dns from 'node:dns';
 import http from 'node:http';
@@ -12,10 +13,21 @@ import { walk, readTextSafe, readJsonSafe, safeWrite, assertStateDirSafe, sha256
 import { t } from '../core/copy.js';
 import { provenanceFacts } from '../core/usage-policy.js';
 import { JS_HEADER_PREFIX, stripJsHeader } from './provenance-text.js';
+import { isVendorFile } from './steps/provenance.js';
 
 const MAX_ASSETS = 25;
 const MAX_REDIRECTS = 5;
-const MAX_BODY = 2 * 1024 * 1024;
+// 0.5.2: 큰 번들도 통째로 대조하도록 2MB → 8MB. 넘으면 '일부만 받음'으로 적고 통째 지문은 비교하지 않는다.
+const MAX_BODY = 8 * 1024 * 1024;
+// 0.5.2: 이름을 밝히는 요청 머리를 쓰면 그 요청에만 빈 화면을 주는 식으로 속일 수 있어 보통 브라우저처럼 요청한다.
+export const BROWSER_HEADERS = {
+  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'accept-language': 'ko-KR,ko;q=0.9,en;q=0.8',
+};
+const SIMILAR_MIN = 0.5; // 내 파일 조각의 절반 이상이 그 파일에 있으면 '많이 겹침'으로 적는다
+const HISTORY_DIR = path.join('.dorms-check', 'protect', 'integrity-history');
+const MAX_HISTORY = 60;
 const TIMEOUT_MS = 15000;        // 요청 하나(이어받는 시간 포함 전체)
 const TOTAL_TIMEOUT_MS = 90000;  // 대조 한 번 전체
 
@@ -132,7 +144,7 @@ function pinnedGet(u, pinned, timeoutMs = TIMEOUT_MS) {
     const req = mod.request({
       protocol: u.protocol, hostname: normalizeHost(u.hostname), port: u.port || undefined,
       path: u.pathname + u.search, method: 'GET', lookup, servername: net.isIP(normalizeHost(u.hostname)) ? undefined : normalizeHost(u.hostname),
-      headers: { 'user-agent': 'dorms-check-compare', accept: '*/*', host: u.host },
+      headers: { ...BROWSER_HEADERS, host: u.host },
       timeout: Math.max(1, timeoutMs), agent: false,
     }, res => {
       const chunks = []; let total = 0; let truncated = false;
@@ -157,14 +169,15 @@ function pinnedGet(u, pinned, timeoutMs = TIMEOUT_MS) {
 async function fetchOnce(u, pinned, fetchImpl, timeoutMs) {
   if (!fetchImpl) return pinnedGet(u, pinned, timeoutMs);
   try {
-    const res = await fetchImpl(u.href, { redirect: 'manual' });
-    const text = (await res.text()).slice(0, MAX_BODY);
-    return { ok: true, status: res.status, headers: { location: res.headers.get('location') || undefined }, body: text };
+    const res = await fetchImpl(u.href, { redirect: 'manual', headers: BROWSER_HEADERS });
+    const full = await res.text();
+    const truncated = full.length > MAX_BODY;
+    return { ok: true, status: res.status, headers: { location: res.headers.get('location') || undefined }, body: truncated ? full.slice(0, MAX_BODY) : full, truncated };
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
 // 넘겨주기(redirect)를 한 번씩 직접 따라가며, 매번 주소 글자와 풀린 IP 를 다시 검사한다.
-async function fetchChecked(href, { allowLocal, fetchImpl, lookupImpl, deadline, requestTimeoutMs = TIMEOUT_MS }) {
+export async function fetchChecked(href, { allowLocal, fetchImpl, lookupImpl, deadline, requestTimeoutMs = TIMEOUT_MS }) {
   let cur = href;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const left = deadline ? deadline - Date.now() : requestTimeoutMs;
@@ -204,22 +217,79 @@ export function assetUrls(html, base) {
   return [...out];
 }
 
-// 내 빌드 파일 지문: 그대로의 지문 + 머리 주석을 뗀 지문.
+// 프레임워크가 모든 앱에 똑같이 넣는 작은 공통 조각(Vite modulepreload polyfill·preload helper·웹팩 실행 조각 등).
+// 이런 파일이 같다고 내 앱의 복제본이라고 볼 수 없으니 지문 대조에서 뺀다(0.5.2, 회원 검토 허점 5).
+const COMMON_NAME_RE = /(modulepreload-polyfill|preload-helper|__vite|vite[-_]?(?:browser|env|client)|webpack-runtime|webpack\b|runtime[.~-]|polyfills?[.-]|framework[.-]|main-app[.-]|_buildManifest|_ssgManifest|react-refresh|turbopack)/i;
+const COMMON_BODY_RE = [
+  /\.supports\(["']modulepreload["']\)/,           // Vite modulepreload polyfill
+  /__vitePreload|"modulepreload"\s*,\s*\w+\s*=\s*function/, // Vite preload helper
+  /webpackChunk[\w$]*\s*=\s*self\.webpackChunk/,
+];
+export function isCommonChunk(rel, body) {
+  const name = String(rel || '').split(/[\\/]/).pop();
+  if (isVendorFile(String(rel || '')) || COMMON_NAME_RE.test(name)) return true;
+  const b = String(body || '');
+  return b.length < 6000 && COMMON_BODY_RE.some(re => re.test(b));
+}
+
+// 부분 일치용 조각 지문: 머리 주석을 떼고 문장 단위(; { } 줄바꿈)로 자른 뒤, 이웃한 조각 4개씩 묶어 해시한다.
+// 압축된 코드는 조각 하나가 짧아서 묶어야 우연한 일치가 줄어든다. 한 글자를 바꾸면 그 근처 묶음 몇 개만 달라지므로,
+// 통째 지문이 어긋나도 얼마나 같은지 비율로 말할 수 있다.
+const SHINGLE = 4;
+export function chunkPrints(body) {
+  const out = new Set();
+  const text = stripJsHeader(String(body || '')).replace(/\s+/g, ' ');
+  const pieces = [];
+  for (const piece of text.split(/[;{}\n]/)) {
+    const p = piece.trim();
+    if (p) pieces.push(p);
+    if (pieces.length >= 200000) break;
+  }
+  for (let i = 0; i + SHINGLE <= pieces.length; i++) {
+    const w = pieces.slice(i, i + SHINGLE).join(';');
+    if (w.length >= 40) out.add(sha256(w).slice(0, 16));
+    if (out.size >= 50000) break;
+  }
+  return out;
+}
+
+// 판마다 지문을 쌓는다: protect apply 마다 integrity-history/<시각>.json 이 하나씩 남는다(지우지 않는다).
+export function loadIntegrityHistory(root) {
+  const dir = path.join(root, HISTORY_DIR);
+  if (!exists(dir)) return [];
+  let names = [];
+  try { names = fsReaddir(dir).filter(n => /^[\w.-]+\.json$/.test(n)).sort(); } catch { return []; }
+  return names.slice(-MAX_HISTORY).map(n => readJsonSafe(path.join(dir, n))).filter(x => x && x.files && typeof x.files === 'object');
+}
+
+// 내 빌드 파일 지문: 그대로의 지문 + 머리 주석을 뗀 지문 + 지난 판 지문 + 부분 일치용 조각 지문.
 export function localFingerprints(root, buildFull) {
   const raw = new Map();
   const stripped = new Map();
+  const old = new Map();     // 지난 판에만 있던 지문 → { rel, at }
+  const chunks = [];         // [{ rel, prints:Set }]
   if (buildFull && exists(buildFull)) {
     for (const f of walk(buildFull, { exts: ['.js', '.mjs', '.cjs', '.css'] })) {
       const c = readTextSafe(f);
       if (c === null || c.length < 200) continue; // 아주 작은 파일은 우연히 같을 수 있어 뺀다
       const rel = path.relative(buildFull, f);
+      if (isCommonChunk(rel, c)) continue;
       raw.set(sha256(c), rel);
       stripped.set(sha256(stripJsHeader(c)), rel);
+      const prints = chunkPrints(c);
+      if (prints.size >= 5) chunks.push({ rel, prints });
     }
   }
   const integ = readJsonSafe(path.join(root, '.dorms-check', 'protect', 'integrity.json'));
-  if (integ && integ.files) for (const [rel, h] of Object.entries(integ.files)) if (/\.(m?js|cjs|css)$/.test(rel) && !raw.has(h)) raw.set(h, rel);
-  return { raw, stripped };
+  const histories = [...loadIntegrityHistory(root), ...(integ && integ.files ? [integ] : [])];
+  for (const h of histories) {
+    for (const [rel, hash] of Object.entries(h.files)) {
+      if (!/\.(m?js|cjs|css)$/.test(rel) || isCommonChunk(rel, '')) continue;
+      if (h.common && h.common.includes(rel)) continue;
+      if (!raw.has(hash) && !old.has(hash)) old.set(hash, { rel, at: h.at || '' });
+    }
+  }
+  return { raw, stripped, old, chunks };
 }
 
 export async function compareSuspect(root, { url, buildFull, rightsProfile, allowLocal = false, fetchImpl, lookupImpl, now = new Date(), requestTimeoutMs = TIMEOUT_MS, totalTimeoutMs = TOTAL_TIMEOUT_MS } = {}) {
@@ -242,7 +312,7 @@ export async function compareSuspect(root, { url, buildFull, rightsProfile, allo
   const assets = [];
   for (const a of assetUrls(page.body || '', finalBase)) {
     const r = await get(a);
-    if (r.ok && r.status === 200 && r.body) { assets.push({ url: a, body: r.body }); texts.push({ where: 'asset', url: a, body: r.body }); }
+    if (r.ok && r.status === 200 && r.body) { assets.push({ url: a, body: r.body, truncated: Boolean(r.truncated) }); texts.push({ where: 'asset', url: a, body: r.body, truncated: Boolean(r.truncated) }); }
   }
 
   const fp = localFingerprints(root, buildFull);
@@ -259,16 +329,32 @@ export async function compareSuspect(root, { url, buildFull, rightsProfile, allo
       if (j && (j.provenanceId === f.provenanceId || (f.dormsUrl && j.app && j.app.dormsUrl === f.dormsUrl))) add('dormsJson', x.url);
     }
   }
+  const skippedCommon = [];
   for (const a of assets) {
-    const h = sha256(a.body);
-    if (fp.raw.has(h)) add('bundleExact', `${a.url} = ${fp.raw.get(h)}`);
-    else {
+    // 프레임워크 공통 조각은 어느 앱에나 똑같이 있으니 대조하지 않는다.
+    if (isCommonChunk(new URL(a.url).pathname, a.body)) { skippedCommon.push(a.url); continue; }
+    if (!a.truncated) {
+      const h = sha256(a.body);
+      if (fp.raw.has(h)) { add('bundleExact', `${a.url} = ${fp.raw.get(h)}`); continue; }
       const hs = sha256(stripJsHeader(a.body));
-      if (fp.stripped.has(hs)) add('bundleStripped', `${a.url} = ${fp.stripped.get(hs)}`);
+      if (fp.stripped.has(hs)) { add('bundleStripped', `${a.url} = ${fp.stripped.get(hs)}`); continue; }
+      const o = fp.old.get(h) || fp.old.get(hs);
+      if (o) { add('bundleOld', `${a.url} = ${o.rel} (${o.at.slice(0, 10)})`); continue; }
     }
+    // 통째로 같지 않으면 조각이 얼마나 겹치는지 본다(일부만 받은 큰 파일도 받은 만큼으로 본다).
+    const theirs = chunkPrints(a.body);
+    if (theirs.size < 5) continue;
+    let best = null;
+    for (const mine of fp.chunks) {
+      let same = 0;
+      for (const x of mine.prints) if (theirs.has(x)) same++;
+      const ratio = same / mine.prints.size;
+      if (!best || ratio > best.ratio) best = { rel: mine.rel, ratio };
+    }
+    if (best && best.ratio >= SIMILAR_MIN) add('bundleSimilar', `${a.url} ≈ ${best.rel} (${Math.round(best.ratio * 100)}%)`);
   }
 
-  const allIds = Object.keys({ provenanceId: 1, markerHtml: 1, markerJs: 1, dormsUrl: 1, creator: 1, bundleExact: 1, bundleStripped: 1, dormsJson: 1 });
+  const allIds = Object.keys({ provenanceId: 1, markerHtml: 1, markerJs: 1, dormsUrl: 1, creator: 1, bundleExact: 1, bundleStripped: 1, bundleOld: 1, bundleSimilar: 1, dormsJson: 1 });
   const foundIds = new Set(signals.map(s => s.id));
   const record = {
     at: now.toISOString(),
@@ -276,8 +362,9 @@ export async function compareSuspect(root, { url, buildFull, rightsProfile, allo
     finalUrl: finalBase.href,
     status: page.status,
     provenanceId: f.provenanceId,
-    fetched: texts.map(x => ({ where: x.where, url: x.url, sha256: sha256(x.body), bytes: x.body.length })),
+    fetched: texts.map(x => ({ where: x.where, url: x.url, sha256: sha256(x.body), bytes: x.body.length, ...(x.truncated ? { truncated: true } : {}) })),
     signals,
+    skippedCommon,
     notFound: allIds.filter(id => !foundIds.has(id)).map(id => ({ id, label: t('compare.signals.' + id) })),
   };
 
@@ -300,8 +387,9 @@ export async function compareSuspect(root, { url, buildFull, rightsProfile, allo
     `## ${t('compare.notFound')}`,
     ...record.notFound.map(s => `- ${s.label}`),
     '',
+    ...(skippedCommon.length ? [`## ${t('compare.skippedCommon')}`, ...skippedCommon.map(u => `- ${u}`), ''] : []),
     '## sha256',
-    ...record.fetched.map(x => `- ${x.where} ${x.url} ${x.sha256}`),
+    ...record.fetched.map(x => `- ${x.where} ${x.url} ${x.sha256}${x.truncated ? ' (' + t('compare.truncated') + ')' : ''}`),
     '',
     t('compare.honest'),
     '',

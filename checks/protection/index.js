@@ -2,7 +2,9 @@
 // 판정 원칙: 확인 전에는 보수적으로(공개로 가정). 빌드 산출물이 없으면 pending(빌드 후 재스캔).
 // ai 판단 항목(server·output-leak·api-abuse·app-footer 등)은 여기서 pending seed 만 하고 judge 가 채운다.
 import path from 'node:path';
-import { exists, walk, readTextSafe, readJsonSafe } from '../../core/util.js';
+import { exists, walk, readTextSafe, readJsonSafe, sha256 } from '../../core/util.js';
+import { detectLicense, licenseConflict } from '../../core/license.js';
+import { provenanceFacts } from '../../core/usage-policy.js';
 import { detectStack } from '../../core/detect.js';
 import { SECRET_PATTERNS } from '../static/secrets.js';
 import { PROTECTION_ITEMS } from '../../catalog/protection.js';
@@ -165,19 +167,46 @@ function checkSeparation(root, build) {
     { hits: srcFiles.slice(0, 20).map(f => ({ file: path.relative(root, f), line: 0, kind: '소스 파일' })) });
 }
 
-function checkIntegrity(root) {
-  const id = 'protection.release.integrity';
+// 적용 때 남긴 지문과 지금 빌드 결과를 비교한다. 다시 빌드했으면 예전 기록은 '낡음'이다(0.5.2).
+export function integrityDrift(root, build) {
   const p = path.join(root, PROTECT_DIR, 'integrity.json');
   const integ = exists(p) ? readJsonSafe(p) : null;
+  if (!integ || !integ.files || !build) return { integ, changed: 0, missing: 0, total: 0 };
+  let changed = 0, missing = 0, total = 0;
+  for (const [rel, h] of Object.entries(integ.files)) {
+    total++;
+    const c = readTextSafe(path.join(build.full, rel));
+    if (c === null) missing++;
+    else if (sha256(c) !== h) changed++;
+  }
+  return { integ, changed, missing, total };
+}
+
+function checkIntegrity(root, build) {
+  const id = 'protection.release.integrity';
+  const d = integrityDrift(root, build);
+  const integ = d.integ;
   const count = integ && integ.files ? Object.keys(integ.files).length : 0;
+  if (count && (d.changed || d.missing)) {
+    return item(id, 'pending', `기록이 낡았어요: 적용 뒤 다시 빌드해 ${d.changed + d.missing}/${d.total}개 파일이 달라졌어요(protect plan 부터 다시)`, { count, changed: d.changed, missing: d.missing, stale: true });
+  }
   return item(id, count ? 'pass' : 'pending',
     count ? `산출물 지문 ${count}개 파일 기록됨(${integ.at || ''})` : '아직 지문 기록 없음(protect apply 로 생성)',
     count ? { count } : {});
 }
 
-function checkNoticeVisible(root, build) {
+// 운영 주소 결과(live)가 있으면 그것이 우선이다. 빌드 결과에만 있고 운영에 없으면 '서버가 다시 빌드했을 수 있다'로 알린다.
+function liveNote(live) {
+  if (!live) return '';
+  if (!live.ok) return ` · 운영 주소는 확인 못 함(${live.reason || '연결 실패'})`;
+  return '';
+}
+
+function checkNoticeVisible(root, build, live, lic) {
   const id = 'protection.notice.visible';
-  const hasLicense = exists(path.join(root, 'LICENSE')) || exists(path.join(root, 'LICENSE.md'));
+  const conflict = lic.conflict;
+  // 허용형 라이선스(MIT 등)가 '먼저 허락' 안내와 어긋나면 LICENSE 를 권리 안내로 세지 않는다(0.5.2).
+  const hasLicense = (exists(path.join(root, 'LICENSE')) || exists(path.join(root, 'LICENSE.md'))) && !conflict.permissive;
   let marked = false;
   if (build) {
     for (const f of walk(build.full, { exts: ['.html', '.htm'], maxFiles: 200 })) {
@@ -185,13 +214,32 @@ function checkNoticeVisible(root, build) {
       if (s && s.includes('dorms-check:notice')) { marked = true; break; }
     }
   }
+  if (live && live.ok) {
+    const liveMarked = Boolean(live.html || live.footer || live.usage);
+    if (liveMarked) {
+      return item(id, 'pass', `운영 주소에서 권리 안내 확인(${[live.html ? '페이지 안내' : null, live.footer ? '바닥 출처 줄' : null, live.usage ? '이용 안내 화면' : null].filter(Boolean).join(' · ')})`, { live: live.url });
+    }
+    if (marked) {
+      return item(id, 'fail', '내 컴퓨터의 빌드 결과에는 안내가 있지만 운영 주소에는 없어요(서버가 다시 빌드하면 public/ 밖의 안내는 사라져요. 0.5.2 로 다시 적용한 뒤 배포하세요)', { live: live.url });
+    }
+  }
+  if (conflict.permissive && !marked) {
+    return item(id, 'fail', `LICENSE 가 누구나 고쳐 쓰고 다시 퍼뜨려도 된다는 허용형(${conflict.label})인데 이용 안내는 '먼저 허락'이에요. 둘 중 하나를 맞춰 주세요`);
+  }
   const ok = hasLicense || marked;
   return item(id, ok ? 'pass' : 'pending',
-    ok ? `권리 안내 있음(${[hasLicense ? 'LICENSE' : null, marked ? '페이지 안내' : null].filter(Boolean).join(' · ')})` : '아직 사람이 읽는 권리 안내 없음(interview 후 protect apply)');
+    (ok ? `권리 안내 있음(${[hasLicense ? 'LICENSE' : null, marked ? '페이지 안내' : null].filter(Boolean).join(' · ')})` : '아직 사람이 읽는 권리 안내 없음(interview 후 protect apply)') + liveNote(live));
 }
 
-function checkNoticeMachine(root, build) {
+function checkNoticeMachine(root, build, live) {
   const id = 'protection.notice.machine-readable';
+  if (live && live.ok) {
+    const found = [live.robotsBlock ? 'robots.txt AI 차단' : null, live.llms ? 'llms.txt' : null, live.tdm ? 'TDM 예약' : null].filter(Boolean);
+    const ok = found.length >= 2;
+    return item(id, ok ? 'pass' : 'fail',
+      ok ? `운영 주소에서 기계용 안내 확인(${found.join(' · ')})` : `운영 주소에 기계용 안내가 ${found.length ? '일부만 있어요(' + found.join(' · ') + ')' : '없어요'}. public/ 에 넣어 다시 배포하세요`,
+      { live: live.url });
+  }
   if (!build) return pendingNoBuild(id);
   const robots = readTextSafe(path.join(build.full, 'robots.txt'));
   const hasRobotsBlock = Boolean(robots && robots.includes('# dorms-check'));
@@ -200,7 +248,17 @@ function checkNoticeMachine(root, build) {
   const found = [hasRobotsBlock ? 'robots.txt AI 차단' : null, hasLlms ? 'llms.txt' : null, hasTdm ? 'TDM 예약' : null].filter(Boolean);
   const ok = found.length >= 2; // robots 블록 + llms.txt(또는 TDM) 조합이면 설정으로 본다
   return item(id, ok ? 'pass' : 'pending',
-    ok ? `기계용 안내 있음(${found.join(' · ')})` : (found.length ? `일부만 있음(${found.join(' · ')}) — protect apply 로 마저 생성` : '아직 기계용 안내 없음(protect apply 로 생성)'));
+    (ok ? `기계용 안내 있음(${found.join(' · ')}, 내 컴퓨터 빌드 기준)` : (found.length ? `일부만 있음(${found.join(' · ')}) — protect apply 로 마저 생성` : '아직 기계용 안내 없음(protect apply 로 생성)')) + liveNote(live));
+}
+
+function checkLicenseConsistency(lic) {
+  const id = 'protection.rights.license-consistency';
+  const c = lic.conflict;
+  if (!c.permissive && !c.holderMismatch) return null; // 어긋남이 없으면 interview 답(declared)을 그대로 둔다
+  const parts = [];
+  if (c.permissive) parts.push(`허용형 라이선스(${c.label})가 '먼저 허락' 이용 안내와 어긋나요`);
+  if (c.holderMismatch) parts.push(`LICENSE 저작권자(${lic.info.holder})와 안내의 원작자(${lic.facts.creator}) 이름이 달라요`);
+  return item(id, c.permissive ? 'fail' : 'pending', parts.join(' · '), { license: lic.info.name || lic.info.pkgLicense || null });
 }
 
 function checkEvidence(root) {
@@ -216,11 +274,14 @@ function checkEvidence(root) {
   return [manifest, timestamp];
 }
 
-function checkVerifyFunctional(root) {
+function checkVerifyFunctional(root, build) {
   const id = 'protection.verify.functional';
   const st = readJsonSafe(path.join(root, PROTECT_DIR, 'state.json'));
   if (!st || !st.lastApply) return item(id, 'pending', '아직 보호 적용 전(protect apply 후 verify)');
   if (!st.lastVerify) return item(id, 'pending', '적용 후 검증 전(dcheck verify 실행 필요)');
+  // 0.5.2: 적용 뒤 다시 빌드했으면 그 검증 기록은 지금 빌드 결과에 대한 것이 아니다.
+  const d = integrityDrift(root, build);
+  if (d.changed || d.missing) return item(id, 'pending', `검증 기록이 낡았어요: 적용 뒤 다시 빌드해 파일 ${d.changed + d.missing}개가 달라졌어요(protect plan → apply → verify 다시)`, { stale: true });
   const ok = st.lastVerify.errors === 0 && st.lastVerify.at >= st.lastApply.at;
   return item(id, ok ? 'pass' : 'fail',
     ok ? `적용 후 검증 통과(${st.lastVerify.at})` : `검증에서 손상 ${st.lastVerify.errors}건(protect restore 로 복원 가능)`,
@@ -252,9 +313,12 @@ function rightsItems(root) {
 
 // ── 오케스트레이터 ──
 // 반환 항목은 protection 카탈로그 id 만. 이미 results 에 있는 id(judge 판정 등)는 호출측에서 걸러진다.
-export function runProtectionScan(root) {
+export function runProtectionScan(root, { live = null } = {}) {
   const build = buildDirOf(root);
   const items = [];
+  const facts = provenanceFacts(loadRightsProfile(root));
+  const info = detectLicense(root);
+  const lic = { info, facts, conflict: licenseConflict(info, facts) };
   items.push(checkClientSecrets(root, build));
   items.push(checkPromptExposure(root, build));
   items.push(checkWeights(root, build));
@@ -262,11 +326,13 @@ export function runProtectionScan(root) {
   items.push(checkDebug(root, build));
   items.push(checkPrivateIdentifiers(root, build));
   items.push(checkSeparation(root, build));
-  items.push(checkIntegrity(root));
-  items.push(checkNoticeVisible(root, build));
-  items.push(checkNoticeMachine(root, build));
+  items.push(checkIntegrity(root, build));
+  items.push(checkNoticeVisible(root, build, live, lic));
+  items.push(checkNoticeMachine(root, build, live));
+  const lc = checkLicenseConsistency(lic);
+  if (lc) items.push(lc);
   items.push(...checkEvidence(root));
-  items.push(checkVerifyFunctional(root));
+  items.push(checkVerifyFunctional(root, build));
   items.push(...rightsItems(root));
   return { items, buildDir: build ? build.rel : null };
 }

@@ -6,7 +6,7 @@ A minimum inspection tool for teacher-built apps. It reports observed risks, rec
 
 ## Provenance notices (new)
 
-`protect apply` now also plants the original creator's notice wherever a copier's AI reads: a small visible footer source line and an in-app usage page (`usage.html`), a `/*! ... */` header in built JS/CSS, an `AGENTS.md`/`CLAUDE.md` block between markers, `dorms.json`, and a permission-aware `llms.txt`. The notice follows the app's DoRms usage settings (strictest of modify / sourceReuse / redistribute; unset counts as "ask first") and cites Korean Copyright Act articles. It is a polite, factual request, not an enforcement mechanism. `dcheck protect compare --url <suspect>` records which of this app's markers and bundle fingerprints appear on a suspect public URL. All user-facing copy lives in `templates/copy.ko.json`. This supersedes the ai-clone-shield skill. Feature catalogue: `docs/features.ko.json`.
+`protect apply` now also plants the original creator's notice wherever a copier's AI reads: a small visible footer source line and an in-app usage page (`usage.html`), a `/*! ... */` header in built JS/CSS, an `AGENTS.md`/`CLAUDE.md` block between markers, `dorms.json`, and a permission-aware `llms.txt`. The notice follows the app's DoRms usage settings (strictest of modify / sourceReuse / redistribute; unset counts as "ask first") and cites Korean Copyright Act articles. It is a polite, factual request, not an enforcement mechanism. `dcheck protect compare --url <suspect>` records which of this app's markers and bundle fingerprints appear on a suspect public URL. 0.5.2 (from a member's hands-on review): notices are also written to `public/` and the source HTML (Vite `index.html`, CRA `public/index.html`, SvelteKit `src/app.html`) so they survive a server-side rebuild (Vercel, Netlify); the JS/CSS header is added to build output only and disappears on rebuild, so it is no longer described as surviving minification. `dcheck verify --url` and `scan --track protection --url` check the live site directly and mark records stale when the build changed after apply. A permissive LICENSE or `package.json` license (MIT, Apache, BSD, ISC, CC-BY, CC0) that conflicts with an ask-first usage scope is flagged and no longer counts as a rights notice. `protect compare` skips framework common chunks, reads up to 8 MB, keeps per-version fingerprints, sends a normal browser request and reports partial overlap. Added usage conditions that instruct an AI are dropped from the usage page. Limits: a copier who says "I have permission" cannot be verified, and a person can still strip the notices by hand. All user-facing copy lives in `templates/copy.ko.json`. This supersedes the ai-clone-shield skill. Feature catalogue: `docs/features.ko.json`.
 
 ## Inspection and app registration
 
@@ -20,14 +20,14 @@ Council document readiness and official EDZIP verification have separate outcome
 
 ## Start
 
-Use Node.js 18 or newer. These examples pin the `v0.5.1` GitHub release. If your organization reviewed a particular commit, keep using that commit instead.
+Use Node.js 18 or newer. These examples pin the `v0.5.2` GitHub release. If your organization reviewed a particular commit, keep using that commit instead.
 
 ~~~bash
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.1.tar.gz detect
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.1.tar.gz init --name "My App" --url "https://my-app.example" --track security --confirm-ownership
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.1.tar.gz scan --url "https://my-app.example"
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.1.tar.gz status
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.1.tar.gz report
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.2.tar.gz detect
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.2.tar.gz init --name "My App" --url "https://my-app.example" --track security --confirm-ownership
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.2.tar.gz scan --url "https://my-app.example"
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.2.tar.gz status
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.2.tar.gz report
 ~~~
 
 See [USE-WITH-AI.md](./USE-WITH-AI.md) for an assistant prompt. Before deployment, `scan --code-only` inspects local code and leaves public-response checks unknown.

@@ -103,6 +103,32 @@ export function creatorWithTitle(creator) {
   return TITLE_SUFFIX_RE.test(creator) ? creator : t('creator.withTitle', { creator });
 }
 
+// 덧붙인 조건 가운데 AI 에게 일을 시키는 문장은 이용 안내에 싣지 않는다(0.5.2, 회원 검토 허점 11).
+// 이용 안내 화면은 베끼는 사람의 AI 가 읽는 자리라, 조건 칸이 그 AI 에게 명령을 보내는 통로가 되면 안 된다.
+// 사람에게 하는 부탁(예: '학급 밖 행사에서 쓸 때는 미리 알려 주세요')은 그대로 둔다.
+const AI_ADDRESS_RE = /(\bAI\b|에이아이|인공지능|챗봇|어시스턴트|assistant|agent|에이전트|LLM|GPT|Claude|클로드|Codex|코덱스|Gemini|제미나이|copilot|코파일럿|모델\s*(?:에게|께|은|는))/i;
+const AI_COMMAND_RE = /(무시(?:하|해)|ignore\s+(?:all|any|the|previous|prior|above)|disregard|forget\s+(?:all|previous|your)|override|system\s*prompt|시스템\s*프롬프트|지시(?:사항|문)?\s*(?:을|를)?\s*(?:무시|따르지)|명령(?:을|를)?\s*(?:실행|따라)|(?:명령|코드|스크립트)(?:을|를)?\s*실행|\brun\s+(?:this|the|a)\b|execute|curl\s|rm\s+-)/i;
+const EXFIL_RE = /(붙여\s*넣|paste|보내|send\b|upload|업로드|읽어|print|출력|알려\s*(?:줘|주)|공유해|copy|복사)/i;
+const SECRET_TARGET_RE = /(~\/|\.ssh|id_rsa|\.env\b|\.git\b|\/etc\/|passwd|비밀\s*번호|패스워드|password|토큰|token|api[_\s-]?key|키\s*값|secret|자격\s*증명|credential|쿠키|cookie|환경\s*변수)/i;
+export function isAiInstructionClause(value) {
+  const s = String(value || '');
+  if (!s.trim()) return false;
+  if (SECRET_TARGET_RE.test(s) && (EXFIL_RE.test(s) || AI_COMMAND_RE.test(s))) return true;
+  if (AI_ADDRESS_RE.test(s) && AI_COMMAND_RE.test(s)) return true;
+  if (/(ignore|disregard)\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions|prompts?)/i.test(s)) return true;
+  return false;
+}
+export function splitUserClauses(list) {
+  const kept = [];
+  const dropped = [];
+  for (const c of Array.isArray(list) ? list : []) {
+    const line = oneLine(c, 300);
+    if (!line) continue;
+    (isAiInstructionClause(line) ? dropped : kept).push(line);
+  }
+  return { kept: kept.slice(0, 10), dropped };
+}
+
 // 권리 프로필 → 안내를 만드는 데 필요한 사실 묶음(문구 아님).
 export function provenanceFacts(profile, { year = new Date().getFullYear() } = {}) {
   const p = profile || {};
@@ -124,7 +150,8 @@ export function provenanceFacts(profile, { year = new Date().getFullYear() } = {
     contact: oneLine(p.attribution && p.attribution.text, 200),
     attributionRequired: p.attribution ? p.attribution.required !== false : true,
     attributionMethod: oneLine(p.attribution && p.attribution.method, 200),
-    userClauses: Array.isArray(p.userClauses) ? p.userClauses.map(c => oneLine(c, 300)).filter(Boolean).slice(0, 10) : [],
+    userClauses: splitUserClauses(p.userClauses).kept,
+    droppedClauses: splitUserClauses(p.userClauses).dropped,
     preset,
     policyVersion: oneLine(p.policyVersion, 40),
   };

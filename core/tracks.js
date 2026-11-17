@@ -261,8 +261,8 @@ const protectionTrack = {
 
   // 스캔 시 결정적 검사 실행 + ai/declared 미판정 항목 pending seed.
   // 결정적 항목은 judge 자기신고보다 우선한다(결정적 우선 원칙 — 스캔 결과가 review 를 덮는다).
-  collect({ results, root }) {
-    const { items: scanned } = runProtectionScan(root);
+  collect({ results, root, live }) {
+    const { items: scanned } = runProtectionScan(root, { live });
     const AUTHORITATIVE = new Set([
       'protection.boundary.client-secrets', 'protection.boundary.weights',
       'protection.release.sourcemap', 'protection.release.debug', 'protection.release.private-identifiers',
@@ -270,6 +270,7 @@ const protectionTrack = {
       'protection.notice.visible', 'protection.notice.machine-readable',
       'protection.evidence.manifest', 'protection.evidence.timestamp', 'protection.verify.functional',
       'protection.rights.owner-status', 'protection.asset.inventory',
+      'protection.rights.license-consistency', // 결정적 검사는 어긋날 때만 나온다(그때는 자기 신고보다 우선)
     ]);
     const out = [];
     for (const it of scanned) {

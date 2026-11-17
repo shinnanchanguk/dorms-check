@@ -249,7 +249,7 @@ async function run() {
     // 실제 접속 경로(고정 IP 접속): 로컬 서버를 띄워 확인
     const http = await import('node:http');
     let served = 0;
-    const big = 'a'.repeat(3 * 1024 * 1024);
+    const big = 'a'.repeat(9 * 1024 * 1024); // 0.5.2: 상한 8MB
     const srv = http.createServer((req, res) => {
       served++;
       if (req.url === '/big.js') { res.end(big); return; }
@@ -262,7 +262,7 @@ async function run() {
     const allowedReal = await compareSuspect(root, { url: `http://pinned.example:${port}/`, buildFull: path.join(root, 'dist'), rightsProfile: JSON.parse(read(root, '.dorms-check/rights-profile.json')), allowLocal: true, lookupImpl: toLoop });
     const bigRec = allowedReal.ok && allowedReal.record.fetched.find(x => x.url.endsWith('/big.js'));
     ok('실제 접속: --allow-local 이면 확인한 IP 로 접속해 받음', allowedReal.ok && served >= 2);
-    ok('실제 접속: 응답 크기 상한 2MB', bigRec && bigRec.bytes <= 2 * 1024 * 1024);
+    ok('실제 접속: 응답 크기 상한 8MB, 넘으면 일부만 받았다고 기록', bigRec && bigRec.bytes <= 8 * 1024 * 1024 && bigRec.truncated === true);
     srv.close();
     fs.rmSync(root, { recursive: true, force: true });
   }

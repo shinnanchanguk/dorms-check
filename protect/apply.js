@@ -13,6 +13,7 @@ import { noticeStep } from './steps/notice.js';
 import { provenanceStep } from './steps/provenance.js';
 import { legalStep } from './steps/legal.js';
 import { evidenceStep } from './steps/evidence.js';
+import { rebuildTargets } from './mirror.js';
 
 // 실행 순서 고정: 산출물 정리 → 고지 주입 → 출처 안내 → 기계용 안내·무결성 → 증거팩
 // (무결성 지문은 출처 안내까지 들어간 최종 산출물 기준이다)
@@ -80,7 +81,7 @@ export async function runProtectSteps(root, { buildDir, config, dry = false, qui
   const buildFull = path.join(root, buildDir);
   assertSafeTarget(root, path.join(buildFull, '.probe'));
   const backup = dry ? null : createBackup(root, { buildDir });
-  const ctx = { root, buildDir, buildFull, config, rightsProfile, dry, backup, io: makeIo(root, dry, backup) };
+  const ctx = { root, buildDir, buildFull, config, rightsProfile, dry, backup, io: makeIo(root, dry, backup), mirror: rebuildTargets(root, buildFull) };
 
   const results = [];
   for (const step of PROTECT_STEPS) {
