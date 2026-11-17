@@ -172,7 +172,7 @@ export function assertStateDirSafe(root) {
   let seen = 0;
   (function rec(d) {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      if (++seen > 200000) return;
+      if (++seen > 200000) throw new UnsafePathError('.dorms-check', 'toomany');
       const full = path.join(d, e.name);
       const rel = path.relative(root, full);
       if (e.isSymbolicLink()) throw new UnsafePathError(rel, 'symlink');
