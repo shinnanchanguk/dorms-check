@@ -26,7 +26,8 @@ export function rebuildTargets(root, buildFull) {
   if (buildAbs !== rootAbs) {
     if (d.stack === 'cra') add(path.join('public', 'index.html'));
     else if (d.stack === 'sveltekit') add(path.join('src', 'app.html'));
-    else if (['vite', 'vue', 'static', 'unknown'].includes(d.stack)) add('index.html');
+    // 정적 사이트는 다시 빌드하는 단계가 없어 원본 index.html 을 고칠 이유가 없다(검증 F6).
+    else if (['vite', 'vue'].includes(d.stack)) add('index.html');
   }
   return { publicDir, htmlTemplates, stack: d.stack };
 }

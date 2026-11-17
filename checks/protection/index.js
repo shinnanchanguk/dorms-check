@@ -2,6 +2,7 @@
 // 판정 원칙: 확인 전에는 보수적으로(공개로 가정). 빌드 산출물이 없으면 pending(빌드 후 재스캔).
 // ai 판단 항목(server·output-leak·api-abuse·app-footer 등)은 여기서 pending seed 만 하고 judge 가 채운다.
 import path from 'node:path';
+import fs from 'node:fs';
 import { exists, walk, readTextSafe, readJsonSafe, sha256 } from '../../core/util.js';
 import { detectLicense, licenseConflict } from '../../core/license.js';
 import { provenanceFacts } from '../../core/usage-policy.js';
@@ -11,6 +12,7 @@ import { PROTECTION_ITEMS } from '../../catalog/protection.js';
 import { loadRightsProfile, rightsConfirmed } from '../../core/rights-profile.js';
 
 const PROTECT_DIR = path.join('.dorms-check', 'protect');
+const MAX_DRIFT_BYTES = 32 * 1024 * 1024;
 
 // 클라이언트 번들에서 '프롬프트로 보이는' 지시문 후보(결정적 그물 → 최종 판단은 AI judge).
 const PROMPT_MARKERS = [
@@ -173,9 +175,18 @@ export function integrityDrift(root, build) {
   const integ = exists(p) ? readJsonSafe(p) : null;
   if (!integ || !integ.files || !build) return { integ, changed: 0, missing: 0, total: 0 };
   let changed = 0, missing = 0, total = 0;
-  for (const [rel, h] of Object.entries(integ.files)) {
+  const base = path.resolve(build.full);
+  for (const [rel, h] of Object.entries(integ.files).slice(0, 20000)) {
+    // 기록 파일은 저장소에 함께 들어올 수 있는 자료라 믿지 않는다: 빌드 폴더 밖·링크·너무 큰 파일은 읽지 않는다.
+    if (typeof rel !== 'string' || !rel || path.isAbsolute(rel) || rel.split(/[\\/]+/).includes('..')) continue;
+    const file = path.resolve(base, rel);
+    if (!file.startsWith(base + path.sep)) continue;
     total++;
-    const c = readTextSafe(path.join(build.full, rel));
+    let st = null;
+    try { st = fs.lstatSync(file); } catch { st = null; }
+    if (!st) { missing++; continue; }
+    if (!st.isFile() || st.size > MAX_DRIFT_BYTES) continue;
+    const c = readTextSafe(file);
     if (c === null) missing++;
     else if (sha256(c) !== h) changed++;
   }

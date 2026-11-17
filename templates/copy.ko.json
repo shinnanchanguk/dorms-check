@@ -290,7 +290,7 @@
       "bundleStripped": "머리 주석만 지운 똑같은 파일(지문 일치)",
       "dormsJson": "dorms.json 의 출처 정보 일치",
       "bundleOld": "내 예전 판 빌드 파일과 똑같은 파일(지난 판 지문 일치)",
-      "bundleSimilar": "내 빌드 파일과 많이 겹치는 파일(조각 일치 비율)"
+      "bundleSimilar": "내 빌드 파일과 많이 겹치는 파일(조각 일치 비율, 같은 라이브러리만 써도 일부는 겹칠 수 있어요)"
     },
     "skippedCommon": "프레임워크 공통 조각이라 대조에서 뺀 파일",
     "truncated": "8MB 를 넘어 앞부분만 받음"

@@ -8,7 +8,8 @@
 //   TDM opt-out 은 EU 내 효력이 명확하고, "AI 학습 금지" 조항의 집행력은 판례로 확립되지 않았다.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { walk, readText, readTextSafe, readJsonSafe, exists, safeWrite, sha256 } from '../../core/util.js';
+import fs from 'node:fs';
+import { walk, readText, readTextSafe, readJsonSafe, exists, safeWrite, safeUnlink, sha256 } from '../../core/util.js';
 import { fill } from '../html.js';
 import { rightsConfirmed } from '../../core/rights-profile.js';
 import { provenanceFacts } from '../../core/usage-policy.js';
@@ -100,8 +101,6 @@ export const legalStep = {
       // 이용 범위가 '출처를 남기면 고쳐 쓰기 허용'인데 LICENSE 가 전부 금지면 AI·사람이 헷갈린다(알리기만 한다).
       const cur = readTextSafe(licPath) || '';
       if (f.case === 'allowed' && cur.includes(PROPRIETARY_MARK)) notes.push(t('cli.licenseConflict'));
-    } else if (detectLicense(root).pkgPermissive && !rightsConfirmed(rightsProfile)) {
-      notes.push('권리관계가 아직 확인되지 않아 LICENSE 를 만들지 않음(interview 로 확인 후 다시 apply).');
     } else if (!rightsConfirmed(rightsProfile)) {
       notes.push('권리관계가 아직 확인되지 않아 LICENSE 를 만들지 않음(interview 로 확인 후 다시 apply).');
     } else if (f.case === 'allowed') {
@@ -146,7 +145,13 @@ export const legalStep = {
       safeWrite(root, path.join(root, '.dorms-check', 'protect', 'integrity.json'), body);
       // 0.5.2: 판마다 지문을 쌓아 앱을 고친 뒤에도 예전 판 사본을 찾을 수 있게 한다(덮어쓰지 않는다).
       const stamp = integ.at.replace(/[:.]/g, '-');
-      safeWrite(root, path.join(root, '.dorms-check', 'protect', 'integrity-history', `${stamp}.json`), body);
+      const histDir = path.join(root, '.dorms-check', 'protect', 'integrity-history');
+      safeWrite(root, path.join(histDir, `${stamp}.json`), body);
+      // 너무 많이 쌓이지 않게 최근 60개만 남긴다(대조도 최근 60개까지만 읽는다).
+      try {
+        const all = fs.readdirSync(histDir).filter(n => /^[\w.-]+\.json$/.test(n)).sort();
+        for (const old of all.slice(0, Math.max(0, all.length - 60))) safeUnlink(root, path.join(histDir, old));
+      } catch { /* 정리는 실패해도 적용은 계속 */ }
     }
     notes.push(`무결성 매니페스트: ${files.length}개 파일 해시 기록(.dorms-check/protect/integrity.json).`);
     notes.push('정직: 저작권은 창작 즉시 발생하나 구제 절차는 관할권별로 다르고, TDM opt-out 은 EU 내 효력이며, AI 학습 금지 조항의 집행력은 판례로 확립되지 않았습니다.');

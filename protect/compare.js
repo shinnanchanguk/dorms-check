@@ -4,7 +4,7 @@
 // 정직한 한계: 표식이 없다고 복제가 아니라는 뜻이 아니고(새로 다시 만든 복제엔 남지 않는다),
 // 표식이 있다고 침해가 확정되는 것도 아니다. 법률 자문이 아니다.
 import path from 'node:path';
-import { readdirSync as fsReaddir } from 'node:fs';
+import { readdirSync as fsReaddir, lstatSync as fsLstat } from 'node:fs';
 import net from 'node:net';
 import dns from 'node:dns';
 import http from 'node:http';
@@ -25,7 +25,9 @@ export const BROWSER_HEADERS = {
   accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'accept-language': 'ko-KR,ko;q=0.9,en;q=0.8',
 };
-const SIMILAR_MIN = 0.5; // 내 파일 조각의 절반 이상이 그 파일에 있으면 '많이 겹침'으로 적는다
+// 내 파일 조각의 85% 이상이 그 파일에 있으면 '많이 겹침'으로 적는다. React 처럼 번들에 함께 들어가는 라이브러리만
+// 같아도 서로 다른 두 앱이 60% 안팎 겹쳤다(검증 실측). 그래서 문턱을 높이고, 기록에도 같은 라이브러리만으로 겹칠 수 있다고 적는다.
+const SIMILAR_MIN = 0.85;
 const HISTORY_DIR = path.join('.dorms-check', 'protect', 'integrity-history');
 const MAX_HISTORY = 60;
 const TIMEOUT_MS = 15000;        // 요청 하나(이어받는 시간 포함 전체)
@@ -129,7 +131,7 @@ export async function resolveSafe(hostname, { allowLocal = false, lookupImpl = d
 }
 
 // 확인한 IP 로만 접속한다(확인과 접속 사이에 DNS 가 바뀌어도 그 IP 로 간다). 크기·시간 상한.
-function pinnedGet(u, pinned, timeoutMs = TIMEOUT_MS) {
+function pinnedGet(u, pinned, timeoutMs = TIMEOUT_MS, maxBody = MAX_BODY) {
   return new Promise(resolve => {
     let settled = false;
     const finish = v => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
@@ -151,7 +153,7 @@ function pinnedGet(u, pinned, timeoutMs = TIMEOUT_MS) {
       res.on('data', c => {
         if (truncated) return;
         total += c.length;
-        if (total > MAX_BODY) { truncated = true; chunks.push(c.subarray(0, c.length - (total - MAX_BODY))); res.destroy(); return; }
+        if (total > maxBody) { truncated = true; chunks.push(c.subarray(0, c.length - (total - maxBody))); res.destroy(); return; }
         chunks.push(c);
       });
       const done = () => finish({ ok: true, status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8'), truncated });
@@ -166,18 +168,18 @@ function pinnedGet(u, pinned, timeoutMs = TIMEOUT_MS) {
 }
 
 // 테스트용 fetchImpl 이 있으면 그것으로 받되, 주소 검사(이름 풀기 포함)는 똑같이 한다.
-async function fetchOnce(u, pinned, fetchImpl, timeoutMs) {
-  if (!fetchImpl) return pinnedGet(u, pinned, timeoutMs);
+async function fetchOnce(u, pinned, fetchImpl, timeoutMs, maxBody = MAX_BODY) {
+  if (!fetchImpl) return pinnedGet(u, pinned, timeoutMs, maxBody);
   try {
     const res = await fetchImpl(u.href, { redirect: 'manual', headers: BROWSER_HEADERS });
     const full = await res.text();
-    const truncated = full.length > MAX_BODY;
-    return { ok: true, status: res.status, headers: { location: res.headers.get('location') || undefined }, body: truncated ? full.slice(0, MAX_BODY) : full, truncated };
+    const truncated = full.length > maxBody;
+    return { ok: true, status: res.status, headers: { location: res.headers.get('location') || undefined }, body: truncated ? full.slice(0, maxBody) : full, truncated };
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
 // 넘겨주기(redirect)를 한 번씩 직접 따라가며, 매번 주소 글자와 풀린 IP 를 다시 검사한다.
-export async function fetchChecked(href, { allowLocal, fetchImpl, lookupImpl, deadline, requestTimeoutMs = TIMEOUT_MS }) {
+export async function fetchChecked(href, { allowLocal, fetchImpl, lookupImpl, deadline, requestTimeoutMs = TIMEOUT_MS, maxBody = MAX_BODY }) {
   let cur = href;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const left = deadline ? deadline - Date.now() : requestTimeoutMs;
@@ -186,7 +188,7 @@ export async function fetchChecked(href, { allowLocal, fetchImpl, lookupImpl, de
     if (!p.ok) return { ok: false, error: p.reason };
     const pinned = await resolveSafe(p.url.hostname, { allowLocal, lookupImpl });
     if (!pinned.ok) return { ok: false, error: pinned.reason };
-    const r = await fetchOnce(p.url, pinned, fetchImpl, Math.min(requestTimeoutMs, left));
+    const r = await fetchOnce(p.url, pinned, fetchImpl, Math.min(requestTimeoutMs, left), maxBody);
     if (!r.ok) return r;
     const loc = r.headers && r.headers.location;
     if (r.status >= 300 && r.status < 400 && loc) {
@@ -225,11 +227,14 @@ const COMMON_BODY_RE = [
   /__vitePreload|"modulepreload"\s*,\s*\w+\s*=\s*function/, // Vite preload helper
   /webpackChunk[\w$]*\s*=\s*self\.webpackChunk/,
 ];
+export function isCommonBody(body) {
+  const b = String(body || '');
+  return b.length < 6000 && COMMON_BODY_RE.some(re => re.test(b));
+}
 export function isCommonChunk(rel, body) {
   const name = String(rel || '').split(/[\\/]/).pop();
   if (isVendorFile(String(rel || '')) || COMMON_NAME_RE.test(name)) return true;
-  const b = String(body || '');
-  return b.length < 6000 && COMMON_BODY_RE.some(re => re.test(b));
+  return isCommonBody(body);
 }
 
 // 부분 일치용 조각 지문: 머리 주석을 떼고 문장 단위(; { } 줄바꿈)로 자른 뒤, 이웃한 조각 4개씩 묶어 해시한다.
@@ -238,12 +243,13 @@ export function isCommonChunk(rel, body) {
 const SHINGLE = 4;
 export function chunkPrints(body) {
   const out = new Set();
-  const text = stripJsHeader(String(body || '')).replace(/\s+/g, ' ');
+  const text = stripJsHeader(String(body || '')).slice(0, 4 * 1024 * 1024).replace(/\s+/g, ' ');
   const pieces = [];
-  for (const piece of text.split(/[;{}\n]/)) {
-    const p = piece.trim();
+  const re = /[^;{}\n]+/g;
+  let m;
+  while ((m = re.exec(text)) && pieces.length < 200000) {
+    const p = m[0].trim();
     if (p) pieces.push(p);
-    if (pieces.length >= 200000) break;
   }
   for (let i = 0; i + SHINGLE <= pieces.length; i++) {
     const w = pieces.slice(i, i + SHINGLE).join(';');
@@ -259,7 +265,12 @@ export function loadIntegrityHistory(root) {
   if (!exists(dir)) return [];
   let names = [];
   try { names = fsReaddir(dir).filter(n => /^[\w.-]+\.json$/.test(n)).sort(); } catch { return []; }
-  return names.slice(-MAX_HISTORY).map(n => readJsonSafe(path.join(dir, n))).filter(x => x && x.files && typeof x.files === 'object');
+  // 저장소에 함께 들어온 기록일 수 있으니 링크·보통 파일 아님·너무 큰 파일은 읽지 않는다(보안 검토 C2).
+  return names.slice(-MAX_HISTORY).map(n => {
+    const p = path.join(dir, n);
+    try { const st = fsLstat(p); if (!st.isFile() || st.size > 4 * 1024 * 1024) return null; } catch { return null; }
+    return readJsonSafe(p);
+  }).filter(x => x && x.files && typeof x.files === 'object');
 }
 
 // 내 빌드 파일 지문: 그대로의 지문 + 머리 주석을 뗀 지문 + 지난 판 지문 + 부분 일치용 조각 지문.
@@ -285,7 +296,6 @@ export function localFingerprints(root, buildFull) {
   for (const h of histories) {
     for (const [rel, hash] of Object.entries(h.files)) {
       if (!/\.(m?js|cjs|css)$/.test(rel) || isCommonChunk(rel, '')) continue;
-      if (h.common && h.common.includes(rel)) continue;
       if (!raw.has(hash) && !old.has(hash)) old.set(hash, { rel, at: h.at || '' });
     }
   }
@@ -295,6 +305,7 @@ export function localFingerprints(root, buildFull) {
 export async function compareSuspect(root, { url, buildFull, rightsProfile, allowLocal = false, fetchImpl, lookupImpl, now = new Date(), requestTimeoutMs = TIMEOUT_MS, totalTimeoutMs = TOTAL_TIMEOUT_MS } = {}) {
   const parsed = parseSuspectUrl(url, { allowLocal });
   if (!parsed.ok) return { ok: false, reason: parsed.reason };
+  assertStateDirSafe(root); // 지문 기록을 읽기 전에 상태 폴더부터 확인한다(링크가 있으면 멈춘다)
   const base = parsed.url;
   const f = provenanceFacts(rightsProfile);
   const deadline = Date.now() + totalTimeoutMs;
@@ -331,8 +342,11 @@ export async function compareSuspect(root, { url, buildFull, rightsProfile, allo
   }
   const skippedCommon = [];
   for (const a of assets) {
-    // 프레임워크 공통 조각은 어느 앱에나 똑같이 있으니 대조하지 않는다.
-    if (isCommonChunk(new URL(a.url).pathname, a.body)) { skippedCommon.push(a.url); continue; }
+    // 프레임워크 공통 조각(내용으로 확인한 것)은 어느 앱에나 똑같이 있으니 대조하지 않는다.
+    // 이름만 공통 조각처럼 생긴 파일은 이름을 바꿔 피할 수 있으니 통째 지문은 그대로 비교하고 조각 비율만 건너뛴다.
+    const bodyCommon = isCommonBody(a.body);
+    const nameCommon = !bodyCommon && isCommonChunk(new URL(a.url).pathname, '');
+    if (bodyCommon) { skippedCommon.push(a.url); continue; }
     if (!a.truncated) {
       const h = sha256(a.body);
       if (fp.raw.has(h)) { add('bundleExact', `${a.url} = ${fp.raw.get(h)}`); continue; }
@@ -341,6 +355,7 @@ export async function compareSuspect(root, { url, buildFull, rightsProfile, allo
       const o = fp.old.get(h) || fp.old.get(hs);
       if (o) { add('bundleOld', `${a.url} = ${o.rel} (${o.at.slice(0, 10)})`); continue; }
     }
+    if (nameCommon) { skippedCommon.push(a.url); continue; }
     // 통째로 같지 않으면 조각이 얼마나 겹치는지 본다(일부만 받은 큰 파일도 받은 만큼으로 본다).
     const theirs = chunkPrints(a.body);
     if (theirs.size < 5) continue;

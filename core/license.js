@@ -11,14 +11,16 @@ const PERMISSIVE_TEXT = [
   ['BSD', /\bBSD\b.{0,40}License|Redistribution and use in source and binary forms/i],
   ['ISC', /\bISC License\b/i],
   ['MPL-2.0', /Mozilla Public License/i],
-  ['CC-BY', /Creative Commons Attribution|\bCC[- ]BY\b/i],
+  // 비영리(NC)·변경 금지(ND)가 붙은 CC 는 '먼저 허락'과 어긋나지 않으므로 허용형으로 세지 않는다.
+  ['CC-BY', /Creative Commons Attribution(?![- ]*(?:Non-?Commercial|No-?Deriv))|\bCC[- ]BY\b(?![- ]*(?:NC|ND)\b)/i],
   ['CC0', /\bCC0\b|Creative Commons Zero/i],
   ['Unlicense', /This is free and unencumbered software released into the public domain/i],
 ];
 const PERMISSIVE_SPDX = /^(\(?\s*)?(MIT|MIT-0|Apache-2\.0|BSD-[0-9]-Clause(-[A-Za-z]+)?|0BSD|ISC|MPL-2\.0|CC-BY(-SA)?-[0-9.]+|CC0-1\.0|Unlicense|WTFPL|Zlib)\b/i;
 
 export function licenseHolder(text) {
-  const m = /Copyright\s*(?:\(c\)|©)?\s*(?:\d{4}(?:\s*[-–,]\s*\d{4})*\s*)?([^\n\r]{1,80})/i.exec(text || '');
+  // 저작권자는 Copyright 와 같은 줄에 있다. 줄을 넘는 공백을 허용하면 긴 빈 줄에서 아주 느려진다(보안 검토 C1).
+  const m = /Copyright[ \t]*(?:\(c\)|©)?[ \t]*(?:\d{4}(?:[ \t]*[-–,][ \t]*\d{4})*[ \t]*)?([^\n\r]{1,80})/i.exec(String(text || '').slice(0, 65536));
   if (!m) return '';
   return m[1].replace(/\s+(All Rights Reserved|and contributors).*$/i, '').replace(/[.,;]+$/, '').trim();
 }
@@ -28,7 +30,7 @@ export function detectLicense(root) {
   let file = null, text = null;
   for (const n of LICENSE_FILES) {
     const p = path.join(root, n);
-    if (exists(p)) { file = n; text = readTextSafe(p) || ''; break; }
+    if (exists(p)) { file = n; text = (readTextSafe(p) || '').slice(0, 65536); break; }
   }
   const pkg = readJsonSafe(path.join(root, 'package.json')) || {};
   const pkgLicense = typeof pkg.license === 'string' ? pkg.license.trim() : '';

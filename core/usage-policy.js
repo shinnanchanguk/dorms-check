@@ -109,11 +109,17 @@ export function creatorWithTitle(creator) {
 const AI_ADDRESS_RE = /(\bAI\b|에이아이|인공지능|챗봇|어시스턴트|assistant|agent|에이전트|LLM|GPT|Claude|클로드|Codex|코덱스|Gemini|제미나이|copilot|코파일럿|모델\s*(?:에게|께|은|는))/i;
 const AI_COMMAND_RE = /(무시(?:하|해)|ignore\s+(?:all|any|the|previous|prior|above)|disregard|forget\s+(?:all|previous|your)|override|system\s*prompt|시스템\s*프롬프트|지시(?:사항|문)?\s*(?:을|를)?\s*(?:무시|따르지)|명령(?:을|를)?\s*(?:실행|따라)|(?:명령|코드|스크립트)(?:을|를)?\s*실행|\brun\s+(?:this|the|a)\b|execute|curl\s|rm\s+-)/i;
 const EXFIL_RE = /(붙여\s*넣|paste|보내|send\b|upload|업로드|읽어|print|출력|알려\s*(?:줘|주)|공유해|copy|복사)/i;
+const AI_VOCATIVE_RE = /^\s*["'“‘(]?\s*(?:AI|A\.I\.|에이아이|인공지능|챗봇|어시스턴트|assistant|agent|에이전트|LLM|GPT|ChatGPT|Claude|클로드|Codex|코덱스|Gemini|제미나이|copilot|코파일럿|모델)\s*(?:도우미|님|씨|야|아)?\s*(?:께|에게|께서는|은|는)?\s*[:,，、]/i;
+const PROHIBIT_RE = /(지\s*마(?:세요|십시오|라|요)?|않(?:아야|도록)|안\s*됩니다|안\s*돼요|금지|삼가|do\s+not|don't|never|must\s+not)/i;
 const SECRET_TARGET_RE = /(~\/|\.ssh|id_rsa|\.env\b|\.git\b|\/etc\/|passwd|비밀\s*번호|패스워드|password|토큰|token|api[_\s-]?key|키\s*값|secret|자격\s*증명|credential|쿠키|cookie|환경\s*변수)/i;
 export function isAiInstructionClause(value) {
-  const s = String(value || '');
+  const s = String(value || '').normalize('NFKC');
   if (!s.trim()) return false;
-  if (SECRET_TARGET_RE.test(s) && (EXFIL_RE.test(s) || AI_COMMAND_RE.test(s))) return true;
+  // AI 를 부르며 시작하는 문장('AI 도우미께:', 'Assistant:')은 동사와 상관없이 사람에게 하는 부탁이 아니다.
+  if (AI_VOCATIVE_RE.test(s)) return true;
+  // '학생 비밀번호는 복사하지 마세요'처럼 금지하는 부탁은 사람에게 하는 말이라 그대로 둔다.
+  const prohibition = PROHIBIT_RE.test(s);
+  if (SECRET_TARGET_RE.test(s) && (AI_COMMAND_RE.test(s) || (EXFIL_RE.test(s) && !prohibition))) return true;
   if (AI_ADDRESS_RE.test(s) && AI_COMMAND_RE.test(s)) return true;
   if (/(ignore|disregard)\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions|prompts?)/i.test(s)) return true;
   return false;
