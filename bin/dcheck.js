@@ -18,7 +18,7 @@ import { catalogItem, TRACKS } from '../core/tracks.js';
 import { INTERVIEW_QUESTIONS, buildRightsProfileFromAnswers, writeRightsProfile, permissionsFilledFromDefault } from '../core/rights-profile.js';
 import { buildProtectionPlan, writePlan, loadPlan, planPath, checkPlanApproval } from '../core/protection-plan.js';
 import { runProtectSteps, runProtectVerify, resolveBuildDir, saveProtectState, loadProtectState } from '../protect/apply.js';
-import { restoreBackup, latestBackup, listBackups } from '../core/util.js';
+import { restoreBackup, latestBackup, listBackups, assertStateDirSafe } from '../core/util.js';
 import { verifyBuild } from '../protect/verify-static.js';
 import { compareSuspect } from '../protect/compare.js';
 import { loadRightsProfile } from '../core/rights-profile.js';
@@ -493,6 +493,7 @@ async function runProtectApply() {
 // --all: 적용 백업을 최근 것부터 모두 되돌린다(다시 빌드하고 여러 번 적용했을 때 처음 상태로).
 // --force: 적용 뒤 직접 고친 파일도 적용 전 원본으로 덮는다(기본은 고친 파일을 그대로 둔다).
 function runProtectRestore() {
+  try { assertStateDirSafe(root); } catch (e) { log.err(e.message); process.exitCode = 1; return; }
   const from = opt('from', '');
   const all = flag('all');
   const force = flag('force');
@@ -500,7 +501,8 @@ function runProtectRestore() {
   if (!list.length) { log.err('복원할 백업이 없습니다.'); process.exitCode = 1; return; }
   const kept = new Set(), blockRestored = new Set();
   for (const b of list) {
-    const r = restoreBackup(root, b, { force });
+    let r;
+    try { r = restoreBackup(root, b, { force }); } catch (e) { log.err(e.message); process.exitCode = 1; return; }
     if (r.noManifest) { log.err(`백업 매니페스트를 찾을 수 없습니다: ${path.relative(root, b)}`); process.exitCode = 1; return; }
     log.ok(t('cli.restore.done', { restored: r.restored, removed: r.removed, from: path.relative(root, b) }));
     if (r.skipped) log.warn('  ' + t('cli.restore.skipped', { n: r.skipped }));

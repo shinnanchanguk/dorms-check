@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { runProtectSteps, resolveBuildDir, buildDirInRoot } from '../protect/apply.js';
-import { restoreBackup, listBackups, safeWrite, restoreMarkedBlock } from '../core/util.js';
+import { restoreBackup, listBackups, safeWrite, restoreMarkedBlock, assertStateDirSafe, assertSafeSource, createBackup } from '../core/util.js';
 import { buildRightsProfileFromAnswers, writeRightsProfile, validateRightsProfile, permissionsFilledFromDefault } from '../core/rights-profile.js';
 import { provenanceFacts, oneLine, creatorWithTitle } from '../core/usage-policy.js';
 import { agentsBlock, mergeBlock, BLOCK_START, BLOCK_END, aiNoticeParagraphs, asideText, jsHeader, footerHtml, USAGE_FILE } from '../protect/provenance-text.js';
@@ -335,6 +335,98 @@ async function run() {
     srv.closeAllConnections && srv.closeAllConnections();
     srv.close();
     fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  console.log('\n[F11] 상태 폴더 안쪽 링크·백업 안 링크(자동 보안 검토 추가 지적)');
+  {
+    const base = tmp();
+    const outside = path.join(base, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'LOCAL SECRET\n');
+
+    // (1) .dorms-check 안쪽(backup·protect/evidence) 링크
+    const r1 = path.join(base, 'r1'); fs.mkdirSync(r1);
+    site(r1, '<!doctype html><html><head></head><body><script src="./assets/app.js"></script></body></html>');
+    writeRightsProfile(r1, buildRightsProfileFromAnswers({ ...BASE }));
+    fs.mkdirSync(path.join(outside, 'bk'));
+    fs.symlinkSync('../../outside/bk', path.join(r1, '.dorms-check', 'backup'));
+    let threw = false;
+    try { assertStateDirSafe(r1); } catch { threw = true; }
+    ok('상태 폴더 안쪽 링크(backup)도 거부', threw);
+    let err = '';
+    try { await runProtectSteps(r1, { buildDir: 'dist', quiet: true }); } catch (e) { err = e.message; }
+    ok('적용이 거부되고 밖 폴더에 백업이 안 생김', err.length > 0 && fs.readdirSync(path.join(outside, 'bk')).length === 0 && read(r1, 'dist/assets/app.js') === JS);
+    fs.unlinkSync(path.join(r1, '.dorms-check', 'backup'));
+    fs.mkdirSync(path.join(r1, '.dorms-check', 'protect'), { recursive: true });
+    fs.mkdirSync(path.join(outside, 'ev'));
+    fs.symlinkSync('../../../outside/ev', path.join(r1, '.dorms-check', 'protect', 'evidence'));
+    err = '';
+    try { await runProtectSteps(r1, { buildDir: 'dist', quiet: true }); } catch (e) { err = e.message; }
+    ok('증거 폴더가 링크여도 거부, 밖에 증거 파일 없음', err.length > 0 && fs.readdirSync(path.join(outside, 'ev')).length === 0);
+    // safeWrite 가 상태 파일 쓰기도 막는다(검사를 거치지 않는 경로 대비)
+    threw = false;
+    try { safeWrite(r1, path.join(r1, '.dorms-check', 'protect', 'evidence', 'x.json'), '{}'); } catch { threw = true; }
+    ok('safeWrite: 상태 폴더 안 링크 거부', threw && fs.readdirSync(path.join(outside, 'ev')).length === 0);
+    // 백업 세션의 backup()·finalize() 도 safeWrite
+    fs.unlinkSync(path.join(r1, '.dorms-check', 'protect', 'evidence'));
+    const b = createBackup(r1);
+    fs.mkdirSync(path.dirname(b.dir), { recursive: true });
+    fs.mkdirSync(path.join(outside, 'sess'));
+    fs.symlinkSync(path.join(outside, 'sess'), b.dir);
+    threw = false;
+    try { b.backup(path.join(r1, 'dist', 'index.html')); } catch { threw = true; }
+    ok('createBackup.backup: 세션 폴더가 링크면 거부', threw && fs.readdirSync(path.join(outside, 'sess')).length === 0);
+    b.markCreated(path.join(r1, 'dist', 'new.txt'));
+    threw = false;
+    try { b.finalize(); } catch { threw = true; }
+    ok('createBackup.finalize: 매니페스트도 링크 폴더에 안 씀', threw && fs.readdirSync(path.join(outside, 'sess')).length === 0);
+
+    // (2) 백업 안 링크로 로컬 파일 끌어오기
+    const r2 = path.join(base, 'r2'); fs.mkdirSync(r2);
+    site(r2, '<!doctype html><html><head></head><body><script src="./assets/app.js"></script></body></html>');
+    const bdir = path.join(r2, '.dorms-check', 'backup', '2026-01-01');
+    fs.mkdirSync(path.join(bdir, 'dist'), { recursive: true });
+    fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(bdir, 'dist', 'index.html'));
+    fs.writeFileSync(path.join(bdir, '_manifest.json'), JSON.stringify({ files: ['dist/index.html'], createdFiles: [] }));
+    err = '';
+    try { restoreBackup(r2, bdir); } catch (e) { err = e.message; }
+    ok('복원: 백업 안 링크를 따라 밖 파일을 끌어오지 않음', err.length > 0 && !read(r2, 'dist/index.html').includes('LOCAL SECRET'));
+    // 파일 단위 읽기 검사(상태 트리 검사와 별개로도 막는지)
+    let srcErr = '';
+    try { assertSafeSource(r2, bdir, path.join(bdir, 'dist', 'index.html')); } catch (e) { srcErr = e.reason; }
+    ok('assertSafeSource: 백업 안 링크 파일 거부', srcErr === 'symlink');
+    fs.mkdirSync(path.join(bdir, 'real'));
+    fs.writeFileSync(path.join(bdir, 'real', 'f.txt'), 'ok');
+    srcErr = '';
+    try { assertSafeSource(r2, bdir, path.join(bdir, 'real', 'f.txt')); } catch (e) { srcErr = e.reason; }
+    ok('assertSafeSource: 보통 파일은 통과', srcErr === '');
+    srcErr = '';
+    try { assertSafeSource(r2, bdir, path.join(bdir, '..', '..', '..', 'dist', 'index.html')); } catch (e) { srcErr = e.reason; }
+    ok('assertSafeSource: 백업 폴더 밖 경로 거부', srcErr === 'outside');
+    fs.unlinkSync(path.join(bdir, 'dist', 'index.html'));
+    // 매니페스트 자체가 링크
+    fs.unlinkSync(path.join(bdir, '_manifest.json'));
+    fs.writeFileSync(path.join(outside, 'man.json'), JSON.stringify({ files: [], createdFiles: ['dist/index.html'] }));
+    fs.symlinkSync(path.join(outside, 'man.json'), path.join(bdir, '_manifest.json'));
+    err = '';
+    try { restoreBackup(r2, bdir); } catch (e) { err = e.message; }
+    ok('복원: 링크된 매니페스트는 읽지 않음(파일 안 지움)', err.length > 0 && fs.existsSync(path.join(r2, 'dist', 'index.html')));
+    // 프로젝트 밖 백업 폴더(--from) 거부
+    const outB = path.join(outside, 'bk2'); fs.mkdirSync(path.join(outB, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(outB, 'dist', 'index.html'), 'FROM OUTSIDE');
+    fs.writeFileSync(path.join(outB, '_manifest.json'), JSON.stringify({ files: ['dist/index.html'], createdFiles: [] }));
+    fs.unlinkSync(path.join(bdir, '_manifest.json'));
+    err = '';
+    try { restoreBackup(r2, outB); } catch (e) { err = e.message; }
+    ok('복원: 프로젝트 밖 백업 폴더 거부', err.length > 0 && !read(r2, 'dist/index.html').includes('FROM OUTSIDE'));
+    // 정상 백업은 그대로 복원된다
+    fs.rmSync(path.join(r2, '.dorms-check', 'backup'), { recursive: true, force: true });
+    writeRightsProfile(r2, buildRightsProfileFromAnswers({ ...BASE }));
+    const orig = read(r2, 'dist/index.html');
+    await runProtectSteps(r2, { buildDir: 'dist', quiet: true });
+    const rr = restoreBackup(r2, listBackups(r2).pop());
+    ok('정상 백업 복원은 그대로 됨', rr.restored > 0 && read(r2, 'dist/index.html') === orig);
+    fs.rmSync(base, { recursive: true, force: true });
   }
 
   console.log(`\n결과: ${pass} pass, ${fail} fail`);

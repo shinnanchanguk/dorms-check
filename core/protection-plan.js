@@ -4,7 +4,7 @@
 // 철학: security·edzip 은 검사만 한다. protection 의 적용 단계만 파일을 바꾸며,
 //   그것도 승인된 계획 해시 + --confirm-apply 가 있을 때만이다. 자동 배포는 하지 않는다.
 import path from 'node:path';
-import { exists, readJsonSafe, writeText, sha256 } from './util.js';
+import { exists, readJsonSafe, safeWrite, assertStateDirSafe, sha256 } from './util.js';
 import { loadRightsProfile, rightsConfirmed } from './rights-profile.js';
 import { runProtectSteps, resolveBuildDir } from '../protect/apply.js';
 import { runProtectionScan } from '../checks/protection/index.js';
@@ -94,7 +94,8 @@ function plan_riskLicense(rightsProfile) {
 
 export function writePlan(root, plan) {
   const p = planPath(root);
-  writeText(p, JSON.stringify(plan, null, 2) + '\n');
+  assertStateDirSafe(root);
+  safeWrite(root, p, JSON.stringify(plan, null, 2) + '\n');
   return p;
 }
 

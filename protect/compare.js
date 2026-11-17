@@ -8,7 +8,7 @@ import net from 'node:net';
 import dns from 'node:dns';
 import http from 'node:http';
 import https from 'node:https';
-import { walk, readTextSafe, readJsonSafe, writeText, sha256, exists } from '../core/util.js';
+import { walk, readTextSafe, readJsonSafe, safeWrite, assertStateDirSafe, sha256, exists } from '../core/util.js';
 import { t } from '../core/copy.js';
 import { provenanceFacts } from '../core/usage-policy.js';
 import { JS_HEADER_PREFIX, stripJsHeader } from './provenance-text.js';
@@ -284,8 +284,9 @@ export async function compareSuspect(root, { url, buildFull, rightsProfile, allo
   const host = finalBase.hostname.replace(/[^a-z0-9.-]/gi, '_').slice(0, 60);
   const outDir = path.join(root, '.dorms-check', 'protect', 'evidence');
   const base_ = path.join(outDir, `compare-${stamp}-${host}`);
-  writeText(base_ + '.json', JSON.stringify(record, null, 2) + '\n');
-  writeText(base_ + '.md', [
+  assertStateDirSafe(root);
+  safeWrite(root, base_ + '.json', JSON.stringify(record, null, 2) + '\n');
+  safeWrite(root, base_ + '.md', [
     `# ${t('compare.title')}`,
     '',
     `- ${t('compare.when')}: ${record.at}`,

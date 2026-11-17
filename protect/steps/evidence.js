@@ -6,7 +6,7 @@
 // 정직한 한계: 이 팩은 소송의 보조 자료다. 관할권별 절차가 별도이며 법률 자문을 대체하지 않는다.
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { readJsonSafe, exists, writeText, sha256 } from '../../core/util.js';
+import { readJsonSafe, exists, safeWrite, sha256 } from '../../core/util.js';
 import { GIT_SAFE, GIT_ENV } from '../../audit/run.js';
 
 export const evidenceStep = {
@@ -61,9 +61,9 @@ export const evidenceStep = {
     const manPath = path.join(outDir, 'MANIFEST.json');
 
     if (!dry) {
-      writeText(manPath, JSON.stringify(manifest, null, 2) + '\n');
-      writeText(path.join(outDir, 'git.txt'), gitInfo + '\n');
-      writeText(path.join(outDir, 'README.md'), [
+      safeWrite(root, manPath, JSON.stringify(manifest, null, 2) + '\n');
+      safeWrite(root, path.join(outDir, 'git.txt'), gitInfo + '\n');
+      safeWrite(root, path.join(outDir, 'README.md'), [
         '# 복제 분쟁 대비 증거팩',
         '',
         `생성: ${manifest.generatedAt}`,

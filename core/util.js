@@ -161,11 +161,51 @@ export function safeUnlink(root, file) {
   fs.unlinkSync(file);
 }
 
-// .dorms-check 상태 폴더 자체가 링크면(남의 저장소가 심어 둔 경우) 백업·상태가 밖으로 샌다.
+// .dorms-check 상태 폴더 트리 어디에든 링크가 있으면(남의 저장소가 심어 둔 경우) 백업·상태·증거가 밖으로 새거나
+// 밖의 파일을 끌어온다. 폴더 자신과 그 안 모든 항목을 lstat 해서 링크·이상한 항목을 거부한다.
+// (상태·백업·증거 쓰기는 이것과 별도로 모두 safeWrite 를 거친다.)
 export function assertStateDirSafe(root) {
   const st = path.join(root, '.dorms-check');
   if (!lexists(st)) return;
-  if (fs.lstatSync(st).isSymbolicLink() || !fs.lstatSync(st).isDirectory()) throw new UnsafePathError('.dorms-check', 'symlink');
+  const top = fs.lstatSync(st);
+  if (top.isSymbolicLink() || !top.isDirectory()) throw new UnsafePathError('.dorms-check', 'symlink');
+  let seen = 0;
+  (function rec(d) {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (++seen > 200000) return;
+      const full = path.join(d, e.name);
+      const rel = path.relative(root, full);
+      if (e.isSymbolicLink()) throw new UnsafePathError(rel, 'symlink');
+      if (e.isDirectory()) rec(full);
+      else if (!e.isFile()) throw new UnsafePathError(rel, 'notfile');
+    }
+  })(st);
+}
+
+// 읽기 쪽 검사: base 안의 file 을 읽기 전에 root 부터 file 까지 모든 마디가 링크가 아니고, 마지막이 보통 파일이며,
+// realpath(file) 이 realpath(base) 안인지 확인한다(백업 안 링크로 로컬 파일을 끌어오지 못하게).
+export function assertSafeSource(root, base, file) {
+  const rootAbs = path.resolve(root);
+  const abs = path.resolve(file);
+  const baseAbs = path.resolve(base);
+  const rel = path.relative(rootAbs, abs) || path.basename(abs);
+  const inside = (b, p) => p === b || p.startsWith(b + path.sep);
+  if (!inside(rootAbs, baseAbs) || !inside(baseAbs, abs)) throw new UnsafePathError(rel, 'outside');
+  const parts = path.relative(rootAbs, abs).split(path.sep).filter(Boolean);
+  let cur = rootAbs;
+  for (let i = 0; i < parts.length; i++) {
+    cur = path.join(cur, parts[i]);
+    let st;
+    try { st = fs.lstatSync(cur); } catch { throw new UnsafePathError(rel, 'notfile'); }
+    if (st.isSymbolicLink()) throw new UnsafePathError(rel, 'symlink');
+    const last = i === parts.length - 1;
+    if (!last && !st.isDirectory()) throw new UnsafePathError(rel, 'notdir');
+    if (last && !st.isFile()) throw new UnsafePathError(rel, 'notfile');
+  }
+  let br, fr;
+  try { br = fs.realpathSync(baseAbs); fr = fs.realpathSync(abs); } catch { throw new UnsafePathError(rel, 'outside'); }
+  if (!inside(br, fr)) throw new UnsafePathError(rel, 'outside');
+  return abs;
 }
 
 // 표식 블록 안만 우리 것인 파일(AGENTS.md·CLAUDE.md)에서 블록을 원래 상태로 되돌린다.
@@ -211,8 +251,7 @@ export function createBackup(root) {
       if (seen.has(rel) || createdFiles.includes(rel)) return; // 같은 파일 첫 변경분만 백업(멱등), 이번에 만든 파일은 원본이 없다
       seen.add(rel);
       const dest = path.join(dir, rel);
-      ensureDir(path.dirname(dest));
-      fs.copyFileSync(file, dest);
+      safeWrite(root, dest, fs.readFileSync(file));
       manifest.push(rel);
     },
     markCreated(file) {
@@ -235,8 +274,8 @@ export function createBackup(root) {
     },
     finalize() {
       if (manifest.length || createdFiles.length) {
-        ensureDir(dir);
-        writeText(
+        safeWrite(
+          root,
           path.join(dir, '_manifest.json'),
           JSON.stringify({ at: new Date().toISOString(), version: 2, files: manifest, createdFiles, keepDirs, written, blocks }, null, 2)
         );
@@ -279,7 +318,12 @@ function validBlock(b) { return b && typeof b.start === 'string' && typeof b.end
 // - kept: 적용 뒤에 선생님이 고친 파일이라 그대로 둔 것(force 면 원본으로 덮는다)
 // - blockRestored: 표식 블록만 원래대로 되돌리고 블록 밖 선생님 내용은 남긴 것
 export function restoreBackup(root, backupDir, { force = false } = {}) {
-  const man = readJsonSafe(path.join(backupDir, '_manifest.json'));
+  assertStateDirSafe(root);
+  // 백업 폴더도 프로젝트 안이어야 하고, 매니페스트부터 링크가 아닌 보통 파일이어야 읽는다.
+  let man;
+  if (!lexists(path.join(backupDir, '_manifest.json'))) return { restored: 0, removed: 0, noManifest: true, kept: [], blockRestored: [] };
+  try { man = JSON.parse(fs.readFileSync(assertSafeSource(root, backupDir, path.join(backupDir, '_manifest.json')), 'utf8')); }
+  catch (e) { if (e instanceof UnsafePathError) throw e; man = null; }
   if (!man) return { restored: 0, removed: 0, noManifest: true, kept: [], blockRestored: [] };
   const rootAbs = path.resolve(root);
   const written = man.written && typeof man.written === 'object' ? man.written : null;
@@ -297,9 +341,10 @@ export function restoreBackup(root, backupDir, { force = false } = {}) {
     if (!withinRoot(root, rel) || !withinRoot(backupDir, rel)) { skipped++; continue; }
     const src = path.join(backupDir, rel);
     const dest = path.resolve(rootAbs, rel);
-    if (!exists(src)) continue;
+    if (!lexists(src)) continue;
     const cur = fileSha(dest);
     try {
+      assertSafeSource(root, backupDir, src); // 백업 안 링크로 로컬 파일을 끌어오지 않게
       if (editedSince(rel, cur)) {
         if (validBlock(blocks[rel]) && cur !== undefined) {
           const next = restoreMarkedBlock(fs.readFileSync(dest, 'utf8'), fs.readFileSync(src, 'utf8'), blocks[rel]);

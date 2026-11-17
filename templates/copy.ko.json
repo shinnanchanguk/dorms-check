@@ -223,7 +223,7 @@
       "older": "이전 적용 백업이 {n}개 더 있어요. 처음 상태까지 모두 되돌리려면 dcheck protect restore --all 을 쓰세요.",
       "all": "백업 {n}개를 최근 것부터 차례로 되돌렸어요."
     },
-    "unsafeWrite": "{file} 은(는) {reason} 쓰지 않았어요. 이 저장소를 만든 사람이 넣어 둔 것일 수 있으니 확인한 뒤 다시 실행해 주세요.",
+    "unsafeWrite": "{file} 은(는) {reason} 읽거나 쓰지 않았어요. 이 저장소를 만든 사람이 넣어 둔 것일 수 있으니 확인한 뒤 다시 실행해 주세요.",
     "unsafeWriteReason": {
       "symlink": "다른 곳을 가리키는 연결(심볼릭 링크)이라",
       "outside": "프로젝트 폴더 밖을 가리켜서",

@@ -8,7 +8,7 @@
 //   TDM opt-out 은 EU 내 효력이 명확하고, "AI 학습 금지" 조항의 집행력은 판례로 확립되지 않았다.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { walk, readText, readTextSafe, readJsonSafe, exists, writeText, sha256 } from '../../core/util.js';
+import { walk, readText, readTextSafe, readJsonSafe, exists, safeWrite, sha256 } from '../../core/util.js';
 import { fill } from '../html.js';
 import { rightsConfirmed } from '../../core/rights-profile.js';
 import { provenanceFacts } from '../../core/usage-policy.js';
@@ -125,7 +125,7 @@ export const legalStep = {
       if (c === null) continue;
       integ.files[path.relative(buildFull, f)] = sha256(c);
     }
-    if (!dry) writeText(path.join(root, '.dorms-check', 'protect', 'integrity.json'), JSON.stringify(integ, null, 2) + '\n');
+    if (!dry) safeWrite(root, path.join(root, '.dorms-check', 'protect', 'integrity.json'), JSON.stringify(integ, null, 2) + '\n');
     notes.push(`무결성 매니페스트: ${files.length}개 파일 해시 기록(.dorms-check/protect/integrity.json).`);
     notes.push('정직: 저작권은 창작 즉시 발생하나 구제 절차는 관할권별로 다르고, TDM opt-out 은 EU 내 효력이며, AI 학습 금지 조항의 집행력은 판례로 확립되지 않았습니다.');
 

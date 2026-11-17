@@ -63,7 +63,7 @@ export function loadProtectState(root) {
 export function saveProtectState(root, patch) {
   const cur = loadProtectState(root);
   const next = { ...cur, ...patch };
-  writeText(path.join(root, STATE_FILE), JSON.stringify(next, null, 2) + '\n');
+  safeWrite(root, path.join(root, STATE_FILE), JSON.stringify(next, null, 2) + '\n');
   return next;
 }
 
