@@ -282,7 +282,9 @@ export function localFingerprints(root, buildFull) {
   if (buildFull && exists(buildFull)) {
     for (const f of walk(buildFull, { exts: ['.js', '.mjs', '.cjs', '.css'] })) {
       const c = readTextSafe(f);
-      if (c === null || c.length < 200) continue; // 아주 작은 파일은 우연히 같을 수 있어 뺀다
+      // 아주 작은 파일은 우연히 같을 수 있어 뺀다. 길이는 머리 주석을 뗀 본문으로 잰다
+      // (안 그러면 'body{margin:0}' 같은 작은 CSS 가 머리 주석 덕에 200자를 넘어, 같은 CSS 를 쓴 남의 앱이 '머리 주석만 지운 사본'으로 잡혔다).
+      if (c === null || stripJsHeader(c).length < 200) continue;
       const rel = path.relative(buildFull, f);
       if (isCommonChunk(rel, c)) continue;
       raw.set(sha256(c), rel);
@@ -329,10 +331,22 @@ export async function compareSuspect(root, { url, buildFull, rightsProfile, allo
   const fp = localFingerprints(root, buildFull);
   const signals = [];
   const add = (id, where) => { if (!signals.some(s => s.id === id && s.where === where)) signals.push({ id, label: t('compare.signals.' + id), where }); };
+  // dorms-check 표식(HTML 안내 블록·JS 머리 주석)은 dorms-check 를 적용한 앱이면 누구 앱에나 있다.
+  // 같은 글 안에 내 출처 번호·도름스 주소·이름이 함께 있을 때만 내 앱의 표식으로 세고,
+  // 그렇지 않으면 '다른 dorms-check 앱일 수 있는 공통 표식'으로 따로 적는다(남의 앱을 내 복제본으로 세지 않게).
+  const lower = s => s.toLowerCase();
+  const mine = x => Boolean((f.provenanceId && x.body.includes(f.provenanceId)) ||
+    (f.dormsUrl && lower(x.body).includes(f.dormsUrl)) ||
+    (f.creator && f.creator.length >= 2 && x.body.includes(f.creator)));
+  const generic = [];
+  const addMarker = (id, x) => {
+    if (mine(x)) add(id, x.url);
+    else if (!generic.some(s => s.id === id && s.where === x.url)) generic.push({ id, label: t('compare.signals.' + id), where: x.url });
+  };
   for (const x of texts) {
     if (f.provenanceId && x.body.includes(f.provenanceId)) add('provenanceId', x.url);
-    if (x.where === 'html' && (x.body.includes('dorms-check:notice') || x.body.includes('data-dorms-check-'))) add('markerHtml', x.url);
-    if (x.where === 'asset' && x.body.includes(JS_HEADER_PREFIX)) add('markerJs', x.url);
+    if (x.where === 'html' && (x.body.includes('dorms-check:notice') || x.body.includes('data-dorms-check-'))) addMarker('markerHtml', x);
+    if (x.where === 'asset' && x.body.includes(JS_HEADER_PREFIX)) addMarker('markerJs', x);
     if (f.dormsUrl && x.body.toLowerCase().includes(f.dormsUrl)) add('dormsUrl', x.url);
     if (f.creator && f.creator.length >= 2 && x.body.includes(f.creator)) add('creator', x.url);
     if (x.where === 'dorms.json') {
@@ -355,18 +369,21 @@ export async function compareSuspect(root, { url, buildFull, rightsProfile, allo
       const o = fp.old.get(h) || fp.old.get(hs);
       if (o) { add('bundleOld', `${a.url} = ${o.rel} (${o.at.slice(0, 10)})`); continue; }
     }
-    if (nameCommon) { skippedCommon.push(a.url); continue; }
     // 통째로 같지 않으면 조각이 얼마나 겹치는지 본다(일부만 받은 큰 파일도 받은 만큼으로 본다).
     const theirs = chunkPrints(a.body);
-    if (theirs.size < 5) continue;
+    if (theirs.size < 5) { if (nameCommon) skippedCommon.push(a.url); continue; }
     let best = null;
-    for (const mine of fp.chunks) {
+    for (const own of fp.chunks) {
       let same = 0;
-      for (const x of mine.prints) if (theirs.has(x)) same++;
-      const ratio = same / mine.prints.size;
-      if (!best || ratio > best.ratio) best = { rel: mine.rel, ratio };
+      for (const x of own.prints) if (theirs.has(x)) same++;
+      // 이름만 공통 조각(polyfills-·framework-·runtime- 등)처럼 생긴 파일은 라이브러리만 담은 진짜 공통 조각일 수도 있다.
+      // 그래서 건너뛰지 않고, 내 파일 쪽에서 봐도 그 파일 쪽에서 봐도 대부분이 같을 때만 센다.
+      // (건너뛰면 베낀 본체 이름을 polyfills-x.js 로 바꾸고 한 글자만 고쳐 조각 대조를 피할 수 있었다.)
+      const ratio = nameCommon ? Math.min(same / own.prints.size, same / theirs.size) : same / own.prints.size;
+      if (!best || ratio > best.ratio) best = { rel: own.rel, ratio };
     }
     if (best && best.ratio >= SIMILAR_MIN) add('bundleSimilar', `${a.url} ≈ ${best.rel} (${Math.round(best.ratio * 100)}%)`);
+    else if (nameCommon) skippedCommon.push(a.url);
   }
 
   const allIds = Object.keys({ provenanceId: 1, markerHtml: 1, markerJs: 1, dormsUrl: 1, creator: 1, bundleExact: 1, bundleStripped: 1, bundleOld: 1, bundleSimilar: 1, dormsJson: 1 });
@@ -379,8 +396,9 @@ export async function compareSuspect(root, { url, buildFull, rightsProfile, allo
     provenanceId: f.provenanceId,
     fetched: texts.map(x => ({ where: x.where, url: x.url, sha256: sha256(x.body), bytes: x.body.length, ...(x.truncated ? { truncated: true } : {}) })),
     signals,
+    genericMarkers: generic,
     skippedCommon,
-    notFound: allIds.filter(id => !foundIds.has(id)).map(id => ({ id, label: t('compare.signals.' + id) })),
+    notFound: allIds.filter(id => !foundIds.has(id) && !generic.some(g => g.id === id)).map(id => ({ id, label: t('compare.signals.' + id) })),
   };
 
   const stamp = now.toISOString().replace(/[:.]/g, '-');
@@ -402,6 +420,7 @@ export async function compareSuspect(root, { url, buildFull, rightsProfile, allo
     `## ${t('compare.notFound')}`,
     ...record.notFound.map(s => `- ${s.label}`),
     '',
+    ...(generic.length ? [`## ${t('compare.genericMarkers')}`, ...generic.map(s => `- ${s.label}: ${s.where}`), ''] : []),
     ...(skippedCommon.length ? [`## ${t('compare.skippedCommon')}`, ...skippedCommon.map(u => `- ${u}`), ''] : []),
     '## sha256',
     ...record.fetched.map(x => `- ${x.where} ${x.url} ${x.sha256}${x.truncated ? ' (' + t('compare.truncated') + ')' : ''}`),
