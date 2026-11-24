@@ -79,6 +79,12 @@ export const provenanceStep = {
     let footerCount = 0;
     // 다시 빌드할 때 출발점이 되는 HTML 원본에도 같은 줄을 넣는다(주소는 같은 폴더 기준).
     const templates = new Set(((ctx.mirror && ctx.mirror.htmlTemplates) || []).map(p => path.resolve(p)));
+    // HTML 원본(Vite index.html 등)은 화면 CSS 를 직접 링크하지 않고 스크립트에서 불러오는 경우가 많아,
+    // 원본만 봐서는 넘침 숨김·grid 를 알 수 없다. 그래서 같은 앱의 빌드 결과(dist/index.html)를 먼저 판정하고
+    // 그 판정을 원본에도 쓴다. 안 그러면 빌드 결과에는 '넣지 않았다'고 해 놓고 원본에는 넣어,
+    // 서버가 다시 빌드한 화면(게임처럼 꽉 찬 화면)에 줄이 겹쳐 뜬다.
+    const builtIndex = path.resolve(buildFull, 'index.html');
+    let builtIndexRisk = null;
     for (const file of [...walk(buildFull, { exts: ['.html', '.htm'] }), ...templates]) {
       if (path.resolve(file) === path.resolve(usageBuild)) continue;
       const src = readTextSafe(file);
@@ -87,10 +93,13 @@ export const provenanceStep = {
       const isTemplate = templates.has(path.resolve(file));
       let want = visibleFooter;
       if (want && !forceFooter) {
-        const risk = bodyLayoutRisk(src, isTemplate ? '' : linkedCss(src, file, buildFull, readTextSafe));
+        const ownRisk = bodyLayoutRisk(src, isTemplate ? '' : linkedCss(src, file, buildFull, readTextSafe));
+        if (!isTemplate && path.resolve(file) === builtIndex) builtIndexRisk = ownRisk;
+        const risk = ownRisk || (isTemplate ? builtIndexRisk : null);
         if (risk) {
           want = false;
-          out.warnings.push(t('layoutRisk.footerSkipped', { file: rel, reason: t('layoutRisk.' + risk), sourceLine: f.sourceLine, scope: t('footer.scope.' + jsCaseKey(f)) }));
+          // 빌드 결과에서 이미 알린 것을 원본에서 또 알리지 않는다.
+          if (ownRisk) out.warnings.push(t('layoutRisk.footerSkipped', { file: rel, reason: t('layoutRisk.' + risk), sourceLine: f.sourceLine, scope: t('footer.scope.' + jsCaseKey(f)) }));
         }
       }
       const block = `${FOOTER_START}\n${footerHtml(f, isTemplate ? USAGE_FILE : usageHref(src, file, buildFull, usageBuild))}\n${FOOTER_END}`;

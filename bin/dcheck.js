@@ -597,6 +597,7 @@ async function runProtectCompare() {
   } else {
     log.warn(t('cli.compareNone'));
   }
+  if ((r.record.genericMarkers || []).length) log.plain(color.dim('  ' + t('cli.compareGenericOnly', { n: r.record.genericMarkers.length })));
   log.plain('  ' + t('cli.compareSaved', { file: path.relative(root, r.file) }));
   log.plain(color.dim('  ' + t('compare.honest')));
 }
