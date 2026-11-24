@@ -20,14 +20,14 @@ Council document readiness and official EDZIP verification have separate outcome
 
 ## Start
 
-Use Node.js 18 or newer. These examples pin the `v0.5.3` GitHub release. If your organization reviewed a particular commit, keep using that commit instead.
+Use Node.js 18 or newer. These examples pin the `v0.5.4` GitHub release. If your organization reviewed a particular commit, keep using that commit instead.
 
 ~~~bash
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.3.tar.gz detect
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.3.tar.gz init --name "My App" --url "https://my-app.example" --track security --confirm-ownership
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.3.tar.gz scan --url "https://my-app.example"
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.3.tar.gz status
-npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.3.tar.gz report
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.4.tar.gz detect
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.4.tar.gz init --name "My App" --url "https://my-app.example" --track security --confirm-ownership
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.4.tar.gz scan --url "https://my-app.example"
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.4.tar.gz status
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.4.tar.gz report
 ~~~
 
 See [USE-WITH-AI.md](./USE-WITH-AI.md) for an assistant prompt. Before deployment, `scan --code-only` inspects local code and leaves public-response checks unknown.
