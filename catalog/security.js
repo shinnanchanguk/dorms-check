@@ -88,7 +88,7 @@ const ITEMS = [
     aiFix: '표시된 Supabase Storage 버킷에 file_size_limit(예: 10MB)와 allowed_mime_types(실제로 받는 형식만, 예: image/png, image/jpeg, application/pdf)를 마이그레이션으로 설정해줘. 업로드하는 코드에서도 같은 제한을 먼저 확인해줘.' },
   { id: 'ops.school-selfcheck', group: '계정 보안', title: '학교 자체점검표 운영 항목(참고)', severity: 'info', weight: 0, gate: false, serverVerifiable: false,
     plain: '학교에서 쓰는 앱이면 교육부 개인정보보호 자체점검표와 개인정보위 점검항목으로 관리자 2단계 인증, 자동 로그아웃, 로그인 실패 제한, 요청 횟수 제한, 접속기록 1년 보관, 퇴직·전보자 계정 삭제를 점검받아요. 코드만으로는 확정할 수 없어 흔적이 있는지만 참고로 보여줘요.',
-    aiFix: '흔적이 없다고 나온 항목 중 우리 앱에 필요한 것을 골라줘: 관리자 계정 2단계 인증(Supabase MFA), 일정 시간 미사용 시 자동 로그아웃, 로그인 실패 제한(캡차 등), 권한 변경·개인정보 조회 기록 테이블과 1년 보관, 관리자가 계정을 삭제·비활성화하는 기능, 로그인·공개 API 요청 횟수 제한.' },
+    aiFix: '흔적이 없다고 나온 항목 중 우리 앱에 필요한 것을 골라줘: 관리자 계정 2단계 인증(Supabase MFA), 일정 시간 미사용 시 자동 로그아웃, 로그인 실패 제한(캡차 등), 권한 변경·개인정보 조회 기록 테이블과 1년 보관, 관리자가 계정을 삭제·비활성화하는 기능, 로그인·공개 API 요청 횟수 제한. 항목마다 지금 상태·켜면 생기는 일·학교 서류 칸을 보려면 dcheck ops 를 실행해줘(강제 아님, 하나씩 고르기).' },
   { id: 'code.hardcoded-secret', group: '코드 내부', title: '하드코딩 시크릿', severity: 'critical', weight: 12, gate: false, serverVerifiable: false,
     plain: '코드 안에 API 키·비밀번호가 직접 적혀 있어요. 코드가 새면 키도 같이 새요.',
     aiFix: '코드에 박힌 키·토큰을 환경변수(.env, 서버 전용)로 옮기고, 노출됐던 키는 즉시 재발급(rotate)해줘.' },

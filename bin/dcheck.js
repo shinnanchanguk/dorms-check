@@ -29,6 +29,8 @@ import { applyEdzipPlan, buildEdzipPlan, prepareCouncilDocuments, writeEdzipPlan
 import { ALL_AGENTS, hookStatus, uninstallHooks } from '../core/hooks.js';
 import { planRun, resolveRunDir, huntPrompt, verifierPrompt, criticPrompt, mergeResult, recordDecision, promoteArtifact, checkRun, reportRun, latestAuditSummary, readInput } from '../audit/run.js';
 import { SEVERITY_LABEL } from '../audit/findings.js';
+import { opsCodeSignals, buildOpsState, readOpsDecisions, makeDecision, sheetRows, renderOpsMd, renderSelfcheckMd, OPS_DECISIONS_FILE } from '../core/school-ops.js';
+import { detectSupabaseRef, readSupabaseConfig, mapSupabaseConfig } from '../checks/runtime/supabase-config.js';
 
 const root = process.cwd();
 const [, , cmd, ...args] = process.argv;
@@ -76,6 +78,10 @@ function help() {
   log.plain('  dcheck audit record --agent <ID> --in <JSON>     반박 검증·최종 확인 기록');
   log.plain('  dcheck audit promote --agent <ID> --file <경로>   작업 폴더의 결과물을 증거로 옮기기');
   log.plain('  dcheck audit check | report [--run <폴더>]');
+  log.plain('');
+  log.plain('  학교 운영 보안 절차(강제 아님, 하나씩 고르기):');
+  log.plain('  dcheck ops [--supabase-config [--supabase-ref <번호>]] [--json]   지금 상태·켜면 생기는 일·학교 서류 초안');
+  log.plain('  dcheck ops decide --id <항목> --choice do|skip|later|done --reason "<사유>"');
   log.plain('');
   log.plain('  이전 버전 정리: dcheck hooks status|uninstall [--agents ' + ALL_AGENTS.join(',') + '] [--json]');
   log.plain('  status는 기존 설정을 읽고, uninstall은 백업 후 도름스가 넣은 항목만 제거합니다.');
@@ -790,6 +796,61 @@ function outputMachineResult(result, { json = false, success = '' } = {}) {
   else log.err((result.code ? result.code + ': ' : '') + (result.reason || '요청을 완료하지 못했습니다.'));
 }
 
+// 학교 운영 보안 절차(강제 아님): 지금 상태를 보여 주고 선생님 결정을 기록한다.
+async function runOpsCmd() {
+  const sub = args[0] && !args[0].startsWith('--') ? args[0] : 'list';
+  const json = flag('json');
+  if (!stateDirIsSafe()) { outputMachineResult({ ok: false, code: 'UNSAFE_STATE_DIR', exitCode: 2, reason: t('cli.unsafeStateDir') }, { json }); return; }
+  const decisions = readOpsDecisions(STATE_DIR);
+  if (sub === 'decide') {
+    const made = makeDecision({ id: opt('id', ''), choice: opt('choice', ''), reason: opt('reason', '') });
+    if (!made.ok) { outputMachineResult({ ok: false, code: 'INVALID_DECISION', exitCode: 1, reason: made.reason }, { json }); return; }
+    decisions[opt('id', '')] = made.value;
+    safeWrite(root, path.join(STATE_DIR, OPS_DECISIONS_FILE), JSON.stringify(decisions, null, 2) + '\n');
+    outputMachineResult({ ok: true, id: opt('id', ''), ...made.value }, { json, success: `기록했어요: ${opt('id', '')} → ${made.value.choice}. dcheck ops 로 안내와 학교 서류 초안을 다시 만드세요.` });
+    return;
+  }
+  if (sub !== 'list') { outputMachineResult({ ok: false, code: 'INVALID_SUBCOMMAND', exitCode: 2, reason: 'dcheck ops [list|decide]' }, { json }); return; }
+
+  const signals = opsCodeSignals(root);
+  let config = {};
+  let configRead = null;
+  let configNote = '';
+  if (flag('supabase-config')) {
+    const found = detectSupabaseRef(root);
+    const explicit = opt('supabase-ref', '');
+    if (!explicit && found.conflict) {
+      outputMachineResult({ ok: false, code: 'SUPABASE_REF_CONFLICT', exitCode: 2, reason: `프로젝트 번호가 여러 곳에 서로 다르게 적혀 있어요(${found.candidates.map(c => `${c.from}: ${c.ref}`).join(', ')}). 점검할 프로젝트를 --supabase-ref <번호> 로 골라 주세요.` }, { json });
+      return;
+    }
+    const ref = explicit || found.ref || '';
+    const token = process.env.SUPABASE_ACCESS_TOKEN || '';
+    const got = await readSupabaseConfig({ ref, token });
+    configRead = got.ok;
+    if (got.ok) { config = mapSupabaseConfig(got.raw); configNote = `Supabase 프로젝트 ${ref} 의 설정 ${Object.keys(got.raw).length}종을 읽었어요(읽기만 함${!explicit && found.from ? `, 번호는 ${found.from} 에서` : ''})`; }
+    else configNote = got.reason + (token ? '' : ' 대시보드 Account > Access Tokens 에서 만든 토큰을 SUPABASE_ACCESS_TOKEN 환경 변수로 넣고 다시 실행하세요. 토큰 값은 저장·출력하지 않아요.');
+  }
+  const scan = readJsonSafe(path.join(STATE_DIR, 'scan.json'));
+  const items = buildOpsState({ signals, config, decisions, scan });
+  const sheets = sheetRows(items, scan, signals);
+  const cfg = loadConfig(root);
+  safeWrite(root, path.join(STATE_DIR, 'OPS.md'), renderOpsMd(items, { configRead }));
+  safeWrite(root, path.join(STATE_DIR, 'SCHOOL-SELFCHECK.md'), renderSelfcheckMd(sheets, { appName: cfg.app?.name || '' }));
+  if (json) {
+    console.log(JSON.stringify({ ok: true, command: 'ops', configRead, configNote, items: items.map(i => ({ id: i.id, title: i.title, state: i.state, notes: i.notes, ask: i.ask, decision: i.decision })), sheets }, null, 2));
+    return;
+  }
+  log.title('학교 운영 보안 절차(강제 아님, 하나씩 골라요)');
+  if (configNote) log.plain('  ' + configNote);
+  for (const i of items) {
+    log.plain(`  [${i.stateLabel}] ${i.title} ${color.dim('(' + i.id + ')')}${i.decision ? ' · 결정: ' + i.decision.label : ''}`);
+    if (!i.decision && i.state !== 'on') log.plain(color.dim('      ' + i.ask));
+  }
+  log.plain(color.dim('  안내: .dorms-check/OPS.md · 학교 서류 초안: .dorms-check/SCHOOL-SELFCHECK.md'));
+  log.plain(color.dim('  결정 기록: dcheck ops decide --id <항목> --choice do|skip|later|done --reason "<사유>"'));
+  log.plain(color.dim('  이 안내는 점검 마크 조건이 아니고 앱 소스를 바꾸지 않아요.'));
+}
+
 function removedFeature() {
   const removedOptions = new Set(['--strict', '--git-sha', '--vercel-deployment', '--require-canonical-git-source', '--provider', '--security-only', '--receipt', '--receipt-file']);
   const option = [cmd, ...args].find(value => typeof value === 'string' && removedOptions.has(value.split('=')[0]));
@@ -839,6 +900,7 @@ async function main() {
     case 'protect': await runProtectCmd(); break;
     case 'edzip': await runEdzipCmd(); break;
     case 'audit': await runAuditCmd(); break;
+    case 'ops': await runOpsCmd(); break;
     case 'hooks': runHooksCmd(); break;
     case 'verify': await runVerify(); break;
     case 'status': runStatus(); break;

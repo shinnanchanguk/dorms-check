@@ -26,6 +26,18 @@ npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.4.ta
 찾는 일과 검증하는 일은 서로 다른 에이전트(또는 새 대화)에게 맡기고, 배포된 서버에 공격 요청은 보내지 마. 실제 회원 계정·운영 DB·유료 API는 쓰지 마. 결과는 확인한 위험, 확인이 더 필요한 것(내가 대시보드에서 직접 볼 곳까지), 권고로 나눠서 쉬운 말로 알려주고, 이번에 못 본 범위도 숨기지 말고 말해줘.
 ~~~
 
+## 학교 개인정보 자체점검 전에 운영 절차를 하나씩 정할 때
+
+~~~text
+내 앱을 학교 개인정보 자체점검(교육청 공문 붙임2·붙임3) 기준으로 운영 절차까지 봐줘. dorms-check의 ai/prompts/school-ops.md를 먼저 읽고 그 순서대로 해줘.
+
+npx -y https://github.com/shinnanchanguk/dorms-check/archive/refs/tags/v0.5.4.tar.gz ops
+
+로그인 실패 잠금, 관리자 2단계 인증, 자동 로그아웃, DB 직접 접속 IP 제한·암호화, 접속기록·권한 이력, 내려받기 사유, 오래 안 쓴 계정·키, 요청 횟수 제한, 백업, 사고 대응을 한두 개씩 쉬운 말로 설명해줘. 항목마다 지금 상태, 왜 필요한지, 켜면 생기는 일을 말하고 할지 말지 나한테 물어봐. 강제로 고치지 말고, 내가 고른 대로 ops decide 로 기록해줘. 하기로 한 것도 바꿀 파일과 부작용을 다시 보여 주고 내가 좋다고 하면 그때 해줘. 마지막에 학교 서류 대응표 초안(.dorms-check/SCHOOL-SELFCHECK.md)을 보여줘.
+~~~
+
+Supabase 설정까지 읽게 하려면 Supabase 대시보드 Account > Access Tokens 에서 토큰을 만들고, AI 에게 "토큰은 대화에 붙이지 않고 숨김 입력으로 넣을게, SUPABASE_ACCESS_TOKEN 으로 넣고 ops --supabase-config 를 실행해줘"라고 하세요. 이 명령은 설정을 읽기만 하고 바꾸지 않습니다.
+
 ## 에듀집 서류가 필요할 때
 
 ~~~text

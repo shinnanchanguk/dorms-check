@@ -46,6 +46,8 @@ AI에게 맡기려면 [복사해 쓰는 프롬프트](./USE-WITH-AI.md)를 사�
 
 - `security`: 공개 응답, HTTPS, 노출된 비밀정보, 공개 데이터 접근, 로컬 코드를 점검합니다.
   Supabase 앱은 학교 개인정보 자체점검표 항목(비밀번호 기준, 주민번호·비밀번호 평문 저장, 로그인 없이 수정·삭제가 열린 DB 규칙, 업로드 용량·형식 제한)도 마이그레이션과 설정 파일로 살펴 권고로 알려줍니다. 2단계 인증·자동 로그아웃·접속기록 보관처럼 코드로 확정할 수 없는 항목은 흔적만 참고로 보여줍니다.
+
+  더 까다로운 운영 절차(로그인 실패 잠금, 관리자·대시보드 계정 2단계 인증, 자동 로그아웃, DB 직접 접속 IP 제한·SSL 강제, 접속기록·권한 이력 보관, 내려받기 사유, 오래 안 쓴 계정·키 정리, 요청 횟수 제한, 화면에 필요한 칸만 응답, 졸업·탈퇴 정보 파기, 백업, 사고 대응, 내부관리계획)는 `dcheck ops`로 따로 봅니다. 항목마다 지금 상태·근거(점검표 번호·고시 조문)·켜면 생기는 일·선생님께 드리는 질문을 `.dorms-check/OPS.md`에 정리하고, 선생님이 `dcheck ops decide`로 하기·안 하기(사유)·나중을 고르면 학교 서류(붙임2·붙임3) 대응표 초안 `.dorms-check/SCHOOL-SELFCHECK.md`에 반영합니다. 강제 항목이 아니고 점검 마크와 무관합니다. Supabase 운영 설정은 선생님이 `SUPABASE_ACCESS_TOKEN`을 넣고 `--supabase-config`를 붙였을 때만 읽기 요청으로 확인합니다. AI 진행 순서는 [ai/prompts/school-ops.md](./ai/prompts/school-ops.md)에 있습니다.
 - `edzip`: 제출 서류를 준비합니다. `edzip prepare`의 계획과 질문을 확인한 뒤 승인한 계획 해시와 `--confirm-apply`로 HWPX·PDF·Markdown 서류를 만듭니다. 에듀집 확인 완료 뒤에는 `edzip council`로 내부 기안문과 학운위 안건문을 만듭니다. [서류 작성 안내](./skills/edzip-autopilot/SKILL.md)를 따르세요.
 - `protection`: 권리와 이용 범위를 묻고 앱 보호 변경 계획을 세웁니다. `protect apply`는 승인한 계획 해시와 `--confirm-apply`가 있을 때 백업 후 적용합니다. `verify`로 확인하고 필요하면 `protect restore`로 복원합니다. 아래 "출처 안내와 앱 안 이용 안내"도 이 기능에 들어 있습니다.
 
